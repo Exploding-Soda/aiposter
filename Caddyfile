@@ -2,11 +2,12 @@
   root * /opt/aiposter/frontend/dist
   encode gzip zstd
 
-  @api path /api/*
-  handle @api {
+  handle_path /api/* {
     reverse_proxy 127.0.0.1:8001
   }
 
-  try_files {path} /index.html
-  file_server
+  handle {
+    try_files {path} /index.html
+    file_server
+  }
 }

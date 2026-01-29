@@ -197,13 +197,14 @@ case "$MODE" in
   root * ${FRONTEND_DIST_DIR}
   encode gzip zstd
 
-  @api path /api/*
-  handle @api {
+  handle_path /api/* {
     reverse_proxy 127.0.0.1:${BACKEND_PORT}
   }
 
-  try_files {path} /index.html
-  file_server
+  handle {
+    try_files {path} /index.html
+    file_server
+  }
 }
 EOF
 
