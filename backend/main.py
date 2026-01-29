@@ -575,14 +575,14 @@ def set_refresh_cookie(response: Response, token: str):
     secure=COOKIE_SECURE,
     samesite=COOKIE_SAMESITE,
     max_age=int(timedelta(days=REFRESH_TOKEN_TTL_DAYS).total_seconds()),
-    path="/auth"
+    path="/"
   )
 
 
 def clear_refresh_cookie(response: Response):
   response.delete_cookie(
     key=REFRESH_COOKIE_NAME,
-    path="/auth"
+    path="/"
   )
 
 @app.on_event("startup")
