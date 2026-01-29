@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 BACKEND_DIR="$ROOT_DIR/backend"
 LOG_DIR="$ROOT_DIR/deploy-logs"
+FRONTEND_DIST_DIR="$FRONTEND_DIR/dist"
 
 mkdir -p "$LOG_DIR"
 
@@ -90,6 +91,7 @@ stop_processes() {
 
   kill_pid_file "$LOG_DIR/backend.pid" "backend"
   kill_pid_file "$LOG_DIR/frontend.pid" "frontend"
+  kill_pid_file "$LOG_DIR/caddy.pid" "caddy"
 
   # Best-effort cleanup for orphaned processes.
   if command -v pkill >/dev/null 2>&1; then
@@ -97,6 +99,7 @@ stop_processes() {
     pkill -f "serve -s dist" >/dev/null 2>&1 || true
     pkill -f "python3 -m http.server ${frontend_port}" >/dev/null 2>&1 || true
     pkill -f "python -m http.server ${frontend_port}" >/dev/null 2>&1 || true
+    pkill -f "caddy run --config" >/dev/null 2>&1 || true
   fi
 
   kill_by_port "$backend_port"
@@ -113,6 +116,7 @@ Env overrides:
   PYTHON_BIN (default python3.12)
   NODE_BIN (default node)
   NPM_BIN (default npm)
+  CADDY_BIN (default caddy)
   BACKEND_PORT (default 8001)
   BACKEND_WORKERS (default 2)
   FRONTEND_PORT (default 3000)
@@ -123,6 +127,7 @@ MODE="${1:-}"
 PYTHON_BIN="${PYTHON_BIN:-python3.12}"
 NODE_BIN="${NODE_BIN:-node}"
 NPM_BIN="${NPM_BIN:-npm}"
+CADDY_BIN="${CADDY_BIN:-caddy}"
 BACKEND_PORT="${BACKEND_PORT:-8001}"
 BACKEND_WORKERS="${BACKEND_WORKERS:-2}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
@@ -132,6 +137,7 @@ case "$MODE" in
     require_cmd "$PYTHON_BIN"
     require_cmd "$NODE_BIN"
     require_cmd "$NPM_BIN"
+    require_cmd "$CADDY_BIN"
 
     check_version "Python" "$($PYTHON_BIN --version | awk '{print $2}')" "3.12.3"
     check_version "Node" "$($NODE_BIN -v)" "v18.20.8"
@@ -158,7 +164,7 @@ case "$MODE" in
     deactivate
 
     BACKEND_LOG="$LOG_DIR/backend.log"
-    FRONTEND_LOG="$LOG_DIR/frontend.log"
+    CADDY_LOG="$LOG_DIR/caddy.log"
 
     stop_processes "$BACKEND_PORT" "$FRONTEND_PORT"
 
@@ -174,22 +180,33 @@ case "$MODE" in
     deactivate
 
     info "Starting frontend on port $FRONTEND_PORT"
-    if command -v npx >/dev/null 2>&1; then
-      pushd "$FRONTEND_DIR" >/dev/null
-      nohup npx --yes serve -s dist -l "$FRONTEND_PORT" > "$FRONTEND_LOG" 2>&1 &
-      echo $! > "$LOG_DIR/frontend.pid"
-      popd >/dev/null
-    else
-      pushd "$FRONTEND_DIR/dist" >/dev/null
-      nohup "$PYTHON_BIN" -m http.server "$FRONTEND_PORT" > "$FRONTEND_LOG" 2>&1 &
-      echo $! > "$LOG_DIR/frontend.pid"
-      popd >/dev/null
-      info "Note: python http.server does not provide SPA fallback routes."
+    if [[ ! -d "$FRONTEND_DIST_DIR" ]]; then
+      die "Frontend dist not found at $FRONTEND_DIST_DIR (build failed?)"
     fi
+
+    info "Starting Caddy on port $FRONTEND_PORT"
+    CADDYFILE_PATH="$LOG_DIR/Caddyfile"
+    cat > "$CADDYFILE_PATH" <<EOF
+:${FRONTEND_PORT} {
+  root * ${FRONTEND_DIST_DIR}
+  encode gzip zstd
+
+  @api path /api/*
+  handle @api {
+    reverse_proxy 127.0.0.1:${BACKEND_PORT}
+  }
+
+  try_files {path} /index.html
+  file_server
+}
+EOF
+
+    nohup "$CADDY_BIN" run --config "$CADDYFILE_PATH" > "$CADDY_LOG" 2>&1 &
+    echo $! > "$LOG_DIR/caddy.pid"
 
     info "Deployment complete."
     info "Backend log: $LOG_DIR/backend.log"
-    info "Frontend log: $LOG_DIR/frontend.log"
+    info "Caddy log: $LOG_DIR/caddy.log"
     ;;
   stop)
     stop_processes "$BACKEND_PORT" "$FRONTEND_PORT"
