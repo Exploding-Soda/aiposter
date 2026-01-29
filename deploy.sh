@@ -21,6 +21,15 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
+check_version() {
+  local label="$1"
+  local actual="$2"
+  local expected="$3"
+  if [[ "$actual" != "$expected" ]]; then
+    die "$label version mismatch (expected $expected, got $actual)"
+  fi
+}
+
 load_env_file() {
   local env_file="$1"
   if [[ -f "$env_file" ]]; then
@@ -101,6 +110,9 @@ Usage:
   ./deploy.sh stop
 
 Env overrides:
+  PYTHON_BIN (default python3.12)
+  NODE_BIN (default node)
+  NPM_BIN (default npm)
   BACKEND_PORT (default 8001)
   BACKEND_WORKERS (default 2)
   FRONTEND_PORT (default 3000)
@@ -108,34 +120,35 @@ EOF
 }
 
 MODE="${1:-}"
+PYTHON_BIN="${PYTHON_BIN:-python3.12}"
+NODE_BIN="${NODE_BIN:-node}"
+NPM_BIN="${NPM_BIN:-npm}"
 BACKEND_PORT="${BACKEND_PORT:-8001}"
 BACKEND_WORKERS="${BACKEND_WORKERS:-2}"
 FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 
 case "$MODE" in
   start)
+    require_cmd "$PYTHON_BIN"
+    require_cmd "$NODE_BIN"
+    require_cmd "$NPM_BIN"
+
+    check_version "Python" "$($PYTHON_BIN --version | awk '{print $2}')" "3.12.3"
+    check_version "Node" "$($NODE_BIN -v)" "v18.20.8"
+    check_version "npm" "$($NPM_BIN -v)" "10.8.2"
+
     info "Loading env files (if present)"
     load_env_file "$BACKEND_DIR/.env"
 
     info "Building frontend"
-    require_cmd node
-    if command -v pnpm >/dev/null 2>&1; then
-      pushd "$FRONTEND_DIR" >/dev/null
-      pnpm install --frozen-lockfile
-      pnpm build
-      popd >/dev/null
-    else
-      require_cmd npm
-      pushd "$FRONTEND_DIR" >/dev/null
-      npm install
-      npm run build
-      popd >/dev/null
-    fi
+    pushd "$FRONTEND_DIR" >/dev/null
+    "$NPM_BIN" install
+    "$NPM_BIN" run build
+    popd >/dev/null
 
     info "Setting up backend virtualenv"
-    require_cmd python3
     if [[ ! -d "$BACKEND_DIR/.venv" ]]; then
-      python3 -m venv "$BACKEND_DIR/.venv"
+      "$PYTHON_BIN" -m venv "$BACKEND_DIR/.venv"
     fi
 
     # shellcheck disable=SC1090
@@ -167,9 +180,8 @@ case "$MODE" in
       echo $! > "$LOG_DIR/frontend.pid"
       popd >/dev/null
     else
-      require_cmd python3
       pushd "$FRONTEND_DIR/dist" >/dev/null
-      nohup python3 -m http.server "$FRONTEND_PORT" > "$FRONTEND_LOG" 2>&1 &
+      nohup "$PYTHON_BIN" -m http.server "$FRONTEND_PORT" > "$FRONTEND_LOG" 2>&1 &
       echo $! > "$LOG_DIR/frontend.pid"
       popd >/dev/null
       info "Note: python http.server does not provide SPA fallback routes."

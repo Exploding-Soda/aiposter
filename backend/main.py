@@ -6,6 +6,7 @@ import base64
 import hashlib
 import secrets
 import uuid
+import shutil
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, timezone
@@ -423,6 +424,13 @@ def delete_project_from_db(project_id: str, user_id: str):
 
   conn.commit()
   conn.close()
+
+
+def delete_project_files(project_id: str):
+  """Delete all files for a project from the files directory."""
+  project_dir = FILES_DIR / project_id
+  if project_dir.exists():
+    shutil.rmtree(project_dir, ignore_errors=True)
 
 
 def hash_refresh_token(token: str) -> str:
@@ -1119,6 +1127,7 @@ def delete_project(project_id: str, user: sqlite3.Row = Depends(require_current_
   """Delete a project by ID."""
   try:
     delete_project_from_db(project_id, user["id"])
+    delete_project_files(project_id)
     return JSONResponse({"success": True, "projectId": project_id})
   except Exception as e:
     raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(e)}")
