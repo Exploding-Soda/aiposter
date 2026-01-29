@@ -171,12 +171,14 @@ case "$MODE" in
     info "Starting backend on port $BACKEND_PORT"
     # shellcheck disable=SC1090
     source "$BACKEND_DIR/.venv/bin/activate"
+    pushd "$BACKEND_DIR" >/dev/null
     nohup uvicorn main:app \
       --host 0.0.0.0 \
       --port "$BACKEND_PORT" \
       --workers "$BACKEND_WORKERS" \
       > "$BACKEND_LOG" 2>&1 &
     echo $! > "$LOG_DIR/backend.pid"
+    popd >/dev/null
     deactivate
 
     info "Starting frontend on port $FRONTEND_PORT"
@@ -187,6 +189,10 @@ case "$MODE" in
     info "Starting Caddy on port $FRONTEND_PORT"
     CADDYFILE_PATH="$LOG_DIR/Caddyfile"
     cat > "$CADDYFILE_PATH" <<EOF
+{
+  admin off
+}
+
 :${FRONTEND_PORT} {
   root * ${FRONTEND_DIST_DIR}
   encode gzip zstd
@@ -201,7 +207,7 @@ case "$MODE" in
 }
 EOF
 
-    nohup "$CADDY_BIN" run --config "$CADDYFILE_PATH" > "$CADDY_LOG" 2>&1 &
+    nohup "$CADDY_BIN" run --config "$CADDYFILE_PATH" --adapter caddyfile > "$CADDY_LOG" 2>&1 &
     echo $! > "$LOG_DIR/caddy.pid"
 
     info "Deployment complete."
