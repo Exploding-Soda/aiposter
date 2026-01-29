@@ -63,6 +63,7 @@ FRONTEND_ORIGINS = [
 
 POLO_API_URL = os.getenv("POLO_API_URL", "https://work.poloapi.com/v1/chat/completions")
 POLO_API_KEY = os.getenv("POLO_API_KEY", "")
+POLO_TIMEOUT_SECONDS = int(os.getenv("POLO_TIMEOUT_SECONDS", "180"))
 
 password_hasher = PasswordHasher()
 
@@ -1075,19 +1076,32 @@ def ai_chat(payload: Dict[str, Any], user: sqlite3.Row = Depends(require_current
   auth_value = POLO_API_KEY.strip()
   if auth_value and not auth_value.lower().startswith("bearer "):
     auth_value = f"Bearer {auth_value}"
-  try:
-    response = httpx.post(
-      POLO_API_URL,
-      json=payload,
-      headers={
-        "Authorization": auth_value,
-        "Content-Type": "application/json"
-      },
-      timeout=90
-    )
-  except httpx.RequestError as exc:
-    print(f"[error] Polo API request failed: {exc}")
-    raise HTTPException(status_code=502, detail=f"Polo API request failed: {exc}")
+  timeout = httpx.Timeout(POLO_TIMEOUT_SECONDS)
+  attempts = 2
+  last_exc: Exception | None = None
+  for attempt in range(1, attempts + 1):
+    try:
+      response = httpx.post(
+        POLO_API_URL,
+        json=payload,
+        headers={
+          "Authorization": auth_value,
+          "Content-Type": "application/json"
+        },
+        timeout=timeout
+      )
+      last_exc = None
+      break
+    except httpx.ReadTimeout as exc:
+      last_exc = exc
+      print(f"[warn] Polo API read timeout (attempt {attempt}/{attempts})")
+    except httpx.RequestError as exc:
+      last_exc = exc
+      print(f"[error] Polo API request failed: {exc}")
+      break
+
+  if last_exc:
+    raise HTTPException(status_code=502, detail=f"Polo API request failed: {last_exc}")
 
   try:
     data = response.json()
