@@ -7,6 +7,7 @@ import { AppStatus, PosterDraft, PlanningStep, Artboard, Asset, Selection, Asset
 import { planPosters, generatePosterImage, generatePosterNoTextImage, generatePosterMergedImage, refinePoster, chatWithModel, ChatMessage, editPosterWithMarkup, generatePosterResolutionFromImage } from './services/geminiService';
 import { AuthUser, fetchWithAuth, loginUser, logoutUser, refreshAccessToken, registerUser } from './services/authService';
 import PosterCard from './components/PosterCard';
+import LandingPage from './components/LandingPage';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 
 const STORAGE_KEY = 'poster_canvas_projects';
@@ -2081,11 +2082,11 @@ const App: React.FC = () => {
     }
   }, [artboards, updatePosterArtboard]);
 
-  const handleNavigate = (path: string) => {
+  const handleNavigate = useCallback((path: string) => {
     if (window.location.pathname === path) return;
     window.history.pushState({}, '', path);
     syncRouteState(path);
-  };
+  }, [syncRouteState]);
 
   const handleLogout = async () => {
     await logoutUser();
@@ -3900,6 +3901,22 @@ Return ONLY valid JSON in the format:
   const isOnBoardRoute = route.startsWith('/board/');
   const isAdminRoute = route.startsWith('/admin');
   const adminSubroute = isAdminRoute ? route.replace('/admin', '') || '/' : '';
+  const isLandingRoute = route === '/landing';
+  const isLoginRoute = route === '/login';
+
+  useEffect(() => {
+    if (!authReady || authUser) return;
+    if (!isLandingRoute && !isLoginRoute) {
+      handleNavigate('/landing');
+    }
+  }, [authReady, authUser, handleNavigate, isLandingRoute, isLoginRoute]);
+
+  useEffect(() => {
+    if (!authReady || !authUser) return;
+    if (isLandingRoute || isLoginRoute) {
+      handleNavigate('/');
+    }
+  }, [authReady, authUser, handleNavigate, isLandingRoute, isLoginRoute]);
 
   useEffect(() => {
     if (!isOnBoardRoute) return;
@@ -3920,65 +3937,77 @@ Return ONLY valid JSON in the format:
   }
 
   if (!authUser) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#f5f5f7] px-4">
-        <div className="w-full max-w-md bg-white border border-gray-100 shadow-xl rounded-3xl p-8">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-10 h-10 rounded-xl bg-black text-white flex items-center justify-center font-bold">C</div>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">
-                {authMode === 'login' ? 'Sign in' : 'Create account'}
-              </h1>
+    if (isLandingRoute) {
+      return <LandingPage onStartCreating={() => handleNavigate('/login')} />;
+    }
+
+    if (isLoginRoute) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-[#f5f5f7] px-4">
+          <div className="w-full max-w-md bg-white border border-gray-100 shadow-xl rounded-3xl p-8">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 rounded-xl bg-black text-white flex items-center justify-center font-bold">C</div>
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">
+                  {authMode === 'login' ? 'Sign in' : 'Create account'}
+                </h1>
+              </div>
+            </div>
+            <p className="text-gray-500 mb-6">
+              {authMode === 'login'
+                ? 'Sign in to access your private artboards and models.'
+                : 'Register in seconds and start creating posters.'}
+            </p>
+            <form onSubmit={handleAuthSubmit} className="space-y-4">
+              <input
+                type="text"
+                autoComplete="username"
+                placeholder="Username"
+                value={authForm.username}
+                onChange={(event) => setAuthForm((prev) => ({ ...prev, username: event.target.value }))}
+                className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+              />
+              <input
+                type="password"
+                autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
+                placeholder="Password"
+                value={authForm.password}
+                onChange={(event) => setAuthForm((prev) => ({ ...prev, password: event.target.value }))}
+                className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+              />
+              {authError && (
+                <p className="text-sm text-red-600">{authError}</p>
+              )}
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full rounded-xl bg-black text-white py-3 font-semibold shadow-lg shadow-gray-200 transition-all disabled:opacity-60"
+              >
+                {authLoading ? 'Working...' : authMode === 'login' ? 'Sign in' : 'Register'}
+              </button>
+            </form>
+            <div className="mt-6 flex items-center justify-between text-sm text-gray-500">
+              <span>
+                {authMode === 'login' ? 'New here?' : 'Already have an account?'}
+              </span>
+              <button
+                onClick={() => {
+                  setAuthMode((prev) => (prev === 'login' ? 'register' : 'login'));
+                  setAuthError('');
+                }}
+                className="text-gray-900 font-semibold"
+              >
+                {authMode === 'login' ? 'Create account' : 'Sign in'}
+              </button>
             </div>
           </div>
-          <p className="text-gray-500 mb-6">
-            {authMode === 'login'
-              ? 'Sign in to access your private artboards and models.'
-              : 'Register in seconds and start creating posters.'}
-          </p>
-          <form onSubmit={handleAuthSubmit} className="space-y-4">
-            <input
-              type="text"
-              autoComplete="username"
-              placeholder="Username"
-              value={authForm.username}
-              onChange={(event) => setAuthForm((prev) => ({ ...prev, username: event.target.value }))}
-              className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
-            />
-            <input
-              type="password"
-              autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
-              placeholder="Password"
-              value={authForm.password}
-              onChange={(event) => setAuthForm((prev) => ({ ...prev, password: event.target.value }))}
-              className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
-            />
-            {authError && (
-              <p className="text-sm text-red-600">{authError}</p>
-            )}
-            <button
-              type="submit"
-              disabled={authLoading}
-              className="w-full rounded-xl bg-black text-white py-3 font-semibold shadow-lg shadow-gray-200 transition-all disabled:opacity-60"
-            >
-              {authLoading ? 'Working...' : authMode === 'login' ? 'Sign in' : 'Register'}
-            </button>
-          </form>
-          <div className="mt-6 flex items-center justify-between text-sm text-gray-500">
-            <span>
-              {authMode === 'login' ? 'New here?' : 'Already have an account?'}
-            </span>
-            <button
-              onClick={() => {
-                setAuthMode((prev) => (prev === 'login' ? 'register' : 'login'));
-                setAuthError('');
-              }}
-              className="text-gray-900 font-semibold"
-            >
-              {authMode === 'login' ? 'Create account' : 'Sign in'}
-            </button>
-          </div>
         </div>
+      );
+    }
+
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#f5f5f7] text-gray-500">
+        Redirecting to landing page...
       </div>
     );
   }
