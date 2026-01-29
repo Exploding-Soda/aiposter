@@ -1,0 +1,7 @@
+{
+  "name": "PosterGen AI - Smart Creative Studio",
+  "description": "An AI-powered poster creation tool that coordinates agents for copywriting, visual conceptualization, and image generation using Gemini 2.5 Flash Image.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
