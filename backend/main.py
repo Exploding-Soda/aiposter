@@ -1072,17 +1072,21 @@ def admin_register(payload: Dict[str, Any], user: sqlite3.Row = Depends(require_
 def ai_chat(payload: Dict[str, Any], user: sqlite3.Row = Depends(require_current_user)):
   if not POLO_API_KEY:
     raise HTTPException(status_code=500, detail="POLO_API_KEY not configured on server")
+  auth_value = POLO_API_KEY.strip()
+  if auth_value and not auth_value.lower().startswith("bearer "):
+    auth_value = f"Bearer {auth_value}"
   try:
     response = httpx.post(
       POLO_API_URL,
       json=payload,
       headers={
-        "Authorization": POLO_API_KEY,
+        "Authorization": auth_value,
         "Content-Type": "application/json"
       },
       timeout=90
     )
   except httpx.RequestError as exc:
+    print(f"[error] Polo API request failed: {exc}")
     raise HTTPException(status_code=502, detail=f"Polo API request failed: {exc}")
 
   try:
