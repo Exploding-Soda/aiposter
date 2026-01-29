@@ -35,6 +35,30 @@ const REFINE_RESOLUTION_OPTIONS = [
 ];
 
 const generateId = () => Math.random().toString(36).slice(2, 9);
+const generateUUID = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const toHex = (b: number) => b.toString(16).padStart(2, '0');
+    return [
+      toHex(bytes[0]), toHex(bytes[1]), toHex(bytes[2]), toHex(bytes[3]),
+      '-',
+      toHex(bytes[4]), toHex(bytes[5]),
+      '-',
+      toHex(bytes[6]), toHex(bytes[7]),
+      '-',
+      toHex(bytes[8]), toHex(bytes[9]),
+      '-',
+      toHex(bytes[10]), toHex(bytes[11]), toHex(bytes[12]), toHex(bytes[13]), toHex(bytes[14]), toHex(bytes[15])
+    ].join('');
+  }
+  return `${Date.now().toString(36)}-${generateId()}-${generateId()}`;
+};
 const clampValue = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const clampPosition = (x: number, y: number, width: number, height: number) => ({
   x: clampValue(x, BOARD_BOUNDS.minX, BOARD_BOUNDS.maxX - width),
@@ -724,7 +748,7 @@ const App: React.FC = () => {
       }))
     } as Project;
     const existingIds = new Set(projects.map(p => p.id));
-    const projectId = existingIds.has(importedProject.id) ? crypto.randomUUID() : importedProject.id;
+    const projectId = existingIds.has(importedProject.id) ? generateUUID() : importedProject.id;
     const normalized: Project = {
       ...importedProject,
       id: projectId,
@@ -1351,7 +1375,7 @@ const App: React.FC = () => {
   const handleCreateProject = async () => {
     if (!newProjectData.title.trim()) return;
     const newProject: Project = {
-      id: crypto.randomUUID(),
+      id: generateUUID(),
       title: newProjectData.title.trim(),
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -2647,7 +2671,7 @@ const App: React.FC = () => {
       width = Math.round(height * aspect);
     }
     const position = clampPosition(viewCenter.x - width / 2, viewCenter.y - height / 2, width, height);
-    const id = crypto.randomUUID();
+    const id = generateUUID();
     const posterData: PosterDraft = {
       id,
       topBanner: '',
