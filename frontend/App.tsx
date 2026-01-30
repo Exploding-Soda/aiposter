@@ -432,11 +432,21 @@ const App: React.FC = () => {
     const convertUrls = (urls?: string[]) => (
       urls ? urls.map((url) => convertUrl(url) || url) : urls
     );
+    const convertAssets = (assets?: Asset[]) => (
+      assets
+        ? assets.map((asset) => (
+          asset.type === 'image'
+            ? { ...asset, content: convertUrl(asset.content) || asset.content }
+            : asset
+        ))
+        : assets
+    );
 
     return {
       ...project,
       styleImages: convertUrls(project.styleImages),
       logoImage: convertUrl(project.logoImage) || project.logoImage || undefined,
+      canvasAssets: convertAssets(project.canvasAssets),
       artboards: project.artboards?.map((ab) => ({
         ...ab,
         assets: ab.assets.map((asset) => {
