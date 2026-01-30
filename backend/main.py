@@ -352,6 +352,16 @@ def process_project_images(project_data: Dict[str, Any]) -> Dict[str, Any]:
             except Exception as e:
               print(f"[warn] Failed to save {field}: {e}")
 
+  # Process canvas assets (e.g., images placed on the canvas outside artboards)
+  if 'canvasAssets' in project_data:
+    for i, asset in enumerate(project_data.get('canvasAssets', [])):
+      if asset.get('type') == 'image' and asset.get('content', '').startswith('data:'):
+        try:
+          file_path = save_base64_image(asset['content'], project_id, f'canvas_asset_{i}')
+          asset['content'] = f"file://{file_path}"
+        except Exception as e:
+          print(f"[warn] Failed to save canvas asset image: {e}")
+
   return project_data
 
 
