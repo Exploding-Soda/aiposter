@@ -13,6 +13,7 @@ type AuthResponse = {
 };
 
 let accessToken: string | null = null;
+let refreshPromise: Promise<AuthResponse | null> | null = null;
 
 export const getAccessToken = () => accessToken;
 export const setAccessToken = (token: string | null) => {
@@ -64,17 +65,27 @@ export const loginUser = async (username: string, password: string): Promise<Aut
 };
 
 export const refreshAccessToken = async (): Promise<AuthResponse | null> => {
-  const response = await fetch(`${API_BASE}/auth/refresh`, {
-    method: 'POST',
-    credentials: 'include'
-  });
-  if (!response.ok) {
-    setAccessToken(null);
-    return null;
+  if (refreshPromise) {
+    return refreshPromise;
   }
-  const data = await parseAuthResponse(response);
-  setAccessToken(data.accessToken);
-  return data;
+  refreshPromise = (async () => {
+    try {
+      const response = await fetch(`${API_BASE}/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include'
+      });
+      if (!response.ok) {
+        setAccessToken(null);
+        return null;
+      }
+      const data = await parseAuthResponse(response);
+      setAccessToken(data.accessToken);
+      return data;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+  return refreshPromise;
 };
 
 export const logoutUser = async (): Promise<void> => {

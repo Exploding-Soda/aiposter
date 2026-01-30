@@ -859,7 +859,7 @@ const App: React.FC = () => {
     historyRef.current = [];
     redoRef.current = [];
     historySignatureRef.current = '';
-  }, [activeProjectId]);
+  }, [activeProjectId, activeProject]);
 
   useEffect(() => {
     if (!assetContextMenu) return;
