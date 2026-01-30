@@ -19,6 +19,7 @@ const BOARD_BOUNDS = { minX: -2500, maxX: 2500, minY: -2500, maxY: 2500 };
 const BOARD_WIDTH = BOARD_BOUNDS.maxX - BOARD_BOUNDS.minX;
 const BOARD_HEIGHT = BOARD_BOUNDS.maxY - BOARD_BOUNDS.minY;
 const BOARD_PADDING = 24;
+const ADMIN_DB_LIMIT = 50;
 const BACKEND_API = import.meta.env.VITE_BACKEND_API || 'http://localhost:8001';
 const FONT_PREVIEW_API = import.meta.env.VITE_FONT_PREVIEW_API || BACKEND_API;
 const FONT_ALPHABET_PREVIEW_TEXT = [
@@ -208,6 +209,7 @@ const App: React.FC = () => {
   const [isRefiningPoster, setIsRefiningPoster] = useState(false);
   const [isResolutionModalOpen, setIsResolutionModalOpen] = useState(false);
   const [isGeneratingResolutions, setIsGeneratingResolutions] = useState(false);
+  const [isAutoSaving, setIsAutoSaving] = useState(false);
   const [assetContextMenu, setAssetContextMenu] = useState<{
     x: number;
     y: number;
@@ -237,6 +239,9 @@ const App: React.FC = () => {
   const historyRef = useRef<{ artboards: Artboard[]; canvasAssets: Asset[]; connections: Connection[] }[]>([]);
   const redoRef = useRef<{ artboards: Artboard[]; canvasAssets: Asset[]; connections: Connection[] }[]>([]);
   const historySignatureRef = useRef('');
+  const lastLoadedProjectIdRef = useRef<string | null>(null);
+  const autoSaveSignatureRef = useRef('');
+  const autoSaveInFlightRef = useRef(false);
   const isRestoringRef = useRef(false);
   const annotatorRef = useRef<HTMLDivElement | null>(null);
   const annotatorCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -258,6 +263,22 @@ const App: React.FC = () => {
   const [passwordChangeForm, setPasswordChangeForm] = useState({ current: '', next: '', confirm: '' });
   const [passwordChangeError, setPasswordChangeError] = useState('');
   const [passwordChangeLoading, setPasswordChangeLoading] = useState(false);
+  const [adminDbTables, setAdminDbTables] = useState<string[]>([]);
+  const [adminDbTable, setAdminDbTable] = useState('');
+  const [adminDbSchema, setAdminDbSchema] = useState<Array<{ name: string; type: string; notnull: boolean; default: any; pk: number }>>([]);
+  const [adminDbPrimaryKey, setAdminDbPrimaryKey] = useState<string[]>([]);
+  const [adminDbHasRowid, setAdminDbHasRowid] = useState(true);
+  const [adminDbRows, setAdminDbRows] = useState<Record<string, any>[]>([]);
+  const [adminDbTotal, setAdminDbTotal] = useState(0);
+  const [adminDbOffset, setAdminDbOffset] = useState(0);
+  const [adminDbLoading, setAdminDbLoading] = useState(false);
+  const [adminDbError, setAdminDbError] = useState('');
+  const [adminDbEditorOpen, setAdminDbEditorOpen] = useState(false);
+  const [adminDbEditorMode, setAdminDbEditorMode] = useState<'add' | 'edit'>('add');
+  const [adminDbEditorValues, setAdminDbEditorValues] = useState<Record<string, any>>({});
+  const [adminDbEditorRowId, setAdminDbEditorRowId] = useState<number | null>(null);
+  const [adminDbEditorPrimaryKey, setAdminDbEditorPrimaryKey] = useState<Record<string, any> | null>(null);
+  const [adminDbSaving, setAdminDbSaving] = useState(false);
   const imageUploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const isAnnotatorReady = Boolean(annotatorImage && annotatorSize.width > 0 && annotatorSize.height > 0);
@@ -810,6 +831,8 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!activeProject) return;
+    if (lastLoadedProjectIdRef.current === activeProjectId) return;
+    lastLoadedProjectIdRef.current = activeProjectId || null;
     setArtboards(activeProject.artboards || []);
     setCanvasAssets(activeProject.canvasAssets || []);
     setConnections(activeProject.connections || []);
@@ -869,6 +892,7 @@ const App: React.FC = () => {
     historyRef.current = [];
     redoRef.current = [];
     historySignatureRef.current = '';
+    autoSaveSignatureRef.current = '';
   }, [activeProjectId, activeProject]);
 
   useEffect(() => {
@@ -1029,7 +1053,51 @@ const App: React.FC = () => {
     setCanRedo(redoRef.current.length > 0);
   }, [activeProjectId, artboards, canvasAssets, connections]);
 
-  // Auto-save disabled; saving occurs on explicit exit.
+  useEffect(() => {
+    if (!activeProjectId || !activeProject || !authUser) return;
+    let isMounted = true;
+    const tick = async () => {
+      if (!isMounted || autoSaveInFlightRef.current) return;
+      const snapshot = buildProjectSnapshot({}, { includeUploads: true });
+      if (!snapshot) return;
+      const signature = JSON.stringify({ ...snapshot, updatedAt: 0 });
+      if (signature === autoSaveSignatureRef.current) return;
+      autoSaveSignatureRef.current = signature;
+      autoSaveInFlightRef.current = true;
+      setIsAutoSaving(true);
+      const updatedProjects = projects.map(project => (
+        project.id === snapshot.id ? snapshot : project
+      ));
+      saveProjectsToDisk(updatedProjects);
+      try {
+        await saveProjectToBackend(snapshot.id, snapshot);
+      } finally {
+        autoSaveInFlightRef.current = false;
+        if (isMounted) {
+          setIsAutoSaving(false);
+        }
+      }
+    };
+    const intervalId = window.setInterval(() => {
+      void tick();
+    }, 5000);
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+    };
+  }, [
+    activeProjectId,
+    activeProject,
+    authUser,
+    artboards,
+    canvasAssets,
+    connections,
+    styleImages,
+    logoImage,
+    viewOffset,
+    zoom,
+    projects
+  ]);
 
   useEffect(() => {
     if (!showNoTextEdit || !noTextRef.current || !noTextImageSize) return;
@@ -2904,6 +2972,162 @@ const App: React.FC = () => {
     }
   };
 
+  const fetchAdminDbTables = useCallback(async () => {
+    setAdminDbLoading(true);
+    setAdminDbError('');
+    try {
+      const response = await fetchWithAuth(`${BACKEND_API}/admin/db/tables`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load tables';
+        throw new Error(message);
+      }
+      const tables = Array.isArray(data?.tables) ? data.tables : [];
+      setAdminDbTables(tables);
+      if (!tables.includes(adminDbTable)) {
+        setAdminDbTable(tables[0] || '');
+        setAdminDbOffset(0);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load tables';
+      setAdminDbError(message);
+    } finally {
+      setAdminDbLoading(false);
+    }
+  }, [adminDbTable]);
+
+  const fetchAdminDbSchema = useCallback(async (table: string) => {
+    if (!table) return;
+    setAdminDbLoading(true);
+    setAdminDbError('');
+    try {
+      const response = await fetchWithAuth(`${BACKEND_API}/admin/db/schema/${table}`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load schema';
+        throw new Error(message);
+      }
+      setAdminDbSchema(data.columns || []);
+      setAdminDbPrimaryKey(data.primaryKey || []);
+      setAdminDbHasRowid(Boolean(data.hasRowid));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load schema';
+      setAdminDbError(message);
+    } finally {
+      setAdminDbLoading(false);
+    }
+  }, []);
+
+  const fetchAdminDbRows = useCallback(async (table: string, offset = 0) => {
+    if (!table) return;
+    setAdminDbLoading(true);
+    setAdminDbError('');
+    try {
+      const response = await fetchWithAuth(`${BACKEND_API}/admin/db/rows/${table}?limit=${ADMIN_DB_LIMIT}&offset=${offset}`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load rows';
+        throw new Error(message);
+      }
+      setAdminDbRows(data.rows || []);
+      setAdminDbTotal(data.total || 0);
+      setAdminDbOffset(offset);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load rows';
+      setAdminDbError(message);
+    } finally {
+      setAdminDbLoading(false);
+    }
+  }, []);
+
+  const openAdminDbEditor = (mode: 'add' | 'edit', row?: Record<string, any>) => {
+    const values: Record<string, any> = {};
+    adminDbSchema.forEach((column) => {
+      const rawValue = row ? row[column.name] : '';
+      values[column.name] = rawValue ?? '';
+    });
+    setAdminDbEditorMode(mode);
+    setAdminDbEditorValues(values);
+    setAdminDbEditorRowId(row && typeof row._rowid === 'number' ? row._rowid : null);
+    if (row && adminDbPrimaryKey.length > 0) {
+      const pk: Record<string, any> = {};
+      adminDbPrimaryKey.forEach((key) => {
+        pk[key] = row[key];
+      });
+      setAdminDbEditorPrimaryKey(pk);
+    } else {
+      setAdminDbEditorPrimaryKey(null);
+    }
+    setAdminDbEditorOpen(true);
+  };
+
+  const closeAdminDbEditor = () => {
+    setAdminDbEditorOpen(false);
+    setAdminDbEditorValues({});
+    setAdminDbEditorRowId(null);
+    setAdminDbEditorPrimaryKey(null);
+  };
+
+  const handleAdminDbSave = async () => {
+    if (!adminDbTable) return;
+    if (adminDbSaving) return;
+    setAdminDbSaving(true);
+    setAdminDbError('');
+    const payload = {
+      values: adminDbEditorValues,
+      primaryKey: adminDbEditorPrimaryKey,
+      rowId: adminDbEditorRowId
+    };
+    try {
+      const response = await fetchWithAuth(`${BACKEND_API}/admin/db/rows/${adminDbTable}`, {
+        method: adminDbEditorMode === 'add' ? 'POST' : 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to save row';
+        throw new Error(message);
+      }
+      closeAdminDbEditor();
+      await fetchAdminDbRows(adminDbTable, adminDbOffset);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to save row';
+      setAdminDbError(message);
+    } finally {
+      setAdminDbSaving(false);
+    }
+  };
+
+  const handleAdminDbDelete = async (row: Record<string, any>) => {
+    if (!adminDbTable) return;
+    const confirmed = window.confirm('Delete this row? This cannot be undone.');
+    if (!confirmed) return;
+    setAdminDbError('');
+    try {
+      const payload = {
+        primaryKey: adminDbPrimaryKey.length > 0
+          ? adminDbPrimaryKey.reduce((acc, key) => ({ ...acc, [key]: row[key] }), {})
+          : null,
+        rowId: typeof row._rowid === 'number' ? row._rowid : null
+      };
+      const response = await fetchWithAuth(`${BACKEND_API}/admin/db/rows/${adminDbTable}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to delete row';
+        throw new Error(message);
+      }
+      await fetchAdminDbRows(adminDbTable, adminDbOffset);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to delete row';
+      setAdminDbError(message);
+    }
+  };
+
   const handleContextDelete = () => {
     if (!assetContextMenu) return;
     if (assetContextMenu.scope === 'canvas') {
@@ -3953,6 +4177,20 @@ Return ONLY valid JSON in the format:
   }, [authReady, authUser, handleNavigate, isLandingRoute, isLoginRoute]);
 
   useEffect(() => {
+    if (!authUser?.is_admin) return;
+    if (adminSubroute !== '/database') return;
+    void fetchAdminDbTables();
+  }, [authUser, adminSubroute, fetchAdminDbTables]);
+
+  useEffect(() => {
+    if (!authUser?.is_admin) return;
+    if (adminSubroute !== '/database') return;
+    if (!adminDbTable) return;
+    void fetchAdminDbSchema(adminDbTable);
+    void fetchAdminDbRows(adminDbTable, 0);
+  }, [authUser, adminSubroute, adminDbTable, fetchAdminDbSchema, fetchAdminDbRows]);
+
+  useEffect(() => {
     if (!isOnBoardRoute) return;
     return undefined;
   }, [isOnBoardRoute]);
@@ -4122,6 +4360,12 @@ Return ONLY valid JSON in the format:
                 Admin Home
               </button>
               <button
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-colors ${adminSubroute === '/database' ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
+                onClick={() => handleNavigate('/admin/database')}
+              >
+                Database
+              </button>
+              <button
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-colors ${adminSubroute === '/register' ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
                 onClick={() => handleNavigate('/admin/register')}
               >
@@ -4225,6 +4469,163 @@ Return ONLY valid JSON in the format:
                   </div>
                 </div>
               </div>
+            ) : adminSubroute === '/database' ? (
+              <div className="space-y-6">
+                <div>
+                  <h1 className="text-3xl font-bold text-gray-900 mb-2">Database</h1>
+                  <p className="text-gray-500 font-medium">Edit tables and rows directly.</p>
+                </div>
+                <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-6">
+                  <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-xs font-semibold uppercase tracking-widest text-gray-400">Tables</span>
+                      <button
+                        type="button"
+                        onClick={() => fetchAdminDbTables()}
+                        className="text-xs font-semibold text-gray-600 hover:text-gray-900"
+                      >
+                        Refresh
+                      </button>
+                    </div>
+                    <div className="space-y-1 max-h-[520px] overflow-y-auto">
+                      {adminDbTables.map((table) => (
+                        <button
+                          key={table}
+                          type="button"
+                          onClick={() => {
+                            setAdminDbTable(table);
+                            setAdminDbOffset(0);
+                          }}
+                          className={`w-full text-left px-3 py-2 rounded-xl text-sm font-medium ${adminDbTable === table ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                        >
+                          {table}
+                        </button>
+                      ))}
+                      {adminDbTables.length === 0 && (
+                        <div className="text-sm text-gray-400 py-2">No tables found.</div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm overflow-hidden">
+                    <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                      <div>
+                        <div className="text-sm font-semibold text-gray-900">{adminDbTable || 'Select a table'}</div>
+                        <div className="text-xs text-gray-500">
+                          {adminDbTotal} rows
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openAdminDbEditor('add')}
+                          disabled={!adminDbTable}
+                          className="px-3 py-2 rounded-lg bg-gray-900 text-white text-xs font-semibold disabled:opacity-50"
+                        >
+                          Add Row
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => adminDbTable && fetchAdminDbRows(adminDbTable, adminDbOffset)}
+                          disabled={!adminDbTable}
+                          className="px-3 py-2 rounded-lg border border-gray-200 text-xs font-semibold text-gray-600"
+                        >
+                          Refresh
+                        </button>
+                      </div>
+                    </div>
+                    {adminDbError && (
+                      <div className="mb-3 text-sm text-red-600">{adminDbError}</div>
+                    )}
+                    <div className="overflow-auto border border-gray-100 rounded-xl">
+                      <table className="min-w-full text-xs">
+                        <thead className="bg-gray-50 text-gray-500">
+                          <tr>
+                            {adminDbHasRowid && (
+                              <th className="text-left px-3 py-2 font-semibold">rowid</th>
+                            )}
+                            {adminDbSchema.map((col) => (
+                              <th key={col.name} className="text-left px-3 py-2 font-semibold">
+                                {col.name}
+                              </th>
+                            ))}
+                            <th className="text-left px-3 py-2 font-semibold">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {adminDbRows.map((row, idx) => (
+                            <tr key={row._rowid ?? idx} className="border-t border-gray-100">
+                              {adminDbHasRowid && (
+                                <td className="px-3 py-2 text-gray-400">{row._rowid ?? '—'}</td>
+                              )}
+                              {adminDbSchema.map((col) => (
+                                <td key={col.name} className="px-3 py-2 text-gray-700">
+                                  {row[col.name] === null || row[col.name] === undefined ? '—' : String(row[col.name])}
+                                </td>
+                              ))}
+                              <td className="px-3 py-2 text-gray-600">
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => openAdminDbEditor('edit', row)}
+                                    className="text-xs font-semibold text-gray-700 hover:text-gray-900"
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAdminDbDelete(row)}
+                                    className="text-xs font-semibold text-red-600 hover:text-red-700"
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                          {!adminDbLoading && adminDbRows.length === 0 && (
+                            <tr>
+                              <td colSpan={adminDbSchema.length + (adminDbHasRowid ? 2 : 1)} className="px-3 py-6 text-center text-gray-400">
+                                No rows to display.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="flex items-center justify-between mt-4 text-xs text-gray-500">
+                      <div>
+                        Showing {Math.min(adminDbOffset + 1, adminDbTotal)}-{Math.min(adminDbOffset + ADMIN_DB_LIMIT, adminDbTotal)} of {adminDbTotal}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => adminDbTable && fetchAdminDbRows(adminDbTable, Math.max(0, adminDbOffset - ADMIN_DB_LIMIT))}
+                          disabled={adminDbOffset === 0}
+                          className="px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 disabled:opacity-50"
+                        >
+                          Prev
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextOffset = adminDbOffset + ADMIN_DB_LIMIT;
+                            if (nextOffset < adminDbTotal) {
+                              fetchAdminDbRows(adminDbTable, nextOffset);
+                            }
+                          }}
+                          disabled={adminDbOffset + ADMIN_DB_LIMIT >= adminDbTotal}
+                          className="px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 disabled:opacity-50"
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                    {adminDbLoading && (
+                      <div className="mt-3 text-xs text-gray-400">Loading...</div>
+                    )}
+                  </div>
+                </div>
+              </div>
             ) : (
               <div className="mb-10">
                 <h1 className="text-3xl font-bold text-gray-900 mb-2">Admin</h1>
@@ -4233,6 +4634,63 @@ Return ONLY valid JSON in the format:
             )}
           </div>
         </main>
+        {adminDbEditorOpen && (
+          <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 backdrop-blur-sm p-6">
+            <div className="w-full max-w-2xl bg-white rounded-3xl shadow-xl border border-gray-100 p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                    {adminDbEditorMode === 'add' ? 'Add Row' : 'Edit Row'}
+                  </div>
+                  <div className="text-lg font-bold text-gray-900">{adminDbTable}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeAdminDbEditor}
+                  className="text-sm font-semibold text-gray-500 hover:text-gray-900"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="max-h-[60vh] overflow-y-auto space-y-3">
+                {adminDbSchema.map((column) => (
+                  <div key={column.name} className="space-y-1">
+                    <label className="text-xs font-semibold text-gray-500">
+                      {column.name}
+                      {column.pk ? ' (PK)' : ''}
+                    </label>
+                    <input
+                      type="text"
+                      value={adminDbEditorValues[column.name] ?? ''}
+                      onChange={(event) => setAdminDbEditorValues((prev) => ({ ...prev, [column.name]: event.target.value }))}
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                    />
+                    {column.type && (
+                      <div className="text-[10px] text-gray-400">Type: {column.type}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeAdminDbEditor}
+                  className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAdminDbSave}
+                  disabled={adminDbSaving}
+                  className="px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-semibold disabled:opacity-60"
+                >
+                  {adminDbSaving ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -4500,6 +4958,14 @@ Return ONLY valid JSON in the format:
             <div className="w-px h-6 bg-slate-200" />
           </div>
         </div>
+        {isAutoSaving && (
+          <div className="absolute right-5 top-5 z-40">
+            <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white/95 px-4 py-2 shadow-xl backdrop-blur">
+              <Loader2 className="w-4 h-4 text-slate-500 animate-spin" />
+              <span className="text-xs font-semibold text-slate-600">Saving…</span>
+            </div>
+          </div>
+        )}
         {marqueeRect && (
           <div
             className="absolute border border-blue-500/80 bg-blue-200/20 rounded-sm pointer-events-none"

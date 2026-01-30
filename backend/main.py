@@ -128,6 +128,17 @@ class ChangePasswordRequest(BaseModel):
   newPassword: str
 
 
+class AdminRowPayload(BaseModel):
+  values: Dict[str, Any]
+  primaryKey: Optional[Dict[str, Any]] = None
+  rowId: Optional[int] = None
+
+
+class AdminDeletePayload(BaseModel):
+  primaryKey: Optional[Dict[str, Any]] = None
+  rowId: Optional[int] = None
+
+
 class AuthResponse(BaseModel):
   accessToken: str
   user: Dict[str, Any]
@@ -242,6 +253,57 @@ def get_db_connection():
   conn = sqlite3.connect(str(DB_PATH))
   conn.row_factory = sqlite3.Row
   return conn
+
+
+def list_db_tables() -> list[str]:
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT name FROM sqlite_master
+    WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+    ORDER BY name
+  """)
+  rows = cursor.fetchall()
+  conn.close()
+  return [row[0] for row in rows]
+
+
+def get_table_schema(table: str) -> list[sqlite3.Row]:
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute(f'PRAGMA table_info("{table}")')
+  rows = cursor.fetchall()
+  conn.close()
+  return rows
+
+
+def table_has_rowid(table: str) -> bool:
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT sql FROM sqlite_master
+    WHERE type = 'table' AND name = ?
+  """, (table,))
+  row = cursor.fetchone()
+  conn.close()
+  if not row or not row[0]:
+    return True
+  return "WITHOUT ROWID" not in str(row[0]).upper()
+
+
+def normalize_table_name(table: str) -> str:
+  if table not in list_db_tables():
+    raise HTTPException(status_code=404, detail="Table not found")
+  return table
+
+
+def normalize_columns(table: str, values: Dict[str, Any]) -> Dict[str, Any]:
+  schema = get_table_schema(table)
+  allowed = {row["name"] for row in schema}
+  unknown = [key for key in values.keys() if key not in allowed]
+  if unknown:
+    raise HTTPException(status_code=400, detail=f"Unknown columns: {', '.join(unknown)}")
+  return values
 
 
 def save_base64_image(base64_data: str, project_id: str, image_type: str) -> str:
@@ -575,6 +637,12 @@ def require_current_user(request: Request) -> sqlite3.Row:
   user = get_user_by_id(user_id)
   if not user:
     raise HTTPException(status_code=401, detail="User not found")
+  return user
+
+
+def require_admin_user(user: sqlite3.Row = Depends(require_current_user)) -> sqlite3.Row:
+  if not bool(user["is_admin"]):
+    raise HTTPException(status_code=403, detail="Admin access required")
   return user
 
 
@@ -1057,6 +1125,174 @@ def change_password(payload: ChangePasswordRequest, user: sqlite3.Row = Depends(
   cursor.execute("""
     UPDATE users SET password_hash = ?, password_changed = 1 WHERE id = ?
   """, (new_hash, user["id"]))
+  conn.commit()
+  conn.close()
+  return JSONResponse({"success": True})
+
+
+@app.get("/admin/db/tables")
+def admin_db_tables(_: sqlite3.Row = Depends(require_admin_user)):
+  return JSONResponse({"tables": list_db_tables()})
+
+
+@app.get("/admin/db/schema/{table}")
+def admin_db_schema(table: str, _: sqlite3.Row = Depends(require_admin_user)):
+  table_name = normalize_table_name(table)
+  schema_rows = get_table_schema(table_name)
+  columns = [
+    {
+      "name": row["name"],
+      "type": row["type"],
+      "notnull": bool(row["notnull"]),
+      "default": row["dflt_value"],
+      "pk": row["pk"]
+    }
+    for row in schema_rows
+  ]
+  primary_key = [row["name"] for row in schema_rows if row["pk"]]
+  return JSONResponse({
+    "table": table_name,
+    "columns": columns,
+    "primaryKey": primary_key,
+    "hasRowid": table_has_rowid(table_name)
+  })
+
+
+@app.get("/admin/db/rows/{table}")
+def admin_db_rows(
+  table: str,
+  limit: int = 50,
+  offset: int = 0,
+  _: sqlite3.Row = Depends(require_admin_user)
+):
+  table_name = normalize_table_name(table)
+  has_rowid = table_has_rowid(table_name)
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute(f'SELECT COUNT(*) FROM "{table_name}"')
+  total = cursor.fetchone()[0]
+  if has_rowid:
+    cursor.execute(
+      f'SELECT rowid as _rowid, * FROM "{table_name}" ORDER BY rowid DESC LIMIT ? OFFSET ?',
+      (limit, offset)
+    )
+  else:
+    cursor.execute(
+      f'SELECT * FROM "{table_name}" LIMIT ? OFFSET ?',
+      (limit, offset)
+    )
+  rows = cursor.fetchall()
+  conn.close()
+  return JSONResponse({
+    "table": table_name,
+    "rows": [dict(row) for row in rows],
+    "total": total,
+    "limit": limit,
+    "offset": offset,
+    "hasRowid": has_rowid
+  })
+
+
+@app.post("/admin/db/rows/{table}")
+def admin_db_insert(
+  table: str,
+  payload: AdminRowPayload,
+  _: sqlite3.Row = Depends(require_admin_user)
+):
+  table_name = normalize_table_name(table)
+  values = normalize_columns(table_name, payload.values or {})
+  if not values:
+    raise HTTPException(status_code=400, detail="No values provided")
+  columns = list(values.keys())
+  placeholders = ", ".join(["?"] * len(columns))
+  column_sql = ", ".join([f'"{col}"' for col in columns])
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute(
+    f'INSERT INTO "{table_name}" ({column_sql}) VALUES ({placeholders})',
+    [values[col] for col in columns]
+  )
+  conn.commit()
+  conn.close()
+  return JSONResponse({"success": True})
+
+
+@app.put("/admin/db/rows/{table}")
+def admin_db_update(
+  table: str,
+  payload: AdminRowPayload,
+  _: sqlite3.Row = Depends(require_admin_user)
+):
+  table_name = normalize_table_name(table)
+  values = normalize_columns(table_name, payload.values or {})
+  if not values:
+    raise HTTPException(status_code=400, detail="No values provided")
+  schema_rows = get_table_schema(table_name)
+  primary_key = [row["name"] for row in schema_rows if row["pk"]]
+  has_rowid = table_has_rowid(table_name)
+  where_clauses = []
+  where_values: list[Any] = []
+  if primary_key and payload.primaryKey:
+    payload_pk = normalize_columns(table_name, payload.primaryKey)
+    for key in primary_key:
+      if key not in payload_pk:
+        raise HTTPException(status_code=400, detail=f"Missing primary key field: {key}")
+      where_clauses.append(f'"{key}" = ?')
+      where_values.append(payload_pk[key])
+  elif has_rowid and payload.rowId is not None:
+    where_clauses.append('"rowid" = ?')
+    where_values.append(payload.rowId)
+  else:
+    raise HTTPException(status_code=400, detail="Primary key or rowId required")
+
+  set_clauses = []
+  set_values: list[Any] = []
+  for key, value in values.items():
+    set_clauses.append(f'"{key}" = ?')
+    set_values.append(value)
+
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute(
+    f'UPDATE "{table_name}" SET {", ".join(set_clauses)} WHERE {" AND ".join(where_clauses)}',
+    set_values + where_values
+  )
+  conn.commit()
+  conn.close()
+  return JSONResponse({"success": True})
+
+
+@app.delete("/admin/db/rows/{table}")
+def admin_db_delete(
+  table: str,
+  payload: AdminDeletePayload,
+  _: sqlite3.Row = Depends(require_admin_user)
+):
+  table_name = normalize_table_name(table)
+  schema_rows = get_table_schema(table_name)
+  primary_key = [row["name"] for row in schema_rows if row["pk"]]
+  has_rowid = table_has_rowid(table_name)
+  where_clauses = []
+  where_values: list[Any] = []
+  if primary_key and payload.primaryKey:
+    payload_pk = normalize_columns(table_name, payload.primaryKey)
+    for key in primary_key:
+      if key not in payload_pk:
+        raise HTTPException(status_code=400, detail=f"Missing primary key field: {key}")
+      where_clauses.append(f'"{key}" = ?')
+      where_values.append(payload_pk[key])
+  elif has_rowid and payload.rowId is not None:
+    where_clauses.append('"rowid" = ?')
+    where_values.append(payload.rowId)
+  else:
+    raise HTTPException(status_code=400, detail="Primary key or rowId required")
+
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute(
+    f'DELETE FROM "{table_name}" WHERE {" AND ".join(where_clauses)}',
+    where_values
+  )
   conn.commit()
   conn.close()
   return JSONResponse({"success": True})
