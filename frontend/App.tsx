@@ -4177,6 +4177,13 @@ Return ONLY valid JSON in the format:
   }, [authReady, authUser, handleNavigate, isLandingRoute, isLoginRoute]);
 
   useEffect(() => {
+    if (isLoginRoute && authMode !== 'login') {
+      setAuthMode('login');
+      setAuthError('');
+    }
+  }, [isLoginRoute, authMode]);
+
+  useEffect(() => {
     if (!authUser?.is_admin) return;
     if (adminSubroute !== '/database') return;
     void fetchAdminDbTables();
@@ -4258,20 +4265,6 @@ Return ONLY valid JSON in the format:
                 {authLoading ? 'Working...' : authMode === 'login' ? 'Sign in' : 'Register'}
               </button>
             </form>
-            <div className="mt-6 flex items-center justify-between text-sm text-gray-500">
-              <span>
-                {authMode === 'login' ? 'New here?' : 'Already have an account?'}
-              </span>
-              <button
-                onClick={() => {
-                  setAuthMode((prev) => (prev === 'login' ? 'register' : 'login'));
-                  setAuthError('');
-                }}
-                className="text-gray-900 font-semibold"
-              >
-                {authMode === 'login' ? 'Create account' : 'Sign in'}
-              </button>
-            </div>
           </div>
         </div>
       );
