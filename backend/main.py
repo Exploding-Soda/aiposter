@@ -613,6 +613,18 @@ def revoke_refresh_token(token_hash: str):
   conn.close()
 
 
+def revoke_refresh_tokens_for_user(user_id: str):
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    UPDATE refresh_tokens
+    SET revoked_at = ?
+    WHERE user_id = ? AND revoked_at IS NULL
+  """, (datetime.now(timezone.utc).isoformat(), user_id))
+  conn.commit()
+  conn.close()
+
+
 def get_refresh_token_record(token_hash: str) -> Optional[sqlite3.Row]:
   conn = get_db_connection()
   cursor = conn.cursor()
@@ -1008,6 +1020,7 @@ def register(payload: AuthRequest, request: Request):
   access_token = create_access_token(user["id"])
   user_agent = request.headers.get("user-agent", "")
   ip = request.client.host if request.client else ""
+  revoke_refresh_tokens_for_user(user["id"])
   refresh_token, _ = create_refresh_token_record(user["id"], user_agent, ip)
   response = JSONResponse({
     "accessToken": access_token,
@@ -1037,10 +1050,7 @@ def login(payload: AuthRequest, request: Request):
     raise HTTPException(status_code=401, detail="Invalid username or password")
 
   update_last_login(user["id"])
-
-  existing_cookie = request.cookies.get(REFRESH_COOKIE_NAME)
-  if existing_cookie:
-    revoke_refresh_token(hash_refresh_token(existing_cookie))
+  revoke_refresh_tokens_for_user(user["id"])
 
   access_token = create_access_token(user["id"])
   user_agent = request.headers.get("user-agent", "")
@@ -1080,7 +1090,7 @@ def refresh(request: Request):
   if not user:
     raise HTTPException(status_code=401, detail="User not found")
 
-  revoke_refresh_token(token_hash)
+  revoke_refresh_tokens_for_user(user["id"])
   user_agent = request.headers.get("user-agent", "")
   ip = request.client.host if request.client else ""
   new_refresh_token, _ = create_refresh_token_record(user["id"], user_agent, ip)
@@ -1103,7 +1113,10 @@ def refresh(request: Request):
 def logout(request: Request):
   raw_token = request.cookies.get(REFRESH_COOKIE_NAME)
   if raw_token:
-    revoke_refresh_token(hash_refresh_token(raw_token))
+    token_hash = hash_refresh_token(raw_token)
+    record = get_refresh_token_record(token_hash)
+    if record:
+      revoke_refresh_tokens_for_user(record["user_id"])
   response = JSONResponse({"success": True})
   clear_refresh_cookie(response)
   return response
