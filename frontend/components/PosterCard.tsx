@@ -13,7 +13,7 @@ const PosterCard: React.FC<PosterCardProps> = ({ poster, onEdit, isLarge = false
   const isGenerating = poster.status === 'generating' || poster.status === 'planning';
 
   return (
-    <div className={`group relative bg-slate-800 rounded-3xl overflow-hidden shadow-2xl border border-white/10 transition-all duration-500 ${isLarge ? 'w-full h-full mx-auto' : 'aspect-[9/16] hover:shadow-indigo-500/20 hover:-translate-y-2'}`}>
+    <div className={`group relative bg-slate-800 overflow-hidden shadow-2xl border border-white/10 transition-all duration-500 ${isLarge ? 'w-full h-full mx-auto' : 'aspect-[9/16] hover:shadow-indigo-500/20 hover:-translate-y-2'}`}>
       <div className="w-full h-full relative bg-slate-900 flex items-center justify-center overflow-hidden">
         {isGenerating ? (
           <div className="flex flex-col items-center gap-4 text-slate-500">
