@@ -11,9 +11,11 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException, Depends, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, FileResponse
+from concurrent.futures import ThreadPoolExecutor
+import threading
 from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont
 from fontTools.ttLib import TTFont
@@ -144,6 +146,25 @@ class AuthResponse(BaseModel):
   user: Dict[str, Any]
 
 
+class AITaskSubmitRequest(BaseModel):
+  taskType: str  # 'chat' for AI chat requests
+  payload: Dict[str, Any]
+
+
+class AITaskStatusResponse(BaseModel):
+  taskId: str
+  status: str  # 'pending', 'running', 'completed', 'error'
+  result: Optional[Dict[str, Any]] = None
+  error: Optional[str] = None
+  createdAt: str
+  startedAt: Optional[str] = None
+  completedAt: Optional[str] = None
+
+
+# Thread pool for background AI tasks
+ai_task_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="ai_task_")
+
+
 app = FastAPI(title="Font Preview Service")
 app.add_middleware(
   CORSMiddleware,
@@ -241,6 +262,32 @@ def init_database():
   if "password_changed" not in user_columns:
     cursor.execute("ALTER TABLE users ADD COLUMN password_changed INTEGER DEFAULT 1")
   cursor.execute("UPDATE users SET password_changed = 1 WHERE password_changed IS NULL")
+
+  # Create ai_tasks table for async task tracking
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS ai_tasks (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      task_type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      payload TEXT NOT NULL,
+      result TEXT,
+      error TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      started_at TIMESTAMP,
+      completed_at TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    )
+  """)
+
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_ai_tasks_user_id
+    ON ai_tasks(user_id)
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_ai_tasks_status
+    ON ai_tasks(status)
+  """)
 
   conn.commit()
   conn.close()
@@ -1370,6 +1417,189 @@ def ai_chat(payload: Dict[str, Any], user: sqlite3.Row = Depends(require_current
   if response.status_code >= 400:
     return JSONResponse(status_code=response.status_code, content=data)
   return JSONResponse(content=data)
+
+
+def execute_ai_task(task_id: str):
+  """Background worker function to execute an AI task."""
+  conn = get_db_connection()
+  cursor = conn.cursor()
+
+  try:
+    # Get task details
+    cursor.execute("SELECT * FROM ai_tasks WHERE id = ?", (task_id,))
+    task = cursor.fetchone()
+    if not task:
+      print(f"[error] AI task {task_id} not found")
+      return
+
+    # Update status to running
+    cursor.execute(
+      "UPDATE ai_tasks SET status = 'running', started_at = ? WHERE id = ?",
+      (datetime.now(timezone.utc).isoformat(), task_id)
+    )
+    conn.commit()
+
+    # Parse payload and execute
+    payload = json.loads(task["payload"])
+
+    if not POLO_API_KEY:
+      raise Exception("POLO_API_KEY not configured on server")
+
+    auth_value = POLO_API_KEY.strip()
+    if auth_value and not auth_value.lower().startswith("bearer "):
+      auth_value = f"Bearer {auth_value}"
+
+    timeout = httpx.Timeout(POLO_TIMEOUT_SECONDS)
+    attempts = 2
+    last_exc: Exception | None = None
+    response = None
+
+    for attempt in range(1, attempts + 1):
+      try:
+        response = httpx.post(
+          POLO_API_URL,
+          json=payload,
+          headers={
+            "Authorization": auth_value,
+            "Content-Type": "application/json"
+          },
+          timeout=timeout
+        )
+        last_exc = None
+        break
+      except httpx.ReadTimeout as exc:
+        last_exc = exc
+        print(f"[warn] AI task {task_id}: Polo API read timeout (attempt {attempt}/{attempts})")
+      except httpx.RequestError as exc:
+        last_exc = exc
+        print(f"[error] AI task {task_id}: Polo API request failed: {exc}")
+        break
+
+    if last_exc:
+      raise Exception(f"Polo API request failed: {last_exc}")
+
+    try:
+      data = response.json()
+    except ValueError:
+      data = {"error": response.text}
+
+    if response.status_code >= 400:
+      raise Exception(f"Polo API error ({response.status_code}): {json.dumps(data)}")
+
+    # Update task as completed with result
+    cursor.execute(
+      "UPDATE ai_tasks SET status = 'completed', result = ?, completed_at = ? WHERE id = ?",
+      (json.dumps(data), datetime.now(timezone.utc).isoformat(), task_id)
+    )
+    conn.commit()
+    print(f"[info] AI task {task_id} completed successfully")
+
+  except Exception as e:
+    # Update task as error
+    cursor.execute(
+      "UPDATE ai_tasks SET status = 'error', error = ?, completed_at = ? WHERE id = ?",
+      (str(e), datetime.now(timezone.utc).isoformat(), task_id)
+    )
+    conn.commit()
+    print(f"[error] AI task {task_id} failed: {e}")
+  finally:
+    conn.close()
+
+
+@app.post("/ai/task/submit")
+def submit_ai_task(request: AITaskSubmitRequest, user: sqlite3.Row = Depends(require_current_user)):
+  """Submit an AI task for background execution. Returns immediately with task_id."""
+  task_id = str(uuid.uuid4())
+  user_id = user["id"]
+
+  conn = get_db_connection()
+  cursor = conn.cursor()
+
+  try:
+    cursor.execute(
+      """INSERT INTO ai_tasks (id, user_id, task_type, status, payload, created_at)
+         VALUES (?, ?, ?, 'pending', ?, ?)""",
+      (task_id, user_id, request.taskType, json.dumps(request.payload), datetime.now(timezone.utc).isoformat())
+    )
+    conn.commit()
+  finally:
+    conn.close()
+
+  # Submit to thread pool for background execution
+  ai_task_executor.submit(execute_ai_task, task_id)
+
+  return JSONResponse({
+    "taskId": task_id,
+    "status": "pending"
+  })
+
+
+@app.get("/ai/task/{task_id}/status")
+def get_ai_task_status(task_id: str, user: sqlite3.Row = Depends(require_current_user)):
+  """Get the status and result of an AI task."""
+  conn = get_db_connection()
+  cursor = conn.cursor()
+
+  try:
+    cursor.execute(
+      "SELECT * FROM ai_tasks WHERE id = ? AND user_id = ?",
+      (task_id, user["id"])
+    )
+    task = cursor.fetchone()
+
+    if not task:
+      raise HTTPException(status_code=404, detail="Task not found")
+
+    result = None
+    if task["result"]:
+      try:
+        result = json.loads(task["result"])
+      except:
+        result = {"raw": task["result"]}
+
+    return JSONResponse({
+      "taskId": task["id"],
+      "status": task["status"],
+      "result": result,
+      "error": task["error"],
+      "createdAt": task["created_at"],
+      "startedAt": task["started_at"],
+      "completedAt": task["completed_at"]
+    })
+  finally:
+    conn.close()
+
+
+@app.get("/ai/tasks/pending")
+def get_pending_ai_tasks(user: sqlite3.Row = Depends(require_current_user)):
+  """Get all pending/running AI tasks for the current user."""
+  conn = get_db_connection()
+  cursor = conn.cursor()
+
+  try:
+    cursor.execute(
+      """SELECT id, task_type, status, created_at, started_at
+         FROM ai_tasks
+         WHERE user_id = ? AND status IN ('pending', 'running')
+         ORDER BY created_at DESC""",
+      (user["id"],)
+    )
+    tasks = cursor.fetchall()
+
+    return JSONResponse({
+      "tasks": [
+        {
+          "taskId": t["id"],
+          "taskType": t["task_type"],
+          "status": t["status"],
+          "createdAt": t["created_at"],
+          "startedAt": t["started_at"]
+        }
+        for t in tasks
+      ]
+    })
+  finally:
+    conn.close()
 
 
 # Project management endpoints

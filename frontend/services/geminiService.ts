@@ -25,6 +25,96 @@ const ensureDataUrl = async (value: string): Promise<string> => {
 
 const BACKEND_API = import.meta.env.VITE_BACKEND_API || "http://localhost:8001";
 
+// Async task types
+export type AITaskStatus = 'pending' | 'running' | 'completed' | 'error';
+
+export type AITaskResult = {
+  taskId: string;
+  status: AITaskStatus;
+  result?: PoloResponse;
+  error?: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+};
+
+export type PendingTask = {
+  taskId: string;
+  taskType: string;
+  status: AITaskStatus;
+  createdAt: string;
+  startedAt?: string;
+};
+
+// Submit an async AI task
+export const submitAITask = async (payload: Record<string, unknown>): Promise<string> => {
+  const response = await fetchWithAuth(`${BACKEND_API}/ai/task/submit`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      taskType: "chat",
+      payload
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to submit AI task: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.taskId;
+};
+
+// Poll for task status
+export const getAITaskStatus = async (taskId: string): Promise<AITaskResult> => {
+  const response = await fetchWithAuth(`${BACKEND_API}/ai/task/${taskId}/status`);
+
+  if (!response.ok) {
+    throw new Error(`Failed to get task status: ${response.status}`);
+  }
+
+  return response.json();
+};
+
+// Get all pending tasks for current user
+export const getPendingAITasks = async (): Promise<PendingTask[]> => {
+  const response = await fetchWithAuth(`${BACKEND_API}/ai/tasks/pending`);
+
+  if (!response.ok) {
+    throw new Error(`Failed to get pending tasks: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.tasks || [];
+};
+
+// Poll until task completes or times out
+export const waitForAITask = async (
+  taskId: string,
+  onProgress?: (status: AITaskResult) => void,
+  pollIntervalMs = 2000,
+  timeoutMs = 300000 // 5 minutes default
+): Promise<AITaskResult> => {
+  const startTime = Date.now();
+
+  while (true) {
+    const result = await getAITaskStatus(taskId);
+    onProgress?.(result);
+
+    if (result.status === 'completed' || result.status === 'error') {
+      return result;
+    }
+
+    if (Date.now() - startTime > timeoutMs) {
+      throw new Error('Task timeout');
+    }
+
+    await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+  }
+};
+
 type PoloMessageContent =
   | string
   | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
@@ -247,6 +337,65 @@ export const generatePosterImage = async (
     return imageUrl;
   }
   throw new Error("No image data received");
+};
+
+// Build the payload for generatePosterImage (shared between sync and async versions)
+const buildGeneratePosterPayload = (
+  poster: PlanningStep,
+  styleImages: string[] = [],
+  logoUrl?: string | null,
+  fontReferenceUrl?: string | null,
+  targetSize?: { width: number; height: number; label?: string }
+): Record<string, unknown> => {
+  const messageContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
+    {
+      type: "text",
+      text: `You are a master painter/photographer and poster designer. ${buildImagePrompt(poster, logoUrl, fontReferenceUrl, targetSize)}`
+    }
+  ];
+
+  styleImages.forEach((url) => {
+    if (url && url.startsWith("data:image/")) {
+      messageContent.push({ type: "image_url", image_url: { url } });
+    }
+  });
+  if (logoUrl && logoUrl.startsWith("data:image/")) {
+    messageContent.push({ type: "image_url", image_url: { url: logoUrl } });
+  }
+  if (fontReferenceUrl && fontReferenceUrl.startsWith("data:image/")) {
+    messageContent.push({ type: "image_url", image_url: { url: fontReferenceUrl } });
+  }
+
+  return {
+    model: "gemini-3-pro-image-preview",
+    stream: false,
+    messages: [
+      {
+        role: "user",
+        content: messageContent
+      }
+    ]
+  };
+};
+
+// Async version: submit task and return taskId immediately
+export const generatePosterImageAsync = async (
+  poster: PlanningStep,
+  styleImages: string[] = [],
+  logoUrl?: string | null,
+  fontReferenceUrl?: string | null,
+  targetSize?: { width: number; height: number; label?: string }
+): Promise<string> => {
+  const payload = buildGeneratePosterPayload(poster, styleImages, logoUrl, fontReferenceUrl, targetSize);
+  return submitAITask(payload);
+};
+
+// Extract image URL from task result
+export const extractImageFromTaskResult = (result: AITaskResult): string | null => {
+  if (result.status !== 'completed' || !result.result) {
+    return null;
+  }
+  return extractImageUrl(result.result.choices?.[0]?.message?.content);
 };
 
 export const generatePosterNoTextImage = async (posterImageUrl: string): Promise<string> => {

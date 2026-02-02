@@ -19,6 +19,7 @@ export interface PosterDraft {
   textStyles?: TextStyleMap;
   status: 'planning' | 'generating' | 'completed' | 'error';
   error?: string;
+  taskId?: string; // Backend task ID for async generation tracking
 }
 
 export interface PlanningStep {

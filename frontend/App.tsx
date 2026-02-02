@@ -4,7 +4,7 @@ import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, Mo
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AppStatus, PosterDraft, PlanningStep, Artboard, Asset, Selection, AssetType, Project, TextLayout, TextStyleMap, Connection } from './types';
-import { planPosters, generatePosterImage, generatePosterNoTextImage, generatePosterMergedImage, refinePoster, chatWithModel, ChatMessage, editPosterWithMarkup, generatePosterResolutionFromImage } from './services/geminiService';
+import { planPosters, generatePosterImage, generatePosterNoTextImage, generatePosterMergedImage, refinePoster, chatWithModel, ChatMessage, editPosterWithMarkup, generatePosterResolutionFromImage, generatePosterImageAsync, getAITaskStatus, extractImageFromTaskResult, getPendingAITasks, AITaskStatus } from './services/geminiService';
 import { AuthUser, fetchWithAuth, loginUser, logoutUser, refreshAccessToken, registerUser } from './services/authService';
 import PosterCard from './components/PosterCard';
 import LandingPage from './components/LandingPage';
@@ -894,6 +894,69 @@ const App: React.FC = () => {
     historySignatureRef.current = '';
     autoSaveSignatureRef.current = '';
   }, [activeProjectId, activeProject]);
+
+  // Resume polling for any generating tasks after page load/refresh
+  useEffect(() => {
+    if (!activeProject) return;
+
+    const generatingArtboards = (activeProject.artboards || []).filter(
+      ab => ab.posterData?.taskId && (ab.posterData.status === 'generating' || ab.posterData.status === 'planning')
+    );
+
+    if (generatingArtboards.length === 0) return;
+
+    console.log(`[recovery] Found ${generatingArtboards.length} tasks to resume polling`);
+
+    // Resume polling for each task
+    generatingArtboards.forEach(ab => {
+      const taskId = ab.posterData!.taskId!;
+      const posterId = ab.id;
+
+      void (async () => {
+        try {
+          while (true) {
+            const result = await getAITaskStatus(taskId);
+
+            if (result.status === 'completed') {
+              const imageUrl = extractImageFromTaskResult(result);
+              if (imageUrl) {
+                setArtboards(prev => prev.map(a => {
+                  if (a.id !== posterId) return a;
+                  return {
+                    ...a,
+                    posterData: {
+                      ...a.posterData!,
+                      imageUrl,
+                      imageUrlNoText: undefined,
+                      textLayout: a.posterData?.textLayout || buildDefaultTextLayout(),
+                      status: 'completed',
+                      taskId: undefined
+                    }
+                  };
+                }));
+              } else {
+                throw new Error('No image in result');
+              }
+              console.log(`[recovery] Task ${taskId} completed`);
+              break;
+            } else if (result.status === 'error') {
+              throw new Error(result.error || 'Task failed');
+            }
+
+            // Wait before next poll
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+        } catch (err) {
+          console.error(`[recovery] Task ${taskId} failed:`, err);
+          setArtboards(prev => prev.map(a =>
+            a.id === posterId
+              ? { ...a, posterData: { ...a.posterData!, status: 'error', taskId: undefined } }
+              : a
+          ));
+        }
+      })();
+    });
+  }, [activeProjectId]); // Only run when project changes, not on every artboards update
 
   useEffect(() => {
     if (!assetContextMenu) return;
@@ -3696,21 +3759,53 @@ Return ONLY valid JSON in the format:
         ...currentArtboard.posterData,
         status: 'generating'
       });
-      const imageUrl = await generatePosterImage(targetPoster, styleImages, logoForPoster, fontReferenceUrl);
+
+      // Submit async task
+      const taskId = await generatePosterImageAsync(targetPoster, styleImages, logoForPoster, fontReferenceUrl);
+
+      // Store taskId for recovery
       updatePosterArtboard(baseDerivedId, (ab) => ({
         ...ab,
         posterData: {
           ...ab.posterData!,
           ...targetPoster,
-          logoUrl: logoForPoster ?? undefined,
-          imageUrl,
-          imageUrlMerged: imageUrl,
-          imageUrlNoText: undefined,
-          textLayout: nextLayout,
-          textStyles: editableStyles || ab.posterData?.textStyles,
-          status: 'completed'
+          taskId,
+          logoUrl: logoForPoster ?? undefined
         }
       }));
+
+      // Poll until completion
+      while (true) {
+        const result = await getAITaskStatus(taskId);
+
+        if (result.status === 'completed') {
+          const imageUrl = extractImageFromTaskResult(result);
+          if (imageUrl) {
+            updatePosterArtboard(baseDerivedId, (ab) => ({
+              ...ab,
+              posterData: {
+                ...ab.posterData!,
+                ...targetPoster,
+                logoUrl: logoForPoster ?? undefined,
+                imageUrl,
+                imageUrlMerged: imageUrl,
+                imageUrlNoText: undefined,
+                textLayout: nextLayout,
+                textStyles: editableStyles || ab.posterData?.textStyles,
+                status: 'completed',
+                taskId: undefined
+              }
+            }));
+          } else {
+            throw new Error('No image in result');
+          }
+          break;
+        } else if (result.status === 'error') {
+          throw new Error(result.error || 'Task failed');
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
 
       setPosterFeedback('');
       setEditablePoster(targetPoster);
@@ -4058,40 +4153,88 @@ Return ONLY valid JSON in the format:
           }));
         });
 
-        // Generate images in parallel
-        const generationPromises = plans.map(async (plan, index) => {
-          const posterId = placeholderPosters[index].id;
-          try {
-            const logoForPoster = currentLogoImage ?? null;
-            const imageUrl = await generatePosterImage(
-              { ...plan, logoUrl: logoForPoster ?? undefined },
-              currentStyleImages,
-              logoForPoster,
-              fontReferenceUrl
-            );
-            setArtboards(prev => prev.map(ab => {
-              if (ab.id !== posterId) return ab;
-              return {
-                ...ab,
-                posterData: {
-                  ...ab.posterData!,
-                  imageUrl,
-                  imageUrlNoText: undefined,
-                  textLayout: buildDefaultTextLayout(),
-                  status: 'completed'
-                }
-              };
-            }));
-          } catch (err) {
-            setArtboards(prev => prev.map(ab =>
-              ab.id === posterId
-                ? { ...ab, posterData: { ...ab.posterData!, status: 'error' } }
-                : ab
-            ));
-          }
-        });
+        // Submit async tasks and start polling
+        const logoForPoster = currentLogoImage ?? null;
+        const taskSubmissions = await Promise.all(
+          plans.map(async (plan, index) => {
+            const posterId = placeholderPosters[index].id;
+            try {
+              const taskId = await generatePosterImageAsync(
+                { ...plan, logoUrl: logoForPoster ?? undefined },
+                currentStyleImages,
+                logoForPoster,
+                fontReferenceUrl
+              );
+              // Store taskId in posterData for recovery after refresh
+              setArtboards(prev => prev.map(ab => {
+                if (ab.id !== posterId) return ab;
+                return {
+                  ...ab,
+                  posterData: {
+                    ...ab.posterData!,
+                    taskId
+                  }
+                };
+              }));
+              return { posterId, taskId, plan };
+            } catch (err) {
+              setArtboards(prev => prev.map(ab =>
+                ab.id === posterId
+                  ? { ...ab, posterData: { ...ab.posterData!, status: 'error' } }
+                  : ab
+              ));
+              return null;
+            }
+          })
+        );
 
-        await Promise.all(generationPromises);
+        // Poll all tasks until completion
+        const pollPromises = taskSubmissions
+          .filter((t): t is NonNullable<typeof t> => t !== null)
+          .map(async ({ posterId, taskId, plan }) => {
+            try {
+              // Poll until task completes
+              while (true) {
+                const result = await getAITaskStatus(taskId);
+
+                if (result.status === 'completed') {
+                  const imageUrl = extractImageFromTaskResult(result);
+                  if (imageUrl) {
+                    setArtboards(prev => prev.map(ab => {
+                      if (ab.id !== posterId) return ab;
+                      return {
+                        ...ab,
+                        posterData: {
+                          ...ab.posterData!,
+                          imageUrl,
+                          imageUrlNoText: undefined,
+                          textLayout: buildDefaultTextLayout(),
+                          status: 'completed',
+                          taskId: undefined // Clear taskId after completion
+                        }
+                      };
+                    }));
+                  } else {
+                    throw new Error('No image in result');
+                  }
+                  break;
+                } else if (result.status === 'error') {
+                  throw new Error(result.error || 'Task failed');
+                }
+
+                // Wait before next poll
+                await new Promise(resolve => setTimeout(resolve, 2000));
+              }
+            } catch (err) {
+              setArtboards(prev => prev.map(ab =>
+                ab.id === posterId
+                  ? { ...ab, posterData: { ...ab.posterData!, status: 'error', taskId: undefined } }
+                  : ab
+              ));
+            }
+          });
+
+        await Promise.all(pollPromises);
 
         // Save final result
         if (activeProjectId && activeProject) {
