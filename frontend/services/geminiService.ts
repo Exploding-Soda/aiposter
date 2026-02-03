@@ -198,7 +198,7 @@ export const planPosters = async (
 
 The user provided the following requirements for a poster: "${userInput}".
 
-Deeply parse and extract all specific details, including:
+Parse and extract all specific details, including:
 - Event name/theme.
 - Location and dates/times.
 - Artistic style references (e.g., minimalist, cyberpunk, retro, WONG Kar-wai).
@@ -212,7 +212,7 @@ Create ${count} distinct, professional poster concepts that strictly follow ever
 The overall layout should feel like high-end theatrical or cinematic posters.
 
 Output JSON only. Each item must include:
-- visualPrompt: a detailed visual description for the background image only (no typography or text described).
+- visualPrompt: a SHORT 1-2 sentence description (max 25 words) for the background image only (no typography or text described). Example: "The poster includes Easter eggs, a rabbit, and spring elements. The text wishes a happy Easter and focuses on renewal and celebration."
 - topBanner: short all-caps banner copy.
 - headline: main title.
 - subheadline: secondary title/description.
