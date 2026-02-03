@@ -299,7 +299,7 @@ const buildGeneratePosterPayload = (
   userPrompt?: string,
   extraPrompt?: string
 ): Record<string, unknown> => {
-  const userPrefix = userPrompt?.trim() ? `${userPrompt.trim()} ` : "";
+  const userPrefix = userPrompt?.trim() ? `${userPrompt.trim()}; ` : "";
   const fontPrefix = fontReferenceUrl && fontReferenceUrl.startsWith("data:image/")
     ? "Generate a new poster using the font style shown in Image 2. "
     : "";
@@ -315,9 +315,9 @@ const buildGeneratePosterPayload = (
       type: "text",
       text: [
         `${userPrefix}${fontPrefix}`.trim(),
+        styleInstruction,
         "Create a vertical 9:16 poster.",
         buildImagePrompt(poster, logoUrl, fontReferenceUrl, targetSize),
-        styleInstruction,
         extraInstruction
       ]
         .filter(Boolean)
