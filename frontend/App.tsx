@@ -158,6 +158,7 @@ const App: React.FC = () => {
   const [isPanning, setIsPanning] = useState(false);
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [theme, setTheme] = useState('');
+  const [designGuidance, setDesignGuidance] = useState('');
   const [count, setCount] = useState(4);
   const [styleImages, setStyleImages] = useState<string[]>([]);
   const [logoImage, setLogoImage] = useState<string | null>(null);
@@ -866,6 +867,7 @@ const App: React.FC = () => {
       y: activeProject.view?.y ?? 0
     });
     setTheme('');
+    setDesignGuidance('');
     setStatus(AppStatus.IDLE);
     setStyleImages(activeProject.styleImages || []);
     setLogoImage(activeProject.logoImage || null);
@@ -4014,6 +4016,7 @@ Return ONLY valid JSON in the format:
     const currentLogoImage = logoImage;
     const currentFont = selectedServerFont;
     const currentFontReferenceImage = fontReferenceImage;
+    const currentDesignGuidance = designGuidance;
 
     // Create production asset pack IMMEDIATELY
     const groupId = `production-${Date.now()}`;
@@ -4281,7 +4284,9 @@ Return ONLY valid JSON in the format:
                 { ...plan, logoUrl: logoForPoster ?? undefined },
                 currentStyleImages,
                 logoForPoster,
-                fontReferenceUrl
+                fontReferenceUrl,
+                undefined,
+                currentDesignGuidance
               );
               // Store taskId in posterData for recovery after refresh
               setArtboards(prev => prev.map(ab => {
@@ -5563,7 +5568,7 @@ Return ONLY valid JSON in the format:
       </main>
 
       {rightPanelMode && (
-        <aside className="w-80 border-l border-slate-200 bg-white p-5 flex flex-col space-y-6 z-50">
+        <aside className="w-80 max-h-screen overflow-y-auto border-l border-slate-200 bg-white p-5 flex flex-col space-y-6 z-50">
           {rightPanelMode === 'generator' ? (
             <div className="space-y-3 rounded-2xl border border-slate-200 p-4 bg-slate-50">
               <div className="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-widest">
@@ -5576,6 +5581,21 @@ Return ONLY valid JSON in the format:
                 value={theme}
                 onChange={(e) => setTheme(e.target.value)}
               />
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                  Design Guidance (optional)
+                </label>
+                <textarea
+                  className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-1 focus:ring-blue-500 outline-none resize-none"
+                  rows={3}
+                  placeholder="Add strict design rules or constraints..."
+                  value={designGuidance}
+                  onChange={(e) => setDesignGuidance(e.target.value)}
+                />
+                <div className="text-[10px] text-slate-400">
+                  This text is appended to the image model prompt.
+                </div>
+              </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                   Uploaded Image (optional)

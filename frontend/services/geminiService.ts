@@ -300,37 +300,18 @@ export const generatePosterImage = async (
   styleImages: string[] = [],
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
-  targetSize?: { width: number; height: number; label?: string }
+  targetSize?: { width: number; height: number; label?: string },
+  extraPrompt?: string
 ): Promise<string> => {
-  const messageContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
-    {
-      type: "text",
-      text: `You are a master painter/photographer and poster designer. ${buildImagePrompt(poster, logoUrl, fontReferenceUrl, targetSize)}`
-    }
-  ];
-
-  styleImages.forEach((url) => {
-    if (url && url.startsWith("data:image/")) {
-      messageContent.push({ type: "image_url", image_url: { url } });
-    }
-  });
-  if (logoUrl && logoUrl.startsWith("data:image/")) {
-    messageContent.push({ type: "image_url", image_url: { url: logoUrl } });
-  }
-  if (fontReferenceUrl && fontReferenceUrl.startsWith("data:image/")) {
-    messageContent.push({ type: "image_url", image_url: { url: fontReferenceUrl } });
-  }
-
-  const response = await callPoloApi({
-    model: "gemini-3-pro-image-preview",
-    stream: false,
-    messages: [
-      {
-        role: "user",
-        content: messageContent
-      }
-    ]
-  });
+  const payload = buildGeneratePosterPayload(
+    poster,
+    styleImages,
+    logoUrl,
+    fontReferenceUrl,
+    targetSize,
+    extraPrompt
+  );
+  const response = await callPoloApi(payload);
 
   const imageUrl = extractImageUrl(response.choices?.[0]?.message?.content);
   if (imageUrl) {
@@ -345,15 +326,25 @@ const buildGeneratePosterPayload = (
   styleImages: string[] = [],
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
-  targetSize?: { width: number; height: number; label?: string }
+  targetSize?: { width: number; height: number; label?: string },
+  extraPrompt?: string
 ): Record<string, unknown> => {
   const fontPrefix = fontReferenceUrl && fontReferenceUrl.startsWith("data:image/")
     ? "Generate a new poster using the font style shown in Image 2. "
     : "";
+  const extraInstruction = extraPrompt?.trim()
+    ? `Additional design guidance: ${extraPrompt.trim()}`
+    : "";
   const messageContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
     {
       type: "text",
-      text: `${fontPrefix}You are a master painter/photographer and poster designer. ${buildImagePrompt(poster, logoUrl, fontReferenceUrl, targetSize)}`
+      text: [
+        `${fontPrefix}You are a master painter/photographer and poster designer.`,
+        buildImagePrompt(poster, logoUrl, fontReferenceUrl, targetSize),
+        extraInstruction
+      ]
+        .filter(Boolean)
+        .join(" ")
     }
   ];
 
@@ -387,9 +378,17 @@ export const generatePosterImageAsync = async (
   styleImages: string[] = [],
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
-  targetSize?: { width: number; height: number; label?: string }
+  targetSize?: { width: number; height: number; label?: string },
+  extraPrompt?: string
 ): Promise<string> => {
-  const payload = buildGeneratePosterPayload(poster, styleImages, logoUrl, fontReferenceUrl, targetSize);
+  const payload = buildGeneratePosterPayload(
+    poster,
+    styleImages,
+    logoUrl,
+    fontReferenceUrl,
+    targetSize,
+    extraPrompt
+  );
   return submitAITask(payload);
 };
 
