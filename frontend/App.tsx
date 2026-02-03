@@ -8,6 +8,7 @@ import { planPosters, generatePosterImage, generatePosterNoTextImage, generatePo
 import { AuthUser, fetchWithAuth, loginUser, logoutUser, refreshAccessToken, registerUser } from './services/authService';
 import PosterCard from './components/PosterCard';
 import LandingPage from './components/LandingPage';
+import PersonalSpacePage from './components/PersonalSpacePage';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 
 const STORAGE_KEY = 'poster_canvas_projects';
@@ -4304,6 +4305,7 @@ Return ONLY valid JSON in the format:
   const adminSubroute = isAdminRoute ? route.replace('/admin', '') || '/' : '';
   const isLandingRoute = route === '/landing';
   const isLoginRoute = route === '/login';
+  const isPersonalSpaceRoute = route === '/personal-space';
 
   useEffect(() => {
     if (!authReady || authUser) return;
@@ -4832,6 +4834,82 @@ Return ONLY valid JSON in the format:
   }
 
   if (!isOnBoardRoute) {
+    if (isPersonalSpaceRoute) {
+      return (
+        <div className="min-h-screen flex bg-[#fbfbfc]">
+          <aside className="w-64 bg-white border-r border-gray-100 flex flex-col hidden lg:flex">
+            <div className="p-8">
+              <nav className="space-y-1">
+                <button
+                  className="w-full flex items-center gap-3 px-4 py-3 text-gray-500 hover:bg-gray-50 rounded-xl font-medium transition-colors"
+                  onClick={() => handleNavigate('/')}
+                >
+                  Dashboard
+                </button>
+                <button
+                  className="w-full flex items-center gap-3 px-4 py-3 bg-gray-900 text-white rounded-xl font-medium transition-colors"
+                  onClick={() => handleNavigate('/personal-space')}
+                >
+                  Personal Space
+                </button>
+                {authUser.is_admin && (
+                  <button
+                    className="w-full flex items-center gap-3 px-4 py-3 text-gray-500 hover:bg-gray-50 rounded-xl font-medium transition-colors"
+                    onClick={() => handleNavigate('/admin')}
+                  >
+                    Admin
+                  </button>
+                )}
+              </nav>
+            </div>
+            <div className="mt-auto px-6 py-4 border-t border-gray-100">
+              <div className="relative flex items-center justify-between bg-transparent px-1 py-1">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600">
+                    <span className="text-sm font-semibold">{authUser.username.slice(0, 1).toUpperCase()}</span>
+                  </div>
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900 leading-tight max-w-[120px] truncate">{authUser.username}</div>
+                    <div className="flex items-center gap-1 text-xs text-slate-500">
+                      <span className="inline-block w-2.5 h-2.5 rounded-[4px] border border-emerald-400"></span>
+                      0
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIsAccountMenuOpen((prev) => !prev)}
+                  className="text-slate-400 hover:text-slate-600"
+                  aria-label="Account menu"
+                  title="Account menu"
+                  type="button"
+                >
+                  <ArrowUpRight className="w-4 h-4 rotate-90" />
+                </button>
+                {isAccountMenuOpen && (
+                  <div className="absolute right-0 bottom-14 w-32 rounded-xl border border-slate-100 bg-white shadow-lg py-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAccountMenuOpen(false);
+                        handleLogout();
+                      }}
+                      className="w-full px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      Log out
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </aside>
+
+          <main className="flex-1 overflow-y-auto px-6 py-8 lg:px-12 lg:py-12">
+            <PersonalSpacePage />
+          </main>
+        </div>
+      );
+    }
+
     // Dashboard view
     return (
       <div className="min-h-screen flex bg-[#fbfbfc]">
@@ -4840,6 +4918,12 @@ Return ONLY valid JSON in the format:
             <nav className="space-y-1">
               <button className="w-full flex items-center gap-3 px-4 py-3 bg-gray-900 text-white rounded-xl font-medium transition-colors">
                 Dashboard
+              </button>
+              <button
+                className="w-full flex items-center gap-3 px-4 py-3 text-gray-500 hover:bg-gray-50 rounded-xl font-medium transition-colors"
+                onClick={() => handleNavigate('/personal-space')}
+              >
+                Personal Space
               </button>
               {authUser.is_admin && (
                 <button
