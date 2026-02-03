@@ -329,11 +329,7 @@ const PersonalSpacePage: React.FC = () => {
             </div>
             <div className="space-y-4">
               <div className="flex items-baseline justify-between">
-                <div>
-                  <div className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Plan</div>
-                  <div className="text-2xl font-black text-gray-900">Unlimited</div>
-                </div>
-                <span className="text-xs font-bold text-purple-600 bg-purple-50 px-2.5 py-1 rounded-full">Enterprise</span>
+                <div className="text-2xl font-black text-gray-900">Unlimited</div>
               </div>
               <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
                 <div className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 w-[22%] rounded-full" />
