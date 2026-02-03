@@ -83,6 +83,7 @@ export interface Project {
   artboards?: Artboard[];
   styleImages?: string[];
   logoImage?: string | null;
+  fontReferenceImage?: string | null;
   canvasAssets?: Asset[];
   connections?: Connection[];
   view?: {

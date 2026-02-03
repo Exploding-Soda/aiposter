@@ -96,12 +96,20 @@ const rectsOverlap = (a: Rect, b: Rect, padding = 0) => (
   !(a.right + padding <= b.left || a.left - padding >= b.right || a.bottom + padding <= b.top || a.top - padding >= b.bottom)
 );
 
-const computeProductionMetrics = (count: number, boardWidth: number, boardHeight: number, includeStyle: boolean, includeLogo: boolean) => {
+const computeProductionMetrics = (
+  count: number,
+  boardWidth: number,
+  boardHeight: number,
+  includeStyle: boolean,
+  includeLogo: boolean,
+  includeFontReference: boolean
+) => {
   const assetStartX = -300;
   let currentY = 40;
   currentY += 136; // note
   if (includeStyle) currentY += 166;
   if (includeLogo) currentY += 116;
+  if (includeFontReference) currentY += 116;
   const groupHeight = currentY + 16;
 
   const rows = Math.max(1, Math.ceil(count / 3));
@@ -153,6 +161,7 @@ const App: React.FC = () => {
   const [count, setCount] = useState(4);
   const [styleImages, setStyleImages] = useState<string[]>([]);
   const [logoImage, setLogoImage] = useState<string | null>(null);
+  const [fontReferenceImage, setFontReferenceImage] = useState<string | null>(null);
   const [activePosterId, setActivePosterId] = useState<string | null>(null);
   const [editablePoster, setEditablePoster] = useState<PlanningStep | null>(null);
   const [editableLayout, setEditableLayout] = useState<TextLayout | null>(null);
@@ -468,6 +477,7 @@ const App: React.FC = () => {
       ...project,
       styleImages: convertUrls(project.styleImages),
       logoImage: convertUrl(project.logoImage) || project.logoImage || undefined,
+      fontReferenceImage: convertUrl(project.fontReferenceImage) || project.fontReferenceImage || undefined,
       canvasAssets: convertAssets(project.canvasAssets),
       artboards: project.artboards?.map((ab) => ({
         ...ab,
@@ -500,6 +510,7 @@ const App: React.FC = () => {
     connections: [],
     styleImages: [],
     logoImage: null,
+    fontReferenceImage: null,
     view: project.view
   });
 
@@ -853,6 +864,7 @@ const App: React.FC = () => {
     setStatus(AppStatus.IDLE);
     setStyleImages(activeProject.styleImages || []);
     setLogoImage(activeProject.logoImage || null);
+    setFontReferenceImage(activeProject.fontReferenceImage || null);
     setActivePosterId(null);
     setEditablePoster(null);
     setEditableLayout(null);
@@ -2495,6 +2507,24 @@ const App: React.FC = () => {
     setLogoImage(null);
   };
 
+  const handleFontReferenceChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('Failed to read font reference image.'));
+      reader.readAsDataURL(file);
+    });
+    setFontReferenceImage(dataUrl);
+    setSelectedServerFont('');
+    event.target.value = '';
+  };
+
+  const handleRemoveFontReferenceImage = () => {
+    setFontReferenceImage(null);
+  };
+
   const buildAlphabetPreviewUrl = (fontName: string) => {
     const params = new URLSearchParams({
       font: fontName,
@@ -2534,8 +2564,29 @@ const App: React.FC = () => {
     }
   };
 
+  const resolveFontReferenceUrl = async (
+    fontImage: string | null,
+    fontName: string
+  ): Promise<string | null> => {
+    if (fontImage) {
+      if (fontImage.startsWith('data:image/')) return fontImage;
+      try {
+        const dataUrl = await fetchImageAsDataUrl(fontImage);
+        return dataUrl.startsWith('data:image/') ? dataUrl : null;
+      } catch (err) {
+        console.warn('Failed to convert font reference to data URL', err);
+        return null;
+      }
+    }
+    if (!fontName) return null;
+    return await buildAlphabetPreviewDataUrl(fontName);
+  };
+
   const handleGeneratorFontChange = (fontName: string) => {
     setSelectedServerFont(fontName);
+    if (fontName) {
+      setFontReferenceImage(null);
+    }
     setRenderedLayoutUrl(null);
     setShowRenderedLayout(false);
     lastRenderedSignatureRef.current = '';
@@ -3737,9 +3788,7 @@ Return ONLY valid JSON in the format:
       }
 
       const logoForPoster = currentArtboard.posterData.logoUrl ?? logoImage ?? null;
-      const fontReferenceUrl = selectedServerFont
-        ? await buildAlphabetPreviewDataUrl(selectedServerFont)
-        : null;
+      const fontReferenceUrl = await resolveFontReferenceUrl(fontReferenceImage, selectedServerFont);
       let targetPoster: PlanningStep = {
         ...editablePoster,
         logoUrl: logoForPoster ?? undefined
@@ -3845,9 +3894,6 @@ Return ONLY valid JSON in the format:
         throw new Error('Missing poster image for resolution generation.');
       }
       const logoForPoster = currentArtboard.posterData.logoUrl ?? logoImage ?? null;
-      const fontReferenceUrl = selectedServerFont
-        ? await buildAlphabetPreviewDataUrl(selectedServerFont)
-        : null;
       const basePoster: PlanningStep = {
         topBanner: currentArtboard.posterData.topBanner || '',
         headline: currentArtboard.posterData.headline || '',
@@ -3920,13 +3966,22 @@ Return ONLY valid JSON in the format:
     const currentStyleImages = [...styleImages];
     const currentLogoImage = logoImage;
     const currentFont = selectedServerFont;
+    const currentFontReferenceImage = fontReferenceImage;
 
     // Create production asset pack IMMEDIATELY
     const groupId = `production-${Date.now()}`;
     const startIndex = artboards.length;
     const includeStyle = currentStyleImages.length > 0 && Boolean(currentStyleImages[0]);
     const includeLogo = Boolean(currentLogoImage);
-    const metrics = computeProductionMetrics(currentCount, boardWidth, boardHeight, includeStyle, includeLogo);
+    const includeFontReference = Boolean(currentFontReferenceImage);
+    const metrics = computeProductionMetrics(
+      currentCount,
+      boardWidth,
+      boardHeight,
+      includeStyle,
+      includeLogo,
+      includeFontReference
+    );
     const viewCenter = getViewCenterWorld();
     const baseXSeed = viewCenter.x - metrics.leftRel - metrics.width / 2;
     const baseYSeed = viewCenter.y - metrics.topRel - metrics.height / 2;
@@ -4048,6 +4103,23 @@ Return ONLY valid JSON in the format:
       currentY += 116;
     }
 
+    if (currentFontReferenceImage) {
+      const fontAsset: Asset = {
+        id: `font-ref-${timeSeed}-1`,
+        type: 'image',
+        x: assetStartX + 16,
+        y: currentY,
+        width: 200,
+        height: 100,
+        content: currentFontReferenceImage,
+        zIndex: 16,
+        isProductionAsset: true,
+        groupId
+      };
+      newAssets.push(fontAsset);
+      currentY += 116;
+    }
+
     // Calculate group background bounds
     const groupPadding = 16;
     const groupHeight = currentY - baseY + groupPadding;
@@ -4132,9 +4204,7 @@ Return ONLY valid JSON in the format:
     void (async () => {
       try {
         const plans = await planPosters(currentTheme, currentCount, currentStyleImages, currentLogoImage);
-        const fontReferenceUrl = currentFont
-          ? await buildAlphabetPreviewDataUrl(currentFont)
-          : null;
+        const fontReferenceUrl = await resolveFontReferenceUrl(currentFontReferenceImage, currentFont);
 
         // Update placeholder artboards with actual poster data
         plans.forEach((plan, index) => {
@@ -4285,6 +4355,7 @@ Return ONLY valid JSON in the format:
       connections,
       styleImages: sanitizeUploadUrls(styleImages),
       logoImage: sanitizeUploadUrl(logoImage),
+      fontReferenceImage: sanitizeUploadUrl(fontReferenceImage),
       view: {
         x: viewOffset.x,
         y: viewOffset.y,
@@ -5430,7 +5501,8 @@ Return ONLY valid JSON in the format:
                     <select
                       value={selectedServerFont}
                       onChange={(e) => handleGeneratorFontChange(e.target.value)}
-                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none"
+                      disabled={Boolean(fontReferenceImage)}
+                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
                     >
                       <option value="">Auto (default)</option>
                       {availableFonts.map((font) => (
@@ -5439,6 +5511,11 @@ Return ONLY valid JSON in the format:
                         </option>
                       ))}
                     </select>
+                    {fontReferenceImage && (
+                      <div className="text-[10px] text-slate-400">
+                        Font screenshot provided. Font selection disabled.
+                      </div>
+                    )}
                     {selectedServerFont && (
                       <div className="rounded-md border border-slate-200 bg-white overflow-hidden">
                         <img
@@ -5452,6 +5529,45 @@ Return ONLY valid JSON in the format:
                   </>
                 ) : (
                   <div className="text-[11px] text-slate-400">Loading fonts...</div>
+                )}
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                  Font Screenshot (optional)
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFontReferenceChange}
+                  disabled={Boolean(selectedServerFont)}
+                  className="w-full text-[11px] text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-200 file:px-3 file:py-2 file:text-xs file:font-bold file:text-slate-700 hover:file:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-70"
+                />
+                {selectedServerFont && (
+                  <div className="text-[10px] text-slate-400">
+                    Font selected. Upload disabled.
+                  </div>
+                )}
+                {fontReferenceImage && (
+                  <div className="relative group w-full">
+                    <img
+                      src={fontReferenceImage}
+                      alt="Font reference preview"
+                      className="w-full h-24 object-contain rounded-md border border-slate-200 bg-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleRemoveFontReferenceImage}
+                      className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-slate-900 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                      aria-label="Remove font reference"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+                {fontReferenceImage && (
+                  <div className="text-[10px] text-slate-400">
+                    Using uploaded font reference for generation.
+                  </div>
                 )}
               </div>
               <div className="grid grid-cols-4 gap-2">
