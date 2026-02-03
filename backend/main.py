@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException, Depends, Request, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, Request, BackgroundTasks, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, FileResponse
 from concurrent.futures import ThreadPoolExecutor
@@ -42,6 +42,7 @@ PREVIEW_PADDING = 40
 BACKEND_DIR = Path(__file__).parent
 DB_PATH = BACKEND_DIR / "projects.db"
 FILES_DIR = BACKEND_DIR / "db" / "files"
+LOGOS_DIR = BACKEND_DIR / "db" / "logos"
 
 # Auth configuration
 ACCESS_TOKEN_TTL_MINUTES = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "15"))
@@ -188,6 +189,7 @@ def init_database():
   """Initialize SQLite database and create tables if they don't exist."""
   # Create files directory for storing images
   FILES_DIR.mkdir(parents=True, exist_ok=True)
+  LOGOS_DIR.mkdir(parents=True, exist_ok=True)
 
   conn = sqlite3.connect(str(DB_PATH))
   cursor = conn.cursor()
@@ -322,6 +324,7 @@ def init_database():
   conn.close()
   print(f"[info] Database initialized at {DB_PATH}")
   print(f"[info] Files directory at {FILES_DIR}")
+  print(f"[info] Logos directory at {LOGOS_DIR}")
 
 
 def get_db_connection():
@@ -424,6 +427,57 @@ def save_base64_image(base64_data: str, project_id: str, image_type: str) -> str
 
   # Return relative path
   return f"db/files/{project_id}/{filename}"
+
+
+def sanitize_username(username: str) -> str:
+  cleaned = "".join(ch for ch in username if ch.isalnum() or ch in ("_", "-"))
+  return cleaned or "user"
+
+
+def save_logo_files(file: UploadFile, username: str) -> Dict[str, str]:
+  if not file.filename:
+    raise HTTPException(status_code=400, detail="Missing filename")
+  ext = Path(file.filename).suffix.lower()
+  if ext not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+    raise HTTPException(status_code=400, detail="Unsupported image type")
+
+  safe_username = sanitize_username(username)
+  user_dir = (LOGOS_DIR / safe_username).resolve()
+  if not str(user_dir).startswith(str(LOGOS_DIR.resolve())):
+    raise HTTPException(status_code=400, detail="Invalid logo path")
+  user_dir.mkdir(parents=True, exist_ok=True)
+
+  content = file.file.read()
+  if not content:
+    raise HTTPException(status_code=400, detail="Empty file")
+
+  logo_id = str(uuid.uuid4())
+  original_name = f"{logo_id}{ext}"
+  original_path = user_dir / original_name
+  with open(original_path, "wb") as f:
+    f.write(content)
+
+  try:
+    image = Image.open(io.BytesIO(content))
+  except Exception:
+    raise HTTPException(status_code=400, detail="Invalid image file")
+
+  if image.mode not in ("RGB", "RGBA"):
+    if "A" in image.getbands():
+      image = image.convert("RGBA")
+    else:
+      image = image.convert("RGB")
+
+  thumb = image.copy()
+  thumb.thumbnail((512, 512))
+  webp_name = f"{logo_id}.webp"
+  webp_path = user_dir / webp_name
+  thumb.save(webp_path, format="WEBP", quality=82, method=6)
+
+  return {
+    "original": f"{safe_username}/{original_name}",
+    "webp": f"{safe_username}/{webp_name}"
+  }
 
 
 def process_project_images(project_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1772,6 +1826,49 @@ def delete_project(project_id: str, user: sqlite3.Row = Depends(require_current_
     return JSONResponse({"success": True, "projectId": project_id})
   except Exception as e:
     raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(e)}")
+
+
+@app.get("/logos")
+def list_logos(user: sqlite3.Row = Depends(require_current_user)):
+  safe_username = sanitize_username(user["username"])
+  user_dir = LOGOS_DIR / safe_username
+  if not user_dir.exists():
+    return JSONResponse({"logos": []})
+  entries = []
+  for entry in user_dir.iterdir():
+    if not entry.is_file():
+      continue
+    if entry.suffix.lower() != ".webp":
+      continue
+    entries.append({
+      "webp": f"/logos/{safe_username}/{entry.name}",
+      "filename": entry.name,
+      "mtime": entry.stat().st_mtime
+    })
+  entries.sort(key=lambda item: item["mtime"], reverse=True)
+  return JSONResponse({"logos": entries})
+
+
+@app.post("/logos/upload")
+def upload_logo(file: UploadFile = File(...), user: sqlite3.Row = Depends(require_current_user)):
+  saved = save_logo_files(file, user["username"])
+  return JSONResponse({
+    "original": f"/logos/{saved['original']}",
+    "webp": f"/logos/{saved['webp']}"
+  })
+
+
+@app.get("/logos/{username}/{filename}")
+def get_logo(username: str, filename: str):
+  safe_username = sanitize_username(username)
+  if safe_username != username:
+    raise HTTPException(status_code=404, detail="Logo not found")
+  file_path = (LOGOS_DIR / safe_username / filename).resolve()
+  if not str(file_path).startswith(str(LOGOS_DIR.resolve())):
+    raise HTTPException(status_code=400, detail="Invalid logo path")
+  if not file_path.exists() or not file_path.is_file():
+    raise HTTPException(status_code=404, detail="Logo not found")
+  return FileResponse(file_path)
 
 
 @app.get("/files/list/{project_id}")

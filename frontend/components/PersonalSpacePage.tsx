@@ -10,7 +10,7 @@ import {
   Image as ImageIcon,
   Plus
 } from 'lucide-react';
-import { fetchWithAuth } from '../services/authService';
+import { fetchWithAuth, getAccessToken } from '../services/authService';
 
 type DesignItem = {
   id: string;
@@ -26,6 +26,11 @@ type GuidanceItem = {
   created_at: string;
 };
 
+type LogoItem = {
+  webp: string;
+  filename: string;
+};
+
 const PersonalSpacePage: React.FC = () => {
   const [selectedGuidance, setSelectedGuidance] = useState<DesignItem | null>(null);
   const [guidanceItems, setGuidanceItems] = useState<GuidanceItem[]>([]);
@@ -36,18 +41,38 @@ const PersonalSpacePage: React.FC = () => {
   const [isGuidanceEditorOpen, setIsGuidanceEditorOpen] = useState(false);
   const [editingGuidanceId, setEditingGuidanceId] = useState<string | null>(null);
   const [isDetailEditing, setIsDetailEditing] = useState(false);
+  const [logos, setLogos] = useState<LogoItem[]>([]);
+  const [logosLoading, setLogosLoading] = useState(false);
+  const [logosError, setLogosError] = useState('');
+  const [logoUploadProgress, setLogoUploadProgress] = useState<number | null>(null);
+  const [isLogoUploading, setIsLogoUploading] = useState(false);
   const detailTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const [logos] = useState<string[]>([
-    'https://picsum.photos/id/101/200/200',
-    'https://picsum.photos/id/102/200/200',
-    'https://picsum.photos/id/103/200/200',
-    'https://picsum.photos/id/104/200/200'
-  ]);
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
     console.log('File selected:', file.name);
+  };
+
+  const loadLogos = async () => {
+    setLogosLoading(true);
+    setLogosError('');
+    try {
+      const response = await fetchWithAuth(
+        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/logos`
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load logos';
+        throw new Error(message);
+      }
+      setLogos(Array.isArray(data.logos) ? data.logos : []);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load logos';
+      setLogosError(message);
+    } finally {
+      setLogosLoading(false);
+    }
   };
 
   const loadGuidanceItems = async () => {
@@ -73,6 +98,7 @@ const PersonalSpacePage: React.FC = () => {
 
   useEffect(() => {
     void loadGuidanceItems();
+    void loadLogos();
   }, []);
 
   useEffect(() => {
@@ -203,6 +229,49 @@ const PersonalSpacePage: React.FC = () => {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to delete design guidance';
       setGuidanceError(message);
+    }
+  };
+
+  const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const form = new FormData();
+    form.append('file', file);
+    setLogosError('');
+    setIsLogoUploading(true);
+    setLogoUploadProgress(0);
+    try {
+      const url = `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/logos/upload`;
+      const token = getAccessToken();
+      const response = await new Promise<Response>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        xhr.withCredentials = true;
+        if (token) {
+          xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        }
+        xhr.upload.onprogress = (evt) => {
+          if (!evt.lengthComputable) return;
+          const percent = Math.round((evt.loaded / evt.total) * 100);
+          setLogoUploadProgress(percent);
+        };
+        xhr.onload = () => resolve(new Response(xhr.responseText, { status: xhr.status }));
+        xhr.onerror = () => reject(new Error('Failed to upload logo'));
+        xhr.send(form);
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to upload logo';
+        throw new Error(message);
+      }
+      await loadLogos();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to upload logo';
+      setLogosError(message);
+    } finally {
+      setIsLogoUploading(false);
+      setLogoUploadProgress(null);
+      event.currentTarget.value = '';
     }
   };
 
@@ -441,25 +510,30 @@ const PersonalSpacePage: React.FC = () => {
               </div>
               <label className="p-2 hover:bg-gray-100 rounded-full cursor-pointer transition-colors">
                 <Plus size={20} className="text-gray-400 hover:text-gray-900" />
-                <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} />
+                <input type="file" className="hidden" accept="image/*" onChange={handleLogoUpload} />
               </label>
             </div>
 
+            {logosError && (
+              <div className="text-xs text-red-600 mb-3">{logosError}</div>
+            )}
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-              {logos.map((logo, idx) => (
-                <div key={idx} className="aspect-square bg-gray-50 rounded-2xl border border-gray-100 overflow-hidden relative group shadow-sm">
-                  <img src={logo} alt={`Logo ${idx + 1}`} className="w-full h-full object-contain p-4 transition-transform group-hover:scale-110" />
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                    <button className="p-2 bg-white rounded-lg text-gray-900 hover:bg-gray-100">
-                      <Upload size={14} />
-                    </button>
+              {logosLoading && logos.length === 0 ? (
+                <div className="col-span-full text-sm text-gray-400">Loading logos...</div>
+              ) : (
+                logos.map((logo, idx) => (
+                  <div key={logo.filename || String(idx)} className="aspect-square bg-gray-50 rounded-2xl border border-gray-100 overflow-hidden relative group shadow-sm">
+                    <img src={`${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}${logo.webp}`} alt={`Logo ${idx + 1}`} className="w-full h-full object-contain p-4 transition-transform group-hover:scale-110" />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                      <div className="px-3 py-1 rounded-full bg-white text-[10px] font-semibold text-gray-700">Logo</div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))
+              )}
               <label className="aspect-square border-2 border-dashed border-gray-200 rounded-2xl flex flex-col items-center justify-center gap-2 text-gray-400 hover:border-emerald-400 hover:text-emerald-500 hover:bg-emerald-50/30 transition-all cursor-pointer">
                 <Plus size={24} />
                 <span className="text-[10px] font-bold uppercase tracking-wider">Add Logo</span>
-                <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} />
+                <input type="file" className="hidden" accept="image/*" onChange={handleLogoUpload} />
               </label>
             </div>
           </section>
