@@ -4286,6 +4286,7 @@ Return ONLY valid JSON in the format:
                 logoForPoster,
                 fontReferenceUrl,
                 undefined,
+                currentTheme,
                 currentDesignGuidance
               );
               // Store taskId in posterData for recovery after refresh

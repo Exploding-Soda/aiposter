@@ -259,40 +259,7 @@ const buildImagePrompt = (
   fontReferenceUrl?: string | null,
   targetSize?: { width: number; height: number; label?: string }
 ): string => {
-  const infoBlock = poster.infoBlock
-    ? `Org: ${poster.infoBlock.orgName}. Details: ${poster.infoBlock.details}. Credits: ${poster.infoBlock.credits}.`
-    : "";
-  const effectiveLogoUrl = logoUrl ?? poster.logoUrl ?? null;
-  const logoInstruction = effectiveLogoUrl
-    ? "A brand logo image is provided. You must include that exact logo in the poster, placed cleanly and legibly in a suitable corner (e.g., top-left or bottom-right). Do not redraw, distort, or replace it."
-    : "";
-  const effectiveFontRef =
-    fontReferenceUrl && fontReferenceUrl.startsWith("data:image/")
-      ? fontReferenceUrl
-      : null;
-  const fontInstruction = effectiveFontRef
-    ? "A font reference image is provided showing the desired letterform style. The poster text must follow the typography style suggested by that reference (letter shapes, weight, and overall feel), while keeping all copy fully legible."
-    : "";
-  const sizeInstruction = targetSize
-    ? `Generate an image at ${targetSize.width}x${targetSize.height}.`
-    : "Create a vertical 9:16 poster image with readable, professional typography embedded in the design.";
-  return [
-    sizeInstruction,
-    "Use the provided copy exactly and make it legible with correct spelling and spacing.",
-    `Top banner text: ${poster.topBanner}.`,
-    `Headline text: ${poster.headline}.`,
-    `Subheadline text: ${poster.subheadline}.`,
-    `Info block text: ${infoBlock}`,
-    `Accent color: ${poster.accentColor}.`,
-    `Visual direction: ${poster.visualPrompt}.`,
-    "High-quality cinematic artistic poster, masterpiece.",
-    "Ensure the text language matches the provided copy.",
-    "Use any provided reference images only for style guidance and do not copy their exact content.",
-    logoInstruction,
-    fontInstruction
-  ]
-    .filter(Boolean)
-    .join(" ");
+  return poster.visualPrompt?.trim() || "";
 };
 
 export const generatePosterImage = async (
@@ -301,6 +268,7 @@ export const generatePosterImage = async (
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
   targetSize?: { width: number; height: number; label?: string },
+  userPrompt?: string,
   extraPrompt?: string
 ): Promise<string> => {
   const payload = buildGeneratePosterPayload(
@@ -309,6 +277,7 @@ export const generatePosterImage = async (
     logoUrl,
     fontReferenceUrl,
     targetSize,
+    userPrompt,
     extraPrompt
   );
   const response = await callPoloApi(payload);
@@ -327,10 +296,16 @@ const buildGeneratePosterPayload = (
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
   targetSize?: { width: number; height: number; label?: string },
+  userPrompt?: string,
   extraPrompt?: string
 ): Record<string, unknown> => {
+  const userPrefix = userPrompt?.trim() ? `${userPrompt.trim()} ` : "";
   const fontPrefix = fontReferenceUrl && fontReferenceUrl.startsWith("data:image/")
     ? "Generate a new poster using the font style shown in Image 2. "
+    : "";
+  const hasStyleReference = styleImages.some((url) => url && url.startsWith("data:image/"));
+  const styleInstruction = hasStyleReference
+    ? "Match the poster style shown in Image 1."
     : "";
   const extraInstruction = extraPrompt?.trim()
     ? `Additional design guidance: ${extraPrompt.trim()}`
@@ -339,8 +314,10 @@ const buildGeneratePosterPayload = (
     {
       type: "text",
       text: [
-        `${fontPrefix}You are a master painter/photographer and poster designer.`,
+        `${userPrefix}${fontPrefix}`.trim(),
+        "Create a vertical 9:16 poster.",
         buildImagePrompt(poster, logoUrl, fontReferenceUrl, targetSize),
+        styleInstruction,
         extraInstruction
       ]
         .filter(Boolean)
@@ -379,6 +356,7 @@ export const generatePosterImageAsync = async (
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
   targetSize?: { width: number; height: number; label?: string },
+  userPrompt?: string,
   extraPrompt?: string
 ): Promise<string> => {
   const payload = buildGeneratePosterPayload(
@@ -387,6 +365,7 @@ export const generatePosterImageAsync = async (
     logoUrl,
     fontReferenceUrl,
     targetSize,
+    userPrompt,
     extraPrompt
   );
   return submitAITask(payload);
