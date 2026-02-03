@@ -347,10 +347,13 @@ const buildGeneratePosterPayload = (
   fontReferenceUrl?: string | null,
   targetSize?: { width: number; height: number; label?: string }
 ): Record<string, unknown> => {
+  const fontPrefix = fontReferenceUrl && fontReferenceUrl.startsWith("data:image/")
+    ? "Generate a new poster using the font style shown in Image 2. "
+    : "";
   const messageContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
     {
       type: "text",
-      text: `You are a master painter/photographer and poster designer. ${buildImagePrompt(poster, logoUrl, fontReferenceUrl, targetSize)}`
+      text: `${fontPrefix}You are a master painter/photographer and poster designer. ${buildImagePrompt(poster, logoUrl, fontReferenceUrl, targetSize)}`
     }
   ];
 
