@@ -305,7 +305,7 @@ const buildGeneratePosterPayload = (
     : "";
   const hasStyleReference = styleImages.some((url) => url && url.startsWith("data:image/"));
   const styleInstruction = hasStyleReference
-    ? "Match the poster style shown in Image 1."
+    ? "The poster style must match Image 1 as closely as possible (composition, palette, textures, lighting, mood, and overall visual language). Do not deviate."
     : "";
   const extraInstruction = extraPrompt?.trim()
     ? `Additional design guidance: ${extraPrompt.trim()}`
