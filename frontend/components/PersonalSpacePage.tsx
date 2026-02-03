@@ -44,6 +44,7 @@ const PersonalSpacePage: React.FC = () => {
   const [logos, setLogos] = useState<LogoItem[]>([]);
   const [logosLoading, setLogosLoading] = useState(false);
   const [logosError, setLogosError] = useState('');
+  const [logoDeleting, setLogoDeleting] = useState<string | null>(null);
   const [logoUploadProgress, setLogoUploadProgress] = useState<number | null>(null);
   const [isLogoUploading, setIsLogoUploading] = useState(false);
   const detailTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -272,6 +273,29 @@ const PersonalSpacePage: React.FC = () => {
       setIsLogoUploading(false);
       setLogoUploadProgress(null);
       event.currentTarget.value = '';
+    }
+  };
+
+  const handleDeleteLogo = async (logo: LogoItem) => {
+    if (!window.confirm('Delete this logo?')) return;
+    setLogosError('');
+    setLogoDeleting(logo.filename);
+    try {
+      const response = await fetchWithAuth(
+        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/logos/${encodeURIComponent(logo.filename)}`,
+        { method: 'DELETE' }
+      );
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to delete logo';
+        throw new Error(message);
+      }
+      setLogos((prev) => prev.filter((item) => item.filename !== logo.filename));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete logo';
+      setLogosError(message);
+    } finally {
+      setLogoDeleting(null);
     }
   };
 
@@ -525,7 +549,14 @@ const PersonalSpacePage: React.FC = () => {
                   <div key={logo.filename || String(idx)} className="aspect-square bg-gray-50 rounded-2xl border border-gray-100 overflow-hidden relative group shadow-sm">
                     <img src={`${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}${logo.webp}`} alt={`Logo ${idx + 1}`} className="w-full h-full object-contain p-4 transition-transform group-hover:scale-110" />
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                      <div className="px-3 py-1 rounded-full bg-white text-[10px] font-semibold text-gray-700">Logo</div>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteLogo(logo)}
+                        disabled={logoDeleting === logo.filename}
+                        className="px-3 py-1 rounded-full bg-white text-[10px] font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-60"
+                      >
+                        {logoDeleting === logo.filename ? 'Deleting...' : 'Delete'}
+                      </button>
                     </div>
                   </div>
                 ))
@@ -591,6 +622,24 @@ const PersonalSpacePage: React.FC = () => {
               >
                 {guidanceSaving ? 'Saving...' : 'Save'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isLogoUploading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="text-sm font-semibold text-gray-900 mb-2">Uploading logo</div>
+            <div className="text-xs text-gray-400 mb-4">Please keep this window open.</div>
+            <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-emerald-500 transition-all"
+                style={{ width: `${logoUploadProgress ?? 0}%` }}
+              />
+            </div>
+            <div className="text-xs text-gray-500 mt-3">
+              {logoUploadProgress === null ? 'Starting...' : `${logoUploadProgress}%`}
             </div>
           </div>
         </div>

@@ -429,20 +429,20 @@ def save_base64_image(base64_data: str, project_id: str, image_type: str) -> str
   return f"db/files/{project_id}/{filename}"
 
 
-def sanitize_username(username: str) -> str:
-  cleaned = "".join(ch for ch in username if ch.isalnum() or ch in ("_", "-"))
+def sanitize_user_id(user_id: str) -> str:
+  cleaned = "".join(ch for ch in user_id if ch.isalnum() or ch in ("_", "-"))
   return cleaned or "user"
 
 
-def save_logo_files(file: UploadFile, username: str) -> Dict[str, str]:
+def save_logo_files(file: UploadFile, user_id: str) -> Dict[str, str]:
   if not file.filename:
     raise HTTPException(status_code=400, detail="Missing filename")
   ext = Path(file.filename).suffix.lower()
   if ext not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
     raise HTTPException(status_code=400, detail="Unsupported image type")
 
-  safe_username = sanitize_username(username)
-  user_dir = (LOGOS_DIR / safe_username).resolve()
+  safe_user_id = sanitize_user_id(user_id)
+  user_dir = (LOGOS_DIR / safe_user_id).resolve()
   if not str(user_dir).startswith(str(LOGOS_DIR.resolve())):
     raise HTTPException(status_code=400, detail="Invalid logo path")
   user_dir.mkdir(parents=True, exist_ok=True)
@@ -475,8 +475,8 @@ def save_logo_files(file: UploadFile, username: str) -> Dict[str, str]:
   thumb.save(webp_path, format="WEBP", quality=82, method=6)
 
   return {
-    "original": f"{safe_username}/{original_name}",
-    "webp": f"{safe_username}/{webp_name}"
+    "original": f"{safe_user_id}/{original_name}",
+    "webp": f"{safe_user_id}/{webp_name}"
   }
 
 
@@ -1830,8 +1830,8 @@ def delete_project(project_id: str, user: sqlite3.Row = Depends(require_current_
 
 @app.get("/logos")
 def list_logos(user: sqlite3.Row = Depends(require_current_user)):
-  safe_username = sanitize_username(user["username"])
-  user_dir = LOGOS_DIR / safe_username
+  safe_user_id = sanitize_user_id(user["id"])
+  user_dir = LOGOS_DIR / safe_user_id
   if not user_dir.exists():
     return JSONResponse({"logos": []})
   entries = []
@@ -1841,7 +1841,7 @@ def list_logos(user: sqlite3.Row = Depends(require_current_user)):
     if entry.suffix.lower() != ".webp":
       continue
     entries.append({
-      "webp": f"/logos/{safe_username}/{entry.name}",
+      "webp": f"/logos/{safe_user_id}/{entry.name}",
       "filename": entry.name,
       "mtime": entry.stat().st_mtime
     })
@@ -1851,16 +1851,46 @@ def list_logos(user: sqlite3.Row = Depends(require_current_user)):
 
 @app.post("/logos/upload")
 def upload_logo(file: UploadFile = File(...), user: sqlite3.Row = Depends(require_current_user)):
-  saved = save_logo_files(file, user["username"])
+  saved = save_logo_files(file, user["id"])
   return JSONResponse({
     "original": f"/logos/{saved['original']}",
     "webp": f"/logos/{saved['webp']}"
   })
 
 
+@app.delete("/logos/{filename}")
+def delete_logo(filename: str, user: sqlite3.Row = Depends(require_current_user)):
+  safe_user_id = sanitize_user_id(user["id"])
+  user_dir = (LOGOS_DIR / safe_user_id).resolve()
+  if not str(user_dir).startswith(str(LOGOS_DIR.resolve())):
+    raise HTTPException(status_code=400, detail="Invalid logo path")
+  if "/" in filename or "\\" in filename:
+    raise HTTPException(status_code=400, detail="Invalid filename")
+  file_path = (user_dir / filename).resolve()
+  if not str(file_path).startswith(str(user_dir)):
+    raise HTTPException(status_code=400, detail="Invalid logo path")
+  if not file_path.exists() or not file_path.is_file():
+    raise HTTPException(status_code=404, detail="Logo not found")
+  if file_path.suffix.lower() != ".webp":
+    raise HTTPException(status_code=400, detail="Invalid logo type")
+  original_name = file_path.stem
+  original_files = list(user_dir.glob(f"{original_name}.*"))
+  try:
+    file_path.unlink()
+  except OSError:
+    raise HTTPException(status_code=500, detail="Failed to delete logo")
+  for item in original_files:
+    try:
+      if item.exists() and item.is_file():
+        item.unlink()
+    except OSError:
+      continue
+  return JSONResponse({"success": True})
+
+
 @app.get("/logos/{username}/{filename}")
 def get_logo(username: str, filename: str):
-  safe_username = sanitize_username(username)
+  safe_username = sanitize_user_id(username)
   if safe_username != username:
     raise HTTPException(status_code=404, detail="Logo not found")
   file_path = (LOGOS_DIR / safe_username / filename).resolve()
