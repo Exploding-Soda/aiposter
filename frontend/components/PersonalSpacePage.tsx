@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Globe,
   HardDrive,
@@ -10,6 +10,7 @@ import {
   Image as ImageIcon,
   Plus
 } from 'lucide-react';
+import { fetchWithAuth } from '../services/authService';
 
 type DesignItem = {
   id: string;
@@ -18,8 +19,24 @@ type DesignItem = {
   details: string[];
 };
 
+type GuidanceItem = {
+  id: string;
+  description: string;
+  source: string;
+  created_at: string;
+};
+
 const PersonalSpacePage: React.FC = () => {
   const [selectedGuidance, setSelectedGuidance] = useState<DesignItem | null>(null);
+  const [guidanceItems, setGuidanceItems] = useState<GuidanceItem[]>([]);
+  const [guidanceLoading, setGuidanceLoading] = useState(true);
+  const [guidanceError, setGuidanceError] = useState('');
+  const [guidanceDraft, setGuidanceDraft] = useState('');
+  const [guidanceSaving, setGuidanceSaving] = useState(false);
+  const [isGuidanceEditorOpen, setIsGuidanceEditorOpen] = useState(false);
+  const [editingGuidanceId, setEditingGuidanceId] = useState<string | null>(null);
+  const [isDetailEditing, setIsDetailEditing] = useState(false);
+  const detailTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [logos] = useState<string[]>([
     'https://picsum.photos/id/101/200/200',
     'https://picsum.photos/id/102/200/200',
@@ -27,46 +44,166 @@ const PersonalSpacePage: React.FC = () => {
     'https://picsum.photos/id/104/200/200'
   ]);
 
-  const designGuidanceItems: DesignItem[] = [
-    {
-      id: '1',
-      title: 'Typography System',
-      description: 'Hierarchy, spacing, and fallback rules',
-      details: [
-        'Primary: Satoshi Bold for headlines',
-        'Secondary: Inter Regular for body text',
-        'Line height 1.4 for headings, 1.6 for body',
-        'Use negative tracking on large headlines'
-      ]
-    },
-    {
-      id: '2',
-      title: 'Color Tokens 2026',
-      description: 'Brand palette and semantic colors',
-      details: [
-        'Primary: #111827 (Graphite)',
-        'Surface: #F5F5F7 (Cloud)',
-        'Accent: #22D3EE (Cyan)',
-        'Success: #10B981 (Emerald)'
-      ]
-    },
-    {
-      id: '3',
-      title: 'Layout Grid',
-      description: 'Spacing grid and container rules',
-      details: [
-        'Base grid: 8px with 4px half-steps',
-        'Cards: 24px padding, 16px radius',
-        'Max width: 1180px',
-        'Keep 64px min spacing on hero layouts'
-      ]
-    }
-  ];
-
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
     console.log('File selected:', file.name);
+  };
+
+  const loadGuidanceItems = async () => {
+    setGuidanceLoading(true);
+    setGuidanceError('');
+    try {
+      const response = await fetchWithAuth(
+        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/design-guidance`
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load design guidance';
+        throw new Error(message);
+      }
+      setGuidanceItems(Array.isArray(data.items) ? data.items : []);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load design guidance';
+      setGuidanceError(message);
+    } finally {
+      setGuidanceLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadGuidanceItems();
+  }, []);
+
+  useEffect(() => {
+    if (!isDetailEditing) return;
+    const textarea = detailTextareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [guidanceDraft, isDetailEditing]);
+
+  const handleCreateGuidance = async () => {
+    if (guidanceSaving) return;
+    const description = guidanceDraft.trim();
+    if (!description) return;
+    setGuidanceSaving(true);
+    setGuidanceError('');
+    try {
+      const response = await fetchWithAuth(
+        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/design-guidance`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ description, source: 'text' })
+        }
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to create design guidance';
+        throw new Error(message);
+      }
+      if (data?.item) {
+        setGuidanceItems((prev) => [data.item, ...prev]);
+      } else {
+        void loadGuidanceItems();
+      }
+      setGuidanceDraft('');
+      setIsGuidanceEditorOpen(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to create design guidance';
+      setGuidanceError(message);
+    } finally {
+      setGuidanceSaving(false);
+    }
+  };
+
+  const handleOpenCreateGuidance = () => {
+    setEditingGuidanceId(null);
+    setGuidanceDraft('');
+    setGuidanceError('');
+    setIsGuidanceEditorOpen(true);
+  };
+
+  const handleOpenEditGuidance = (item: GuidanceItem) => {
+    setEditingGuidanceId(item.id);
+    setGuidanceDraft(item.description);
+    setGuidanceError('');
+    setSelectedGuidance({
+      id: item.id,
+      title: 'Guidance',
+      description: item.description,
+      details: [item.description]
+    });
+    setIsDetailEditing(true);
+  };
+
+  const handleUpdateGuidance = async () => {
+    if (guidanceSaving || !editingGuidanceId) return;
+    const description = guidanceDraft.trim();
+    if (!description) return;
+    setGuidanceSaving(true);
+    setGuidanceError('');
+    try {
+      const response = await fetchWithAuth(
+        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/design-guidance/${editingGuidanceId}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ description })
+        }
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to update design guidance';
+        throw new Error(message);
+      }
+      if (data?.item) {
+        setGuidanceItems((prev) => prev.map((item) => (item.id === data.item.id ? data.item : item)));
+        if (selectedGuidance?.id === data.item.id) {
+          setSelectedGuidance({
+            id: data.item.id,
+            title: selectedGuidance.title,
+            description: data.item.description,
+            details: [data.item.description]
+          });
+        }
+      } else {
+        void loadGuidanceItems();
+      }
+      setGuidanceDraft('');
+      setIsDetailEditing(false);
+      setEditingGuidanceId(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update design guidance';
+      setGuidanceError(message);
+    } finally {
+      setGuidanceSaving(false);
+    }
+  };
+
+  const handleDeleteGuidance = async (item: GuidanceItem) => {
+    if (!window.confirm('Delete this guidance?')) return;
+    try {
+      const response = await fetchWithAuth(
+        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/design-guidance/${item.id}`,
+        { method: 'DELETE' }
+      );
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to delete design guidance';
+        throw new Error(message);
+      }
+      setGuidanceItems((prev) => prev.filter((entry) => entry.id !== item.id));
+      if (selectedGuidance?.id === item.id) {
+        setSelectedGuidance(null);
+        setIsDetailEditing(false);
+        setEditingGuidanceId(null);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete design guidance';
+      setGuidanceError(message);
+    }
   };
 
   return (
@@ -120,7 +257,11 @@ const PersonalSpacePage: React.FC = () => {
               <div className="flex items-center gap-3">
                 {selectedGuidance ? (
                   <button
-                    onClick={() => setSelectedGuidance(null)}
+                    onClick={() => {
+                      setSelectedGuidance(null);
+                      setIsDetailEditing(false);
+                      setEditingGuidanceId(null);
+                    }}
                     className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
                   >
                     <ChevronLeft size={20} />
@@ -136,57 +277,155 @@ const PersonalSpacePage: React.FC = () => {
               </div>
 
               {!selectedGuidance && (
-                <label className="flex items-center gap-2 px-3 py-2 bg-black text-white rounded-xl text-xs font-bold cursor-pointer hover:bg-gray-800 transition-all">
-                  <Upload size={14} />
-                  <span>Upload PDF</span>
-                  <input type="file" className="hidden" accept=".pdf" onChange={handleFileUpload} />
-                </label>
+                <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-2 px-3 py-2 bg-black text-white rounded-xl text-xs font-bold cursor-pointer hover:bg-gray-800 transition-all">
+                    <Upload size={14} />
+                    <span>Upload PDF</span>
+                    <input type="file" className="hidden" accept=".pdf" onChange={handleFileUpload} />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleOpenCreateGuidance}
+                    className="flex items-center gap-2 px-3 py-2 border border-gray-200 rounded-xl text-xs font-bold text-gray-700 hover:bg-gray-50 transition-all"
+                  >
+                    <Plus size={14} />
+                    Add new guidance
+                  </button>
+                </div>
               )}
             </div>
 
             <div className="flex-1 p-3 overflow-y-auto">
               {!selectedGuidance ? (
-                <div className="space-y-2">
-                  {designGuidanceItems.map((item) => (
-                    <div
-                      key={item.id}
-                      onClick={() => setSelectedGuidance(item)}
-                      className="p-4 flex items-center justify-between hover:bg-gray-50 rounded-2xl cursor-pointer group transition-colors"
-                    >
-                      <div className="flex items-center gap-4">
-                        <div className="p-2 bg-gray-50 text-gray-400 group-hover:text-blue-500 group-hover:bg-blue-50 rounded-xl transition-colors">
-                          <FileType size={20} />
-                        </div>
-                        <div>
-                          <p className="text-sm font-bold text-gray-900">{item.title}</p>
-                          <p className="text-xs text-gray-500">{item.description}</p>
+                <div className="space-y-3">
+                  {guidanceLoading ? (
+                    <div className="h-48 flex items-center justify-center text-gray-400 text-sm">Loading guidance...</div>
+                  ) : guidanceItems.length > 0 ? (
+                    guidanceItems.map((item, index) => (
+                      <div
+                        key={item.id}
+                        className="p-4 flex items-center justify-between hover:bg-gray-50 rounded-2xl group transition-colors"
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            {
+                              setSelectedGuidance({
+                                id: item.id,
+                                title: `Guidance ${index + 1}`,
+                                description: item.description,
+                                details: [item.description]
+                              });
+                              setIsDetailEditing(false);
+                              setEditingGuidanceId(null);
+                            }
+                          }
+                          className="flex-1 flex items-center gap-4 text-left"
+                        >
+                          <div className="p-2 bg-gray-50 text-gray-400 group-hover:text-blue-500 group-hover:bg-blue-50 rounded-xl transition-colors">
+                            <FileType size={20} />
+                          </div>
+                          <div>
+                            <p className="text-sm font-bold text-gray-900">
+                              {item.description.length > 60 ? `${item.description.slice(0, 60)}...` : item.description}
+                            </p>
+                            <p className="text-xs text-gray-500">Source: {item.source}</p>
+                          </div>
+                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditGuidance(item)}
+                            className="text-xs font-semibold text-gray-500 hover:text-gray-900"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteGuidance(item)}
+                            className="text-xs font-semibold text-red-500 hover:text-red-600"
+                          >
+                            Delete
+                          </button>
+                          <ChevronRight size={16} className="text-gray-300 group-hover:text-gray-900 transition-all group-hover:translate-x-1" />
                         </div>
                       </div>
-                      <ChevronRight size={16} className="text-gray-300 group-hover:text-gray-900 transition-all group-hover:translate-x-1" />
-                    </div>
-                  ))}
-                  {designGuidanceItems.length === 0 && (
-                    <div className="h-64 flex flex-col items-center justify-center text-gray-400">
+                    ))
+                  ) : (
+                    <div className="h-48 flex flex-col items-center justify-center text-gray-400">
                       <FileText size={48} strokeWidth={1} className="mb-2 opacity-20" />
-                      <p className="text-sm font-medium">No design guidance uploaded yet</p>
+                      <p className="text-sm font-medium">No design guidance yet</p>
                     </div>
                   )}
                 </div>
               ) : (
                 <div className="p-4 space-y-4 animate-in slide-in-from-right-4 duration-300">
-                  <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100/50">
-                    <p className="text-xs text-blue-700 font-medium leading-relaxed">
-                      Detailed specifications and implementation rules for {selectedGuidance.title.toLowerCase()}.
-                    </p>
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-semibold text-gray-400 uppercase tracking-widest">
+                      Guidance Details
+                    </div>
+                    {!isDetailEditing && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingGuidanceId(selectedGuidance.id);
+                          setGuidanceDraft(selectedGuidance.description);
+                          setGuidanceError('');
+                          setIsDetailEditing(true);
+                        }}
+                        className="text-xs font-semibold text-gray-600 hover:text-gray-900"
+                      >
+                        Edit
+                      </button>
+                    )}
                   </div>
-                  <ul className="space-y-3">
-                    {selectedGuidance.details.map((detail, idx) => (
-                      <li key={idx} className="flex items-start gap-3 p-4 bg-white border border-gray-100 rounded-2xl shadow-sm">
-                        <div className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1.5 shrink-0" />
-                        <span className="text-sm text-gray-700 font-medium">{detail}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  {isDetailEditing ? (
+                    <div className="space-y-3">
+                      <textarea
+                        ref={detailTextareaRef}
+                        value={guidanceDraft}
+                        onChange={(event) => setGuidanceDraft(event.target.value)}
+                        placeholder="Update guidance description..."
+                        className="w-full min-h-[140px] resize-none overflow-hidden rounded-2xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                      />
+                      {guidanceError && (
+                        <div className="text-xs text-red-600">{guidanceError}</div>
+                      )}
+                      <div className="flex items-center justify-between">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setGuidanceDraft(selectedGuidance.description);
+                            setGuidanceError('');
+                            setIsDetailEditing(false);
+                            setEditingGuidanceId(null);
+                          }}
+                          className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-semibold text-gray-600"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleUpdateGuidance}
+                          disabled={!guidanceDraft.trim() || guidanceSaving}
+                          className="px-4 py-2 rounded-xl bg-black text-white text-xs font-semibold disabled:opacity-50"
+                        >
+                          {guidanceSaving ? 'Saving...' : 'Save'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <ul className="space-y-3">
+                      {selectedGuidance.details.map((detail, idx) => (
+                        <li key={idx} className="flex items-start gap-3 p-4 bg-white border border-gray-100 rounded-2xl shadow-sm">
+                          <div className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1.5 shrink-0" />
+                          <span className="text-sm text-gray-700 font-medium break-words whitespace-pre-wrap">
+                            {detail}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               )}
             </div>
@@ -231,6 +470,57 @@ const PersonalSpacePage: React.FC = () => {
       <div className="pt-8 text-center text-[10px] text-gray-300 font-medium tracking-widest uppercase">
         Personal Space Console • 2026 Release
       </div>
+
+      {isGuidanceEditorOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-gray-900">Add new guidance</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setGuidanceDraft('');
+                  setGuidanceError('');
+                  setIsGuidanceEditorOpen(false);
+                }}
+                className="text-xs font-semibold text-gray-500 hover:text-gray-900"
+              >
+                Close
+              </button>
+            </div>
+            <textarea
+              value={guidanceDraft}
+              onChange={(event) => setGuidanceDraft(event.target.value)}
+              placeholder="Type one design guidance description..."
+              className="w-full min-h-[140px] resize-y rounded-2xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-900"
+            />
+            {guidanceError && (
+              <div className="text-xs text-red-600 mt-2">{guidanceError}</div>
+            )}
+            <div className="flex items-center justify-between mt-5">
+              <button
+                type="button"
+                onClick={() => {
+                  setGuidanceDraft('');
+                  setGuidanceError('');
+                  setIsGuidanceEditorOpen(false);
+                }}
+                className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-semibold text-gray-600"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateGuidance}
+                disabled={!guidanceDraft.trim() || guidanceSaving}
+                className="px-4 py-2 rounded-xl bg-black text-white text-xs font-semibold disabled:opacity-50"
+              >
+                {guidanceSaving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

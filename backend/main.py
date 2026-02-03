@@ -146,6 +146,15 @@ class AuthResponse(BaseModel):
   user: Dict[str, Any]
 
 
+class DesignGuidanceCreateRequest(BaseModel):
+  description: str
+  source: str = "text"
+
+
+class DesignGuidanceUpdateRequest(BaseModel):
+  description: str
+
+
 class AITaskSubmitRequest(BaseModel):
   taskType: str  # 'chat' for AI chat requests
   payload: Dict[str, Any]
@@ -287,6 +296,26 @@ def init_database():
   cursor.execute("""
     CREATE INDEX IF NOT EXISTS idx_ai_tasks_status
     ON ai_tasks(status)
+  """)
+
+  # Create design_guidance table for user guidance entries
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS design_guidance (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      description TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'text',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    )
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_design_guidance_user_id
+    ON design_guidance(user_id)
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_design_guidance_created_at
+    ON design_guidance(created_at DESC)
   """)
 
   conn.commit()
@@ -1600,6 +1629,111 @@ def get_pending_ai_tasks(user: sqlite3.Row = Depends(require_current_user)):
     })
   finally:
     conn.close()
+
+
+@app.get("/design-guidance")
+def list_design_guidance(user: sqlite3.Row = Depends(require_current_user)):
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT id, description, source, created_at
+    FROM design_guidance
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+  """, (user["id"],))
+  rows = cursor.fetchall()
+  conn.close()
+  return JSONResponse({"items": [dict(row) for row in rows]})
+
+
+@app.post("/design-guidance")
+def create_design_guidance(
+  payload: DesignGuidanceCreateRequest,
+  user: sqlite3.Row = Depends(require_current_user)
+):
+  description = payload.description.strip()
+  if not description:
+    raise HTTPException(status_code=400, detail="Description is required")
+  if len(description) > 2000:
+    raise HTTPException(status_code=400, detail="Description is too long")
+  source = (payload.source or "text").strip().lower()
+  if source not in {"text", "pdf", "import"}:
+    raise HTTPException(status_code=400, detail="Invalid source")
+
+  guidance_id = str(uuid.uuid4())
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    INSERT INTO design_guidance (id, user_id, description, source)
+    VALUES (?, ?, ?, ?)
+  """, (guidance_id, user["id"], description, source))
+  conn.commit()
+  cursor.execute("""
+    SELECT id, description, source, created_at
+    FROM design_guidance
+    WHERE id = ?
+  """, (guidance_id,))
+  row = cursor.fetchone()
+  conn.close()
+  return JSONResponse({"item": dict(row)})
+
+
+@app.put("/design-guidance/{guidance_id}")
+def update_design_guidance(
+  guidance_id: str,
+  payload: DesignGuidanceUpdateRequest,
+  user: sqlite3.Row = Depends(require_current_user)
+):
+  description = payload.description.strip()
+  if not description:
+    raise HTTPException(status_code=400, detail="Description is required")
+  if len(description) > 2000:
+    raise HTTPException(status_code=400, detail="Description is too long")
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT id FROM design_guidance WHERE id = ? AND user_id = ?
+  """, (guidance_id, user["id"]))
+  row = cursor.fetchone()
+  if not row:
+    conn.close()
+    raise HTTPException(status_code=404, detail="Design guidance not found")
+  cursor.execute("""
+    UPDATE design_guidance
+    SET description = ?
+    WHERE id = ? AND user_id = ?
+  """, (description, guidance_id, user["id"]))
+  conn.commit()
+  cursor.execute("""
+    SELECT id, description, source, created_at
+    FROM design_guidance
+    WHERE id = ?
+  """, (guidance_id,))
+  updated = cursor.fetchone()
+  conn.close()
+  return JSONResponse({"item": dict(updated)})
+
+
+@app.delete("/design-guidance/{guidance_id}")
+def delete_design_guidance(
+  guidance_id: str,
+  user: sqlite3.Row = Depends(require_current_user)
+):
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT id FROM design_guidance WHERE id = ? AND user_id = ?
+  """, (guidance_id, user["id"]))
+  row = cursor.fetchone()
+  if not row:
+    conn.close()
+    raise HTTPException(status_code=404, detail="Design guidance not found")
+  cursor.execute("""
+    DELETE FROM design_guidance WHERE id = ? AND user_id = ?
+  """, (guidance_id, user["id"]))
+  conn.commit()
+  conn.close()
+  return JSONResponse({"ok": True})
 
 
 # Project management endpoints
