@@ -465,6 +465,41 @@ export const generatePosterMergedImage = async (
   throw new Error("No image data received");
 };
 
+export const generateImageFromPrompt = async (
+  prompt: string,
+  referenceImages: string[] = []
+): Promise<string> => {
+  const messageContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
+    {
+      type: "text",
+      text: prompt.trim()
+    }
+  ];
+
+  referenceImages.forEach((url) => {
+    if (url && url.startsWith("data:image/")) {
+      messageContent.push({ type: "image_url", image_url: { url } });
+    }
+  });
+
+  const response = await callPoloApi({
+    model: "gemini-3-pro-image-preview",
+    stream: false,
+    messages: [
+      {
+        role: "user",
+        content: messageContent
+      }
+    ]
+  });
+
+  const imageUrl = extractImageUrl(response.choices?.[0]?.message?.content);
+  if (imageUrl) {
+    return imageUrl;
+  }
+  throw new Error("No image data received");
+};
+
 export const refinePoster = async (
   currentPoster: PlanningStep,
   feedback: string

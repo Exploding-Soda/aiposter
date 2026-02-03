@@ -4,7 +4,7 @@ import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, Mo
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AppStatus, PosterDraft, PlanningStep, Artboard, Asset, Selection, AssetType, Project, TextLayout, TextStyleMap, Connection } from './types';
-import { planPosters, generatePosterImage, generatePosterNoTextImage, generatePosterMergedImage, refinePoster, chatWithModel, ChatMessage, editPosterWithMarkup, generatePosterResolutionFromImage, generatePosterImageAsync, getAITaskStatus, extractImageFromTaskResult, getPendingAITasks, AITaskStatus } from './services/geminiService';
+import { planPosters, generatePosterImage, generatePosterNoTextImage, generatePosterMergedImage, refinePoster, chatWithModel, ChatMessage, editPosterWithMarkup, generatePosterResolutionFromImage, generatePosterImageAsync, getAITaskStatus, extractImageFromTaskResult, getPendingAITasks, AITaskStatus, generateImageFromPrompt } from './services/geminiService';
 import { AuthUser, fetchWithAuth, loginUser, logoutUser, refreshAccessToken, registerUser } from './services/authService';
 import PosterCard from './components/PosterCard';
 import LandingPage from './components/LandingPage';
@@ -289,6 +289,11 @@ const App: React.FC = () => {
   const [adminDbEditorRowId, setAdminDbEditorRowId] = useState<number | null>(null);
   const [adminDbEditorPrimaryKey, setAdminDbEditorPrimaryKey] = useState<Record<string, any> | null>(null);
   const [adminDbSaving, setAdminDbSaving] = useState(false);
+  const [playgroundPrompt, setPlaygroundPrompt] = useState('');
+  const [playgroundImages, setPlaygroundImages] = useState<string[]>([]);
+  const [playgroundResult, setPlaygroundResult] = useState<string | null>(null);
+  const [playgroundLoading, setPlaygroundLoading] = useState(false);
+  const [playgroundError, setPlaygroundError] = useState('');
   const imageUploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const isAnnotatorReady = Boolean(annotatorImage && annotatorSize.width > 0 && annotatorSize.height > 0);
@@ -2525,6 +2530,48 @@ const App: React.FC = () => {
     setFontReferenceImage(null);
   };
 
+  const handlePlaygroundImagesChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) return;
+    setPlaygroundError('');
+    try {
+      const dataUrls = await Promise.all(
+        files.map((file) => new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(new Error('Failed to read reference image.'));
+          reader.readAsDataURL(file);
+        }))
+      );
+      setPlaygroundImages((prev) => [...prev, ...dataUrls]);
+    } catch (err) {
+      setPlaygroundError(err instanceof Error ? err.message : 'Failed to read reference image.');
+    } finally {
+      event.target.value = '';
+    }
+  };
+
+  const handleRemovePlaygroundImage = (index: number) => {
+    setPlaygroundImages((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleRunPlayground = async () => {
+    if (!playgroundPrompt.trim()) {
+      setPlaygroundError('Prompt is required.');
+      return;
+    }
+    setPlaygroundLoading(true);
+    setPlaygroundError('');
+    try {
+      const imageUrl = await generateImageFromPrompt(playgroundPrompt, playgroundImages);
+      setPlaygroundResult(imageUrl);
+    } catch (err) {
+      setPlaygroundError(err instanceof Error ? err.message : 'Failed to generate image.');
+    } finally {
+      setPlaygroundLoading(false);
+    }
+  };
+
   const buildAlphabetPreviewUrl = (fontName: string) => {
     const params = new URLSearchParams({
       font: fontName,
@@ -4580,6 +4627,12 @@ Return ONLY valid JSON in the format:
               >
                 Register
               </button>
+              <button
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-colors ${adminSubroute === '/playground' ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
+                onClick={() => handleNavigate('/admin/playground')}
+              >
+                Playground
+              </button>
             </nav>
           </div>
           <div className="mt-auto px-6 py-4 border-t border-gray-100">
@@ -4625,7 +4678,86 @@ Return ONLY valid JSON in the format:
 
         <main className="flex-1 overflow-y-auto px-6 py-8 lg:px-12 lg:py-12">
           <div className="max-w-4xl mx-auto">
-            {adminSubroute === '/register' ? (
+            {adminSubroute === '/playground' ? (
+              <div className="space-y-8">
+                <div>
+                  <h1 className="text-3xl font-bold text-gray-900 mb-2">Model Playground</h1>
+                  <p className="text-gray-500 font-medium">Run the image model with a custom prompt and reference images.</p>
+                </div>
+                <div className="bg-white border border-gray-100 rounded-3xl p-8 shadow-sm space-y-6">
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-gray-500">Prompt</label>
+                    <textarea
+                      rows={6}
+                      value={playgroundPrompt}
+                      onChange={(event) => setPlaygroundPrompt(event.target.value)}
+                      placeholder="Describe the image you want to generate..."
+                      className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900 resize-none"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-gray-500">Reference Images</label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={handlePlaygroundImagesChange}
+                      className="w-full text-[11px] text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-200 file:px-3 file:py-2 file:text-xs file:font-bold file:text-slate-700 hover:file:bg-slate-300"
+                    />
+                    {playgroundImages.length > 0 && (
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                        {playgroundImages.map((url, index) => (
+                          <div key={`${url}-${index}`} className="relative group rounded-xl border border-gray-100 bg-white overflow-hidden">
+                            <img src={url} alt="" className="w-full h-32 object-cover" />
+                            <button
+                              type="button"
+                              onClick={() => handleRemovePlaygroundImage(index)}
+                              className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-slate-900 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                              aria-label="Remove reference"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleRunPlayground}
+                      disabled={playgroundLoading}
+                      className="px-5 py-2.5 rounded-xl bg-black text-white text-sm font-semibold disabled:opacity-60"
+                    >
+                      {playgroundLoading ? 'Generating...' : 'Run Model'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPlaygroundPrompt('');
+                        setPlaygroundImages([]);
+                        setPlaygroundResult(null);
+                        setPlaygroundError('');
+                      }}
+                      className="px-5 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-700"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  {playgroundError && (
+                    <p className="text-sm text-red-600">{playgroundError}</p>
+                  )}
+                  {playgroundResult && (
+                    <div className="space-y-3">
+                      <div className="text-xs font-semibold uppercase tracking-widest text-gray-400">Result</div>
+                      <div className="rounded-2xl border border-gray-100 bg-white overflow-hidden">
+                        <img src={playgroundResult} alt="Generated result" className="w-full h-auto" />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : adminSubroute === '/register' ? (
               <div className="space-y-8">
                 <div>
                   <h1 className="text-3xl font-bold text-gray-900 mb-2">Admin Register</h1>
