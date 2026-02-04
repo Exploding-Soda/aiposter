@@ -159,7 +159,6 @@ const App: React.FC = () => {
   const [isPanning, setIsPanning] = useState(false);
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [theme, setTheme] = useState('');
-  const [designGuidance, setDesignGuidance] = useState('');
   const [count, setCount] = useState(4);
   const [styleImages, setStyleImages] = useState<string[]>([]);
   const [logoImage, setLogoImage] = useState<string | null>(null);
@@ -349,7 +348,6 @@ const App: React.FC = () => {
 
   const resetGeneratorForm = useCallback(() => {
     setTheme('');
-    setDesignGuidance('');
     setStyleImages([]);
     setLogoImage(null);
     setFontReferenceImage(null);
@@ -891,7 +889,6 @@ const App: React.FC = () => {
       y: activeProject.view?.y ?? 0
     });
     setTheme('');
-    setDesignGuidance('');
     setStatus(AppStatus.IDLE);
     setStyleImages(activeProject.styleImages || []);
     setLogoImage(activeProject.logoImage || null);
@@ -4040,7 +4037,7 @@ Return ONLY valid JSON in the format:
     const currentLogoImage = logoImage;
     const currentFont = selectedServerFont;
     const currentFontReferenceImage = fontReferenceImage;
-    const currentDesignGuidance = designGuidance;
+    const currentDesignGuidance = '';
 
     // Clear generator inputs immediately after submission
     resetGeneratorForm();
@@ -5610,22 +5607,6 @@ Return ONLY valid JSON in the format:
                 value={theme}
                 onChange={(e) => setTheme(e.target.value)}
               />
-              <motion.div layout className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                  Design Guidance (optional)
-                </label>
-                <motion.textarea
-                  layout
-                  className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-1 focus:ring-blue-500 outline-none resize-none"
-                  rows={3}
-                  placeholder="Add strict design rules or constraints..."
-                  value={designGuidance}
-                  onChange={(e) => setDesignGuidance(e.target.value)}
-                />
-                <motion.div layout className="text-[10px] text-slate-400">
-                  This text is appended to the image model prompt.
-                </motion.div>
-              </motion.div>
               <motion.div layout className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                   Uploaded Image (optional)
