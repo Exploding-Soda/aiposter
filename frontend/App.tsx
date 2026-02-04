@@ -425,15 +425,8 @@ const App: React.FC = () => {
 
   const resetGeneratorForm = useCallback(() => {
     setTheme('');
-    setStyleImages([]);
-    setLogoImage(null);
-    setFontReferenceImage(null);
-    setSelectedServerFont('');
     setCount(4);
     setSelectedSuggestions(new Set());
-    setSelectedReferenceStyleId(null);
-    setSelectedLogoAssetId(null);
-    setSelectedFontReferenceId(null);
     if (fontReferenceInputRef.current) {
       fontReferenceInputRef.current.value = '';
     }
