@@ -300,12 +300,40 @@ const buildGeneratePosterPayload = (
   extraPrompt?: string
 ): Record<string, unknown> => {
   const userPrefix = userPrompt?.trim() ? `${userPrompt.trim()}; ` : "";
-  const fontPrefix = fontReferenceUrl && fontReferenceUrl.startsWith("data:image/")
-    ? "Generate a new poster using the font style shown in Image 2. "
-    : "";
   const hasStyleReference = styleImages.some((url) => url && url.startsWith("data:image/"));
-  const styleInstruction = hasStyleReference
-    ? "The poster style must match Image 1 as closely as possible (composition, palette, textures, lighting, mood, and overall visual language). Do not deviate."
+  const hasLogoReference = Boolean(logoUrl && logoUrl.startsWith("data:image/"));
+  const hasFontReference = Boolean(fontReferenceUrl && fontReferenceUrl.startsWith("data:image/"));
+
+  const imageOrder: Array<{ kind: "style" | "logo" | "font"; url: string }> = [];
+  styleImages.forEach((url) => {
+    if (url && url.startsWith("data:image/")) {
+      imageOrder.push({ kind: "style", url });
+    }
+  });
+  if (hasLogoReference && logoUrl) {
+    imageOrder.push({ kind: "logo", url: logoUrl });
+  }
+  if (hasFontReference && fontReferenceUrl) {
+    imageOrder.push({ kind: "font", url: fontReferenceUrl });
+  }
+
+  const indexOf = (kind: "style" | "logo" | "font") => {
+    const idx = imageOrder.findIndex((entry) => entry.kind === kind);
+    return idx >= 0 ? idx + 1 : null;
+  };
+
+  const styleIndex = indexOf("style");
+  const logoIndex = indexOf("logo");
+  const fontIndex = indexOf("font");
+
+  const styleInstruction = styleIndex
+    ? `The poster style must match Image ${styleIndex} as closely as possible (composition, palette, textures, lighting, mood, and overall visual language). Do not deviate.`
+    : "";
+  const logoInstruction = logoIndex
+    ? `Place the logo from Image ${logoIndex} in an appropriate position on the poster. Do not alter the logo.`
+    : "";
+  const fontPrefix = fontIndex
+    ? `Generate a new poster using the font style shown in Image ${fontIndex}. `
     : "";
   const extraInstruction = extraPrompt?.trim()
     ? `Additional design guidance: ${extraPrompt.trim()}`
@@ -318,6 +346,7 @@ const buildGeneratePosterPayload = (
         styleInstruction,
         "Create a vertical 9:16 poster.",
         buildImagePrompt(poster, logoUrl, fontReferenceUrl, targetSize),
+        logoInstruction,
         extraInstruction
       ]
         .filter(Boolean)
@@ -325,17 +354,9 @@ const buildGeneratePosterPayload = (
     }
   ];
 
-  styleImages.forEach((url) => {
-    if (url && url.startsWith("data:image/")) {
-      messageContent.push({ type: "image_url", image_url: { url } });
-    }
+  imageOrder.forEach((entry) => {
+    messageContent.push({ type: "image_url", image_url: { url: entry.url } });
   });
-  if (logoUrl && logoUrl.startsWith("data:image/")) {
-    messageContent.push({ type: "image_url", image_url: { url: logoUrl } });
-  }
-  if (fontReferenceUrl && fontReferenceUrl.startsWith("data:image/")) {
-    messageContent.push({ type: "image_url", image_url: { url: fontReferenceUrl } });
-  }
 
   return {
     model: "gemini-3-pro-image-preview",

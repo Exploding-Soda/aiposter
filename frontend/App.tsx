@@ -6080,6 +6080,11 @@ Return ONLY valid JSON in the format:
                         ref={referenceStylesScrollRef}
                         className="overflow-x-auto scrollbar-hide"
                         onScroll={() => updateScrollIndicators(referenceStylesScrollRef, setRefStylesCanLeft, setRefStylesCanRight)}
+                        onWheel={(event) => {
+                          if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+                          event.preventDefault();
+                          event.currentTarget.scrollBy({ left: event.deltaY, behavior: 'auto' });
+                        }}
                       >
                         <div
                           className="grid gap-2 pr-1"
@@ -6202,6 +6207,11 @@ Return ONLY valid JSON in the format:
                         ref={logoAssetsScrollRef}
                         className="overflow-x-auto scrollbar-hide"
                         onScroll={() => updateScrollIndicators(logoAssetsScrollRef, setLogosCanLeft, setLogosCanRight)}
+                        onWheel={(event) => {
+                          if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+                          event.preventDefault();
+                          event.currentTarget.scrollBy({ left: event.deltaY, behavior: 'auto' });
+                        }}
                       >
                         <div
                           className="grid gap-2 pr-1"
@@ -6368,6 +6378,11 @@ Return ONLY valid JSON in the format:
                           ref={fontReferencesScrollRef}
                           className="overflow-x-auto scrollbar-hide"
                           onScroll={() => updateScrollIndicators(fontReferencesScrollRef, setFontRefsCanLeft, setFontRefsCanRight)}
+                          onWheel={(event) => {
+                            if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+                            event.preventDefault();
+                            event.currentTarget.scrollBy({ left: event.deltaY, behavior: 'auto' });
+                          }}
                         >
                           <div
                             className="grid gap-2 pr-1"
