@@ -318,7 +318,6 @@ const App: React.FC = () => {
   const [playgroundLoading, setPlaygroundLoading] = useState(false);
   const [playgroundError, setPlaygroundError] = useState('');
   const imageUploadInputRef = useRef<HTMLInputElement | null>(null);
-  const styleImageInputRef = useRef<HTMLInputElement | null>(null);
   const fontReferenceInputRef = useRef<HTMLInputElement | null>(null);
 
   const isAnnotatorReady = Boolean(annotatorImage && annotatorSize.width > 0 && annotatorSize.height > 0);
@@ -377,9 +376,6 @@ const App: React.FC = () => {
     setSelectedSuggestions(new Set());
     setSelectedReferenceStyleId(null);
     setSelectedLogoAssetId(null);
-    if (styleImageInputRef.current) {
-      styleImageInputRef.current.value = '';
-    }
     if (fontReferenceInputRef.current) {
       fontReferenceInputRef.current.value = '';
     }
@@ -2581,20 +2577,6 @@ const App: React.FC = () => {
     void loadLogoAssets();
   }, [rightPanelMode, loadLogoAssets, logoAssets.length, logoAssetsLoading]);
 
-  const handleStyleImagesChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ''));
-      reader.onerror = () => reject(new Error('Failed to read image.'));
-      reader.readAsDataURL(file);
-    });
-    setStyleImages([dataUrl]);
-    setSelectedReferenceStyleId(null);
-    event.target.value = '';
-  };
-
   const handleRemoveStyleImage = (index: number) => {
     setStyleImages(prev => prev.filter((_, i) => i !== index));
     setSelectedReferenceStyleId(null);
@@ -2737,6 +2719,11 @@ const App: React.FC = () => {
   };
 
   const handleSelectReferenceStyle = async (item: ReferenceStyleItem) => {
+    if (selectedReferenceStyleId === item.id) {
+      setStyleImages([]);
+      setSelectedReferenceStyleId(null);
+      return;
+    }
     setReferenceSelectLoadingId(item.id);
     setReferenceStylesError('');
     try {
@@ -2744,9 +2731,6 @@ const App: React.FC = () => {
       const dataUrl = await fetchAuthedImageAsDataUrl(url);
       setStyleImages([dataUrl]);
       setSelectedReferenceStyleId(item.id);
-      if (styleImageInputRef.current) {
-        styleImageInputRef.current.value = '';
-      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load reference style';
       setReferenceStylesError(message);
@@ -5734,36 +5718,6 @@ Return ONLY valid JSON in the format:
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                   Reference Image (optional)
                 </label>
-                <input
-                  ref={styleImageInputRef}
-                  type="file"
-                  accept="image/*"
-                  onChange={handleStyleImagesChange}
-                  className="w-full text-[11px] text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-200 file:px-3 file:py-2 file:text-xs file:font-bold file:text-slate-700 hover:file:bg-slate-300"
-                />
-                <AnimatePresence initial={false}>
-                  {styleImages.length > 0 && (
-                    <motion.div
-                      layout
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -8 }}
-                      className="relative group w-full"
-                    >
-                      <img src={styleImages[0]} alt="" className="w-full h-24 object-cover rounded-md border border-slate-200" />
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveStyleImage(0)}
-                        className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-slate-900 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
-                        aria-label="Remove image"
-                      >
-                        ×
-                      </button>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </motion.div>
-              <motion.div layout className="space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                     Reference Styles (Personal Space)
@@ -5791,36 +5745,59 @@ Return ONLY valid JSON in the format:
                 {referenceStylesLoading ? (
                   <div className="text-[11px] text-slate-400">Loading reference styles...</div>
                 ) : referenceStyles.length > 0 ? (
-                  <div className="grid grid-cols-3 gap-2 max-h-40 overflow-y-auto pr-1">
-                    {referenceStyles.map((item) => {
-                      const isSelected = selectedReferenceStyleId === item.id;
-                      const isLoading = referenceSelectLoadingId === item.id;
-                      const thumbUrl = `${BACKEND_API}/reference/${item.thumbnail_path || item.file_path}`;
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => void handleSelectReferenceStyle(item)}
-                          disabled={isLoading}
-                          className={`relative rounded-lg border overflow-hidden focus:outline-none focus:ring-2 focus:ring-blue-500 ${isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-200 hover:border-slate-300'} ${isLoading ? 'opacity-70' : ''}`}
-                          aria-label={`Use ${item.original_name}`}
-                          title={item.original_name}
+                  <>
+                    <AnimatePresence initial={false}>
+                      {styleImages.length > 0 && (
+                        <motion.div
+                          layout
+                          initial={{ opacity: 0, y: 8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -8 }}
+                          className="relative group w-full"
                         >
-                          <img src={thumbUrl} alt={item.original_name} className="w-full h-16 object-cover" />
-                          {isSelected && (
-                            <div className="absolute bottom-1 right-1 bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
-                              Using
-                            </div>
-                          )}
-                          {isLoading && (
-                            <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
-                              <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
-                            </div>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
+                          <img src={styleImages[0]} alt="" className="w-full h-24 object-cover rounded-md border border-slate-200" />
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveStyleImage(0)}
+                            className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-slate-900 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                            aria-label="Remove image"
+                          >
+                            ×
+                          </button>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                    <div className="grid grid-cols-3 gap-2 max-h-40 overflow-y-auto pr-1">
+                      {referenceStyles.map((item) => {
+                        const isSelected = selectedReferenceStyleId === item.id;
+                        const isLoading = referenceSelectLoadingId === item.id;
+                        const thumbUrl = `${BACKEND_API}/reference/${item.thumbnail_path || item.file_path}`;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => void handleSelectReferenceStyle(item)}
+                            disabled={isLoading}
+                            className={`relative rounded-lg border overflow-hidden focus:outline-none focus:ring-2 focus:ring-blue-500 ${isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-200 hover:border-slate-300'} ${isLoading ? 'opacity-70' : ''}`}
+                            aria-label={`Use ${item.original_name}`}
+                            title={item.original_name}
+                          >
+                            <img src={thumbUrl} alt={item.original_name} className="w-full h-16 object-cover" />
+                            {isSelected && (
+                              <div className="absolute bottom-1 right-1 bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
+                                Using
+                              </div>
+                            )}
+                            {isLoading && (
+                              <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
+                                <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
                 ) : (
                   <div className="text-[11px] text-slate-400">
                     No reference styles found. Upload some in Personal Space.
