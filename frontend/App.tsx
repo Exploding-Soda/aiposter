@@ -296,6 +296,9 @@ const App: React.FC = () => {
   const [playgroundLoading, setPlaygroundLoading] = useState(false);
   const [playgroundError, setPlaygroundError] = useState('');
   const imageUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const styleImageInputRef = useRef<HTMLInputElement | null>(null);
+  const logoInputRef = useRef<HTMLInputElement | null>(null);
+  const fontReferenceInputRef = useRef<HTMLInputElement | null>(null);
 
   const isAnnotatorReady = Boolean(annotatorImage && annotatorSize.width > 0 && annotatorSize.height > 0);
   const dragState = useRef<{
@@ -341,6 +344,26 @@ const App: React.FC = () => {
         delete fadeInTimersRef.current[id];
       }, 500);
     });
+  }, []);
+
+  const resetGeneratorForm = useCallback(() => {
+    setTheme('');
+    setDesignGuidance('');
+    setStyleImages([]);
+    setLogoImage(null);
+    setFontReferenceImage(null);
+    setSelectedServerFont('');
+    setCount(4);
+    setSelectedSuggestions(new Set());
+    if (styleImageInputRef.current) {
+      styleImageInputRef.current.value = '';
+    }
+    if (logoInputRef.current) {
+      logoInputRef.current.value = '';
+    }
+    if (fontReferenceInputRef.current) {
+      fontReferenceInputRef.current.value = '';
+    }
   }, []);
 
   useEffect(() => () => {
@@ -4018,6 +4041,9 @@ Return ONLY valid JSON in the format:
     const currentFontReferenceImage = fontReferenceImage;
     const currentDesignGuidance = designGuidance;
 
+    // Clear generator inputs immediately after submission
+    resetGeneratorForm();
+
     // Create production asset pack IMMEDIATELY
     const groupId = `production-${Date.now()}`;
     const startIndex = artboards.length;
@@ -5602,6 +5628,7 @@ Return ONLY valid JSON in the format:
                   Uploaded Image (optional)
                 </label>
                 <input
+                  ref={styleImageInputRef}
                   type="file"
                   accept="image/*"
                   onChange={handleStyleImagesChange}
@@ -5626,6 +5653,7 @@ Return ONLY valid JSON in the format:
                   Logo (optional)
                 </label>
                 <input
+                  ref={logoInputRef}
                   type="file"
                   accept="image/*"
                   onChange={handleLogoChange}
@@ -5689,6 +5717,7 @@ Return ONLY valid JSON in the format:
                   Font Screenshot (optional)
                 </label>
                 <input
+                  ref={fontReferenceInputRef}
                   type="file"
                   accept="image/*"
                   onChange={handleFontReferenceChange}
