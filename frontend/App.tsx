@@ -5716,29 +5716,8 @@ Return ONLY valid JSON in the format:
               />
               <motion.div layout className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                  Reference Image (optional)
+                  Reference Styles
                 </label>
-                <div className="flex items-center justify-between">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                    Reference Styles (Personal Space)
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void loadReferenceStyles()}
-                      className="text-[10px] font-semibold text-slate-400 hover:text-slate-600"
-                    >
-                      Refresh
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleNavigate('/personal-space')}
-                      className="text-[10px] font-semibold text-slate-400 hover:text-slate-600"
-                    >
-                      Manage
-                    </button>
-                  </div>
-                </div>
                 {referenceStylesError && (
                   <div className="text-[10px] text-red-500">{referenceStylesError}</div>
                 )}
@@ -5808,27 +5787,7 @@ Return ONLY valid JSON in the format:
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                   Logo (optional)
                 </label>
-                <div className="flex items-center justify-between">
-                  <div className="text-[11px] text-slate-400">
-                    Select a logo from Personal Space.
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void loadLogoAssets()}
-                      className="text-[10px] font-semibold text-slate-400 hover:text-slate-600"
-                    >
-                      Refresh
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleNavigate('/personal-space')}
-                      className="text-[10px] font-semibold text-slate-400 hover:text-slate-600"
-                    >
-                      Manage
-                    </button>
-                  </div>
-                </div>
+                <div className="flex items-center justify-between" />
                 {logoAssetsError && (
                   <div className="text-[10px] text-red-500">{logoAssetsError}</div>
                 )}
