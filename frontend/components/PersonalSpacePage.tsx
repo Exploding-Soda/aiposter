@@ -35,6 +35,10 @@ const PersonalSpacePage: React.FC = () => {
   const [logoDeleting, setLogoDeleting] = useState<string | null>(null);
   const [logoUploadProgress, setLogoUploadProgress] = useState<number | null>(null);
   const [isLogoUploading, setIsLogoUploading] = useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [previewImageName, setPreviewImageName] = useState<string | null>(null);
+  const [previewImageSize, setPreviewImageSize] = useState<{ width: number; height: number } | null>(null);
+  const [isPreviewClosing, setIsPreviewClosing] = useState(false);
 
   const loadLogos = async () => {
     setLogosLoading(true);
@@ -158,6 +162,44 @@ const PersonalSpacePage: React.FC = () => {
     } finally {
       setReferenceDeleting(null);
     }
+  };
+
+  const handleOpenReferencePreview = (item: ReferenceStyleItem) => {
+    const baseUrl = import.meta.env.VITE_BACKEND_API || 'http://localhost:8001';
+    setPreviewImageUrl(`${baseUrl}/reference/${item.file_path}`);
+    setPreviewImageName(item.original_name);
+    setPreviewImageSize(null);
+    setIsPreviewClosing(false);
+  };
+
+  const handleOpenLogoPreview = (logo: LogoItem) => {
+    const baseUrl = import.meta.env.VITE_BACKEND_API || 'http://localhost:8001';
+    setPreviewImageUrl(`${baseUrl}${logo.webp}`);
+    setPreviewImageName(logo.filename || 'Logo');
+    setPreviewImageSize(null);
+    setIsPreviewClosing(false);
+  };
+
+  const handleClosePreview = () => {
+    if (isPreviewClosing) return;
+    setIsPreviewClosing(true);
+    window.setTimeout(() => {
+      setPreviewImageUrl(null);
+      setPreviewImageName(null);
+      setPreviewImageSize(null);
+      setIsPreviewClosing(false);
+    }, 220);
+  };
+
+  const getPreviewDimensions = () => {
+    if (!previewImageSize) return undefined;
+    const maxWidth = Math.min(window.innerWidth * 0.9, previewImageSize.width);
+    const maxHeight = Math.min(window.innerHeight * 0.8, previewImageSize.height);
+    const scale = Math.min(maxWidth / previewImageSize.width, maxHeight / previewImageSize.height, 1);
+    return {
+      width: Math.round(previewImageSize.width * scale),
+      height: Math.round(previewImageSize.height * scale)
+    };
   };
 
   const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -296,22 +338,28 @@ const PersonalSpacePage: React.FC = () => {
                       key={item.id}
                       className="aspect-square bg-gray-50 rounded-2xl border border-gray-100 overflow-hidden relative group shadow-sm"
                     >
-                      <img
-                        src={`${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/reference/${item.thumbnail_path || item.file_path}`}
-                        alt={item.original_name}
-                        className="w-full h-full object-cover transition-transform group-hover:scale-110"
-                      />
-                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteReferenceStyle(item)}
-                          disabled={referenceDeleting === item.id}
-                          className="px-3 py-1 rounded-full bg-white text-[10px] font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-60"
-                        >
-                          {referenceDeleting === item.id ? 'Deleting...' : 'Delete'}
-                        </button>
-                      </div>
-                    </div>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenReferencePreview(item)}
+                        className="absolute inset-0"
+                        aria-label={`Preview ${item.original_name}`}
+                      >
+                        <img
+                          src={`${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/reference/${item.thumbnail_path || item.file_path}`}
+                          alt={item.original_name}
+                          className="w-full h-full object-cover transition-transform group-hover:scale-110"
+                        />
+                      </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteReferenceStyle(item)}
+                      disabled={referenceDeleting === item.id}
+                      className="absolute top-2 right-2 w-7 h-7 rounded-full bg-white/90 text-gray-700 hover:bg-white text-xs font-bold shadow-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-60"
+                      aria-label="Delete reference style"
+                    >
+                      x
+                    </button>
+                  </div>
                   ))
                 ) : null}
                 <label className="aspect-square border-2 border-dashed border-gray-200 rounded-2xl flex flex-col items-center justify-center gap-2 text-gray-400 hover:border-orange-400 hover:text-orange-500 hover:bg-orange-50/30 transition-all cursor-pointer">
@@ -346,17 +394,23 @@ const PersonalSpacePage: React.FC = () => {
               ) : (
                 logos.map((logo, idx) => (
                   <div key={logo.filename || String(idx)} className="aspect-square bg-gray-50 rounded-2xl border border-gray-100 overflow-hidden relative group shadow-sm">
-                    <img src={`${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}${logo.webp}`} alt={`Logo ${idx + 1}`} className="w-full h-full object-contain p-4 transition-transform group-hover:scale-110" />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteLogo(logo)}
-                        disabled={logoDeleting === logo.filename}
-                        className="px-3 py-1 rounded-full bg-white text-[10px] font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-60"
-                      >
-                        {logoDeleting === logo.filename ? 'Deleting...' : 'Delete'}
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenLogoPreview(logo)}
+                      className="absolute inset-0"
+                      aria-label={`Preview logo ${idx + 1}`}
+                    >
+                      <img src={`${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}${logo.webp}`} alt={`Logo ${idx + 1}`} className="w-full h-full object-contain p-4 transition-transform group-hover:scale-110" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteLogo(logo)}
+                      disabled={logoDeleting === logo.filename}
+                      className="absolute top-2 right-2 w-7 h-7 rounded-full bg-white/90 text-gray-700 hover:bg-white text-xs font-bold shadow-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-60"
+                      aria-label="Delete logo"
+                    >
+                      x
+                    </button>
                   </div>
                 ))
               )}
@@ -406,6 +460,33 @@ const PersonalSpacePage: React.FC = () => {
             </div>
             <div className="text-xs text-gray-500 mt-3">
               {logoUploadProgress === null ? 'Starting...' : `${logoUploadProgress}%`}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {previewImageUrl && (
+        <div
+          className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm transition-opacity duration-200 ${isPreviewClosing ? 'opacity-0' : 'opacity-100'}`}
+          onClick={handleClosePreview}
+        >
+          <div
+            className={`relative rounded-3xl bg-white p-3 shadow-2xl transition-transform duration-200 ${isPreviewClosing ? 'scale-95' : 'scale-100'}`}
+            style={getPreviewDimensions()}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="rounded-2xl bg-gray-50 flex items-center justify-center overflow-hidden">
+              <img
+                src={previewImageUrl}
+                alt={previewImageName || 'Preview'}
+                className="w-full h-full object-contain"
+                onLoad={(event) => {
+                  const target = event.currentTarget;
+                  if (target.naturalWidth && target.naturalHeight) {
+                    setPreviewImageSize({ width: target.naturalWidth, height: target.naturalHeight });
+                  }
+                }}
+              />
             </div>
           </div>
         </div>
