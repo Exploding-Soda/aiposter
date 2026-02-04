@@ -329,6 +329,7 @@ def init_database():
       user_id TEXT NOT NULL,
       original_name TEXT NOT NULL,
       file_path TEXT NOT NULL,
+      thumbnail_path TEXT,
       mime_type TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(user_id) REFERENCES users(id)
@@ -342,6 +343,11 @@ def init_database():
     CREATE INDEX IF NOT EXISTS idx_reference_styles_created_at
     ON reference_styles(created_at DESC)
   """)
+
+  cursor.execute("PRAGMA table_info(reference_styles)")
+  reference_columns = [row[1] for row in cursor.fetchall()]
+  if "thumbnail_path" not in reference_columns:
+    cursor.execute("ALTER TABLE reference_styles ADD COLUMN thumbnail_path TEXT")
 
   conn.commit()
   conn.close()
@@ -527,10 +533,26 @@ def save_reference_file(file: UploadFile, user_id: str) -> Dict[str, Optional[st
   with open(stored_path, "wb") as f:
     f.write(content)
 
+  thumbnail_name = f"{reference_id}_thumb.webp"
+  thumbnail_path = user_dir / thumbnail_name
+  try:
+    image = Image.open(io.BytesIO(content))
+    if image.mode not in ("RGB", "RGBA"):
+      if "A" in image.getbands():
+        image = image.convert("RGBA")
+      else:
+        image = image.convert("RGB")
+    thumb = image.copy()
+    thumb.thumbnail((512, 512))
+    thumb.save(thumbnail_path, format="WEBP", quality=82, method=6)
+  except Exception:
+    thumbnail_name = None
+
   return {
     "original_name": file.filename,
     "stored_name": stored_name,
     "relative_path": f"{safe_user_id}/{stored_name}",
+    "thumbnail_relative_path": f"{safe_user_id}/{thumbnail_name}" if thumbnail_name else None,
     "mime_type": file.content_type
   }
 
@@ -1850,7 +1872,7 @@ def list_reference_styles(user: sqlite3.Row = Depends(require_current_user)):
   conn = get_db_connection()
   cursor = conn.cursor()
   cursor.execute("""
-    SELECT id, original_name, file_path, mime_type, created_at
+    SELECT id, original_name, file_path, thumbnail_path, mime_type, created_at
     FROM reference_styles
     WHERE user_id = ?
     ORDER BY created_at DESC
@@ -1867,12 +1889,19 @@ def upload_reference_style(file: UploadFile = File(...), user: sqlite3.Row = Dep
   conn = get_db_connection()
   cursor = conn.cursor()
   cursor.execute("""
-    INSERT INTO reference_styles (id, user_id, original_name, file_path, mime_type)
-    VALUES (?, ?, ?, ?, ?)
-  """, (style_id, user["id"], saved["original_name"], saved["relative_path"], saved["mime_type"]))
+    INSERT INTO reference_styles (id, user_id, original_name, file_path, thumbnail_path, mime_type)
+    VALUES (?, ?, ?, ?, ?, ?)
+  """, (
+    style_id,
+    user["id"],
+    saved["original_name"],
+    saved["relative_path"],
+    saved["thumbnail_relative_path"],
+    saved["mime_type"]
+  ))
   conn.commit()
   cursor.execute("""
-    SELECT id, original_name, file_path, mime_type, created_at
+    SELECT id, original_name, file_path, thumbnail_path, mime_type, created_at
     FROM reference_styles
     WHERE id = ?
   """, (style_id,))
@@ -1893,6 +1922,7 @@ def delete_reference_style(style_id: str, user: sqlite3.Row = Depends(require_cu
     conn.close()
     raise HTTPException(status_code=404, detail="Reference style not found")
   file_path = row["file_path"]
+  thumbnail_path = row["thumbnail_path"] if "thumbnail_path" in row.keys() else None
   conn.execute("""
     DELETE FROM reference_styles WHERE id = ? AND user_id = ?
   """, (style_id, user["id"]))
@@ -1908,6 +1938,13 @@ def delete_reference_style(style_id: str, user: sqlite3.Row = Depends(require_cu
         stored_file.unlink()
       except OSError:
         pass
+    if thumbnail_path:
+      thumb_file = (user_dir / Path(thumbnail_path).name).resolve()
+      if str(thumb_file).startswith(str(user_dir)) and thumb_file.exists() and thumb_file.is_file():
+        try:
+          thumb_file.unlink()
+        except OSError:
+          pass
 
   return JSONResponse({"ok": True})
 

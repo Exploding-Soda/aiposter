@@ -3,9 +3,6 @@ import {
   Globe,
   HardDrive,
   FileText,
-  Upload,
-  ChevronLeft,
-  ChevronRight,
   Image as ImageIcon,
   Plus
 } from 'lucide-react';
@@ -15,6 +12,7 @@ type ReferenceStyleItem = {
   id: string;
   original_name: string;
   file_path: string;
+  thumbnail_path?: string | null;
   mime_type?: string | null;
   created_at: string;
 };
@@ -25,7 +23,6 @@ type LogoItem = {
 };
 
 const PersonalSpacePage: React.FC = () => {
-  const [selectedStyle, setSelectedStyle] = useState<ReferenceStyleItem | null>(null);
   const [referenceStyles, setReferenceStyles] = useState<ReferenceStyleItem[]>([]);
   const [referenceLoading, setReferenceLoading] = useState(true);
   const [referenceError, setReferenceError] = useState('');
@@ -271,124 +268,58 @@ const PersonalSpacePage: React.FC = () => {
         </div>
 
         <div className="lg:col-span-2 space-y-6">
-          <section className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden min-h-[420px] flex flex-col">
-            <div className="p-6 border-b border-gray-50 flex items-center justify-between bg-white sticky top-0 z-10">
+          <section className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 flex flex-col">
+            <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-3">
-                {selectedStyle ? (
-                  <button
-                    onClick={() => setSelectedStyle(null)}
-                    className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
-                  >
-                    <ChevronLeft size={20} />
-                  </button>
-                ) : (
-                  <div className="p-2 bg-orange-50 text-orange-600 rounded-xl">
-                    <FileText size={18} />
-                  </div>
-                )}
-                <h3 className="font-bold text-gray-900">
-                  {selectedStyle ? selectedStyle.original_name : 'Reference Styles'}
-                </h3>
+                <div className="p-2 bg-orange-50 text-orange-600 rounded-xl">
+                  <FileText size={18} />
+                </div>
+                <h3 className="font-bold text-gray-900">Reference Styles</h3>
               </div>
 
-              {!selectedStyle && (
-                <div className="flex items-center gap-2">
-                  <label className="flex items-center gap-2 px-3 py-2 bg-black text-white rounded-xl text-xs font-bold cursor-pointer hover:bg-gray-800 transition-all">
-                    <Upload size={14} />
-                    <span>Upload image</span>
-                    <input type="file" className="hidden" accept="image/*" onChange={handleReferenceUpload} />
-                  </label>
-                </div>
-              )}
+              <label className="p-2 hover:bg-gray-100 rounded-full cursor-pointer transition-colors">
+                <Plus size={20} className="text-gray-400 hover:text-gray-900" />
+                <input type="file" className="hidden" accept="image/*" onChange={handleReferenceUpload} />
+              </label>
             </div>
 
-            <div className="flex-1 p-4 overflow-y-auto">
+            <div className="flex-1">
               {referenceError && (
                 <div className="text-xs text-red-600 mb-3">{referenceError}</div>
               )}
-              {!selectedStyle ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {referenceLoading && referenceStyles.length === 0 ? (
-                    <div className="col-span-full text-sm text-gray-400">Loading reference styles...</div>
-                  ) : referenceStyles.length > 0 ? (
-                    referenceStyles.map((item) => (
-                      <div
-                        key={item.id}
-                        className="p-3 border border-gray-100 rounded-2xl hover:bg-gray-50 transition-colors flex items-center justify-between gap-3 group"
-                      >
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                {referenceLoading && referenceStyles.length === 0 ? (
+                  <div className="col-span-full text-sm text-gray-400">Loading reference styles...</div>
+                ) : referenceStyles.length > 0 ? (
+                  referenceStyles.map((item) => (
+                    <div
+                      key={item.id}
+                      className="aspect-square bg-gray-50 rounded-2xl border border-gray-100 overflow-hidden relative group shadow-sm"
+                    >
+                      <img
+                        src={`${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/reference/${item.thumbnail_path || item.file_path}`}
+                        alt={item.original_name}
+                        className="w-full h-full object-cover transition-transform group-hover:scale-110"
+                      />
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                         <button
                           type="button"
-                          onClick={() => setSelectedStyle(item)}
-                          className="flex-1 flex items-center gap-4 text-left"
+                          onClick={() => handleDeleteReferenceStyle(item)}
+                          disabled={referenceDeleting === item.id}
+                          className="px-3 py-1 rounded-full bg-white text-[10px] font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-60"
                         >
-                          <div className="h-16 w-16 rounded-xl overflow-hidden bg-gray-50 border border-gray-100">
-                            <img
-                              src={`${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/reference/${item.file_path}`}
-                              alt={item.original_name}
-                              className="w-full h-full object-cover"
-                            />
-                          </div>
-                          <div>
-                            <p className="text-sm font-bold text-gray-900 break-all">
-                              {item.original_name}
-                            </p>
-                            <p className="text-xs text-gray-500">
-                              {new Date(item.created_at).toLocaleString()}
-                            </p>
-                          </div>
+                          {referenceDeleting === item.id ? 'Deleting...' : 'Delete'}
                         </button>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteReferenceStyle(item)}
-                            disabled={referenceDeleting === item.id}
-                            className="text-xs font-semibold text-red-500 hover:text-red-600 disabled:opacity-60"
-                          >
-                            {referenceDeleting === item.id ? 'Deleting...' : 'Delete'}
-                          </button>
-                          <ChevronRight size={16} className="text-gray-300 group-hover:text-gray-900 transition-all group-hover:translate-x-1" />
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="h-48 flex flex-col items-center justify-center text-gray-400 col-span-full">
-                      <FileText size={48} strokeWidth={1} className="mb-2 opacity-20" />
-                      <p className="text-sm font-medium">No reference styles yet</p>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="space-y-4 animate-in slide-in-from-right-4 duration-300">
-                  <div className="text-xs font-semibold text-gray-400 uppercase tracking-widest">
-                    Reference Preview
-                  </div>
-                  <div className="rounded-2xl border border-gray-100 overflow-hidden bg-gray-50">
-                    <img
-                      src={`${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/reference/${selectedStyle.file_path}`}
-                      alt={selectedStyle.original_name}
-                      className="w-full h-auto object-contain"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-sm font-semibold text-gray-900 break-all">
-                        {selectedStyle.original_name}
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        Uploaded {new Date(selectedStyle.created_at).toLocaleString()}
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteReferenceStyle(selectedStyle)}
-                      disabled={referenceDeleting === selectedStyle.id}
-                      className="px-3 py-1 rounded-full bg-red-50 text-[10px] font-semibold text-red-600 hover:bg-red-100 disabled:opacity-60"
-                    >
-                      {referenceDeleting === selectedStyle.id ? 'Deleting...' : 'Delete'}
-                    </button>
-                  </div>
-                </div>
-              )}
+                  ))
+                ) : null}
+                <label className="aspect-square border-2 border-dashed border-gray-200 rounded-2xl flex flex-col items-center justify-center gap-2 text-gray-400 hover:border-orange-400 hover:text-orange-500 hover:bg-orange-50/30 transition-all cursor-pointer">
+                  <Plus size={24} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider">Add Image</span>
+                  <input type="file" className="hidden" accept="image/*" onChange={handleReferenceUpload} />
+                </label>
+              </div>
             </div>
           </section>
 
