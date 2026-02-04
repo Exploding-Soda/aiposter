@@ -43,6 +43,7 @@ BACKEND_DIR = Path(__file__).parent
 DB_PATH = BACKEND_DIR / "projects.db"
 FILES_DIR = BACKEND_DIR / "db" / "files"
 LOGOS_DIR = BACKEND_DIR / "db" / "logos"
+REFERENCE_DIR = BACKEND_DIR / "db" / "reference"
 
 # Auth configuration
 ACCESS_TOKEN_TTL_MINUTES = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "15"))
@@ -190,6 +191,7 @@ def init_database():
   # Create files directory for storing images
   FILES_DIR.mkdir(parents=True, exist_ok=True)
   LOGOS_DIR.mkdir(parents=True, exist_ok=True)
+  REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
 
   conn = sqlite3.connect(str(DB_PATH))
   cursor = conn.cursor()
@@ -320,11 +322,33 @@ def init_database():
     ON design_guidance(created_at DESC)
   """)
 
+  # Create reference_styles table for reference image entries
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS reference_styles (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      mime_type TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    )
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_reference_styles_user_id
+    ON reference_styles(user_id)
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_reference_styles_created_at
+    ON reference_styles(created_at DESC)
+  """)
+
   conn.commit()
   conn.close()
   print(f"[info] Database initialized at {DB_PATH}")
   print(f"[info] Files directory at {FILES_DIR}")
   print(f"[info] Logos directory at {LOGOS_DIR}")
+  print(f"[info] Reference directory at {REFERENCE_DIR}")
 
 
 def get_db_connection():
@@ -477,6 +501,37 @@ def save_logo_files(file: UploadFile, user_id: str) -> Dict[str, str]:
   return {
     "original": f"{safe_user_id}/{original_name}",
     "webp": f"{safe_user_id}/{webp_name}"
+  }
+
+
+def save_reference_file(file: UploadFile, user_id: str) -> Dict[str, Optional[str]]:
+  if not file.filename:
+    raise HTTPException(status_code=400, detail="Missing filename")
+  ext = Path(file.filename).suffix.lower()
+  if ext not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+    raise HTTPException(status_code=400, detail="Unsupported image type")
+
+  safe_user_id = sanitize_user_id(user_id)
+  user_dir = (REFERENCE_DIR / safe_user_id).resolve()
+  if not str(user_dir).startswith(str(REFERENCE_DIR.resolve())):
+    raise HTTPException(status_code=400, detail="Invalid reference path")
+  user_dir.mkdir(parents=True, exist_ok=True)
+
+  content = file.file.read()
+  if not content:
+    raise HTTPException(status_code=400, detail="Empty file")
+
+  reference_id = str(uuid.uuid4())
+  stored_name = f"{reference_id}{ext}"
+  stored_path = user_dir / stored_name
+  with open(stored_path, "wb") as f:
+    f.write(content)
+
+  return {
+    "original_name": file.filename,
+    "stored_name": stored_name,
+    "relative_path": f"{safe_user_id}/{stored_name}",
+    "mime_type": file.content_type
   }
 
 
@@ -1788,6 +1843,86 @@ def delete_design_guidance(
   conn.commit()
   conn.close()
   return JSONResponse({"ok": True})
+
+
+@app.get("/reference-styles")
+def list_reference_styles(user: sqlite3.Row = Depends(require_current_user)):
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT id, original_name, file_path, mime_type, created_at
+    FROM reference_styles
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+  """, (user["id"],))
+  rows = cursor.fetchall()
+  conn.close()
+  return JSONResponse({"items": [dict(row) for row in rows]})
+
+
+@app.post("/reference-styles/upload")
+def upload_reference_style(file: UploadFile = File(...), user: sqlite3.Row = Depends(require_current_user)):
+  saved = save_reference_file(file, user["id"])
+  style_id = str(uuid.uuid4())
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    INSERT INTO reference_styles (id, user_id, original_name, file_path, mime_type)
+    VALUES (?, ?, ?, ?, ?)
+  """, (style_id, user["id"], saved["original_name"], saved["relative_path"], saved["mime_type"]))
+  conn.commit()
+  cursor.execute("""
+    SELECT id, original_name, file_path, mime_type, created_at
+    FROM reference_styles
+    WHERE id = ?
+  """, (style_id,))
+  row = cursor.fetchone()
+  conn.close()
+  return JSONResponse({"item": dict(row)})
+
+
+@app.delete("/reference-styles/{style_id}")
+def delete_reference_style(style_id: str, user: sqlite3.Row = Depends(require_current_user)):
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT id, file_path FROM reference_styles WHERE id = ? AND user_id = ?
+  """, (style_id, user["id"]))
+  row = cursor.fetchone()
+  if not row:
+    conn.close()
+    raise HTTPException(status_code=404, detail="Reference style not found")
+  file_path = row["file_path"]
+  conn.execute("""
+    DELETE FROM reference_styles WHERE id = ? AND user_id = ?
+  """, (style_id, user["id"]))
+  conn.commit()
+  conn.close()
+
+  safe_user_id = sanitize_user_id(user["id"])
+  user_dir = (REFERENCE_DIR / safe_user_id).resolve()
+  if str(user_dir).startswith(str(REFERENCE_DIR.resolve())):
+    stored_file = (user_dir / Path(file_path).name).resolve()
+    if str(stored_file).startswith(str(user_dir)) and stored_file.exists() and stored_file.is_file():
+      try:
+        stored_file.unlink()
+      except OSError:
+        pass
+
+  return JSONResponse({"ok": True})
+
+
+@app.get("/reference/{username}/{filename}")
+def get_reference_style_file(username: str, filename: str):
+  safe_username = sanitize_user_id(username)
+  if safe_username != username:
+    raise HTTPException(status_code=404, detail="Reference file not found")
+  file_path = (REFERENCE_DIR / safe_username / filename).resolve()
+  if not str(file_path).startswith(str(REFERENCE_DIR.resolve())):
+    raise HTTPException(status_code=400, detail="Invalid reference path")
+  if not file_path.exists() or not file_path.is_file():
+    raise HTTPException(status_code=404, detail="Reference file not found")
+  return FileResponse(file_path)
 
 
 # Project management endpoints
