@@ -6,7 +6,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AppStatus, PosterDraft, PlanningStep, Artboard, Asset, Selection, AssetType, Project, TextLayout, TextStyleMap, Connection } from './types';
 import { planPosters, generatePosterImage, generatePosterNoTextImage, generatePosterMergedImage, refinePoster, chatWithModel, ChatMessage, editPosterWithMarkup, generatePosterResolutionFromImage, generatePosterImageAsync, getAITaskStatus, extractImageFromTaskResult, getPendingAITasks, AITaskStatus, generateImageFromPrompt } from './services/geminiService';
-import { AuthUser, fetchWithAuth, loginUser, logoutUser, refreshAccessToken, registerUser } from './services/authService';
+import { AuthUser, fetchWithAuth, getAccessToken, loginUser, logoutUser, refreshAccessToken, registerUser } from './services/authService';
 import PosterCard from './components/PosterCard';
 import LandingPage from './components/LandingPage';
 import PersonalSpacePage from './components/PersonalSpacePage';
@@ -153,6 +153,32 @@ const computeProductionMetrics = (
     groupHeight
   };
 };
+
+const UploadingModal: React.FC<{ open: boolean; title: string; progress: number | null; barClassName: string }> = ({
+  open,
+  title,
+  progress,
+  barClassName
+}) => {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+      <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl">
+        <div className="text-sm font-semibold text-gray-900 mb-2">{title}</div>
+        <div className="text-xs text-gray-400 mb-4">Please keep this window open.</div>
+        <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+          <div
+            className={`${barClassName} transition-all`}
+            style={{ width: `${progress ?? 0}%` }}
+          />
+        </div>
+        <div className="text-xs text-gray-500 mt-3">
+          {progress === null ? 'Starting...' : `${progress}%`}
+        </div>
+      </div>
+    </div>
+  );
+};
 const App: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -220,16 +246,22 @@ const App: React.FC = () => {
   const [referenceStylesError, setReferenceStylesError] = useState('');
   const [selectedReferenceStyleId, setSelectedReferenceStyleId] = useState<string | null>(null);
   const [referenceSelectLoadingId, setReferenceSelectLoadingId] = useState<string | null>(null);
+  const [referenceUploadProgress, setReferenceUploadProgress] = useState<number | null>(null);
+  const [isReferenceUploading, setIsReferenceUploading] = useState(false);
   const [logoAssets, setLogoAssets] = useState<LogoItem[]>([]);
   const [logoAssetsLoading, setLogoAssetsLoading] = useState(false);
   const [logoAssetsError, setLogoAssetsError] = useState('');
   const [selectedLogoAssetId, setSelectedLogoAssetId] = useState<string | null>(null);
   const [logoSelectLoadingId, setLogoSelectLoadingId] = useState<string | null>(null);
+  const [logoUploadProgress, setLogoUploadProgress] = useState<number | null>(null);
+  const [isLogoUploading, setIsLogoUploading] = useState(false);
   const [fontReferences, setFontReferences] = useState<FontReferenceItem[]>([]);
   const [fontReferencesLoading, setFontReferencesLoading] = useState(false);
   const [fontReferencesError, setFontReferencesError] = useState('');
   const [selectedFontReferenceId, setSelectedFontReferenceId] = useState<string | null>(null);
   const [fontReferenceSelectLoadingId, setFontReferenceSelectLoadingId] = useState<string | null>(null);
+  const [fontReferenceUploadProgress, setFontReferenceUploadProgress] = useState<number | null>(null);
+  const [isFontReferenceUploading, setIsFontReferenceUploading] = useState(false);
   const [fadeInCanvasAssetIds, setFadeInCanvasAssetIds] = useState<Set<string>>(new Set());
   const [feedbackSuggestions, setFeedbackSuggestions] = useState<string[]>([]);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
@@ -332,6 +364,9 @@ const App: React.FC = () => {
   const [playgroundError, setPlaygroundError] = useState('');
   const imageUploadInputRef = useRef<HTMLInputElement | null>(null);
   const fontReferenceInputRef = useRef<HTMLInputElement | null>(null);
+  const referenceStyleUploadRef = useRef<HTMLInputElement | null>(null);
+  const logoAssetUploadRef = useRef<HTMLInputElement | null>(null);
+  const fontReferenceUploadRef = useRef<HTMLInputElement | null>(null);
 
   const isAnnotatorReady = Boolean(annotatorImage && annotatorSize.width > 0 && annotatorSize.height > 0);
   const dragState = useRef<{
@@ -2591,6 +2626,159 @@ const App: React.FC = () => {
       setFontReferencesLoading(false);
     }
   }, [authUser]);
+
+  const handleUploadReferenceStyle = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setReferenceStylesError('');
+    setIsReferenceUploading(true);
+    setReferenceUploadProgress(0);
+    try {
+      const url = `${BACKEND_API}/reference-styles/upload`;
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        const token = getAccessToken();
+        if (token) {
+          xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        }
+        xhr.withCredentials = true;
+        xhr.upload.onprogress = (evt) => {
+          if (evt.lengthComputable) {
+            const percent = Math.round((evt.loaded / evt.total) * 100);
+            setReferenceUploadProgress(percent);
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve();
+            return;
+          }
+          try {
+            const data = JSON.parse(xhr.responseText || '{}');
+            const message = typeof data?.detail === 'string' ? data.detail : 'Failed to upload reference style';
+            reject(new Error(message));
+          } catch (parseError) {
+            reject(parseError);
+          }
+        };
+        xhr.onerror = () => reject(new Error('Failed to upload reference style'));
+        const formData = new FormData();
+        formData.append('file', file);
+        xhr.send(formData);
+      });
+      await loadReferenceStyles();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to upload reference style';
+      setReferenceStylesError(message);
+    } finally {
+      setIsReferenceUploading(false);
+      setReferenceUploadProgress(null);
+      event.target.value = '';
+    }
+  };
+
+  const handleUploadLogoAsset = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setLogoAssetsError('');
+    setIsLogoUploading(true);
+    setLogoUploadProgress(0);
+    try {
+      const url = `${BACKEND_API}/logos/upload`;
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        const token = getAccessToken();
+        if (token) {
+          xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        }
+        xhr.withCredentials = true;
+        xhr.upload.onprogress = (evt) => {
+          if (evt.lengthComputable) {
+            const percent = Math.round((evt.loaded / evt.total) * 100);
+            setLogoUploadProgress(percent);
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve();
+            return;
+          }
+          try {
+            const data = JSON.parse(xhr.responseText || '{}');
+            const message = typeof data?.detail === 'string' ? data.detail : 'Failed to upload logo';
+            reject(new Error(message));
+          } catch (parseError) {
+            reject(parseError);
+          }
+        };
+        xhr.onerror = () => reject(new Error('Failed to upload logo'));
+        const formData = new FormData();
+        formData.append('file', file);
+        xhr.send(formData);
+      });
+      await loadLogoAssets();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to upload logo';
+      setLogoAssetsError(message);
+    } finally {
+      setIsLogoUploading(false);
+      setLogoUploadProgress(null);
+      event.target.value = '';
+    }
+  };
+
+  const handleUploadFontReference = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setFontReferencesError('');
+    setIsFontReferenceUploading(true);
+    setFontReferenceUploadProgress(0);
+    try {
+      const url = `${BACKEND_API}/font-references/upload`;
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        const token = getAccessToken();
+        if (token) {
+          xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        }
+        xhr.withCredentials = true;
+        xhr.upload.onprogress = (evt) => {
+          if (evt.lengthComputable) {
+            const percent = Math.round((evt.loaded / evt.total) * 100);
+            setFontReferenceUploadProgress(percent);
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve();
+            return;
+          }
+          try {
+            const data = JSON.parse(xhr.responseText || '{}');
+            const message = typeof data?.detail === 'string' ? data.detail : 'Failed to upload font reference';
+            reject(new Error(message));
+          } catch (parseError) {
+            reject(parseError);
+          }
+        };
+        xhr.onerror = () => reject(new Error('Failed to upload font reference'));
+        const formData = new FormData();
+        formData.append('file', file);
+        xhr.send(formData);
+      });
+      await loadFontReferences();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to upload font reference';
+      setFontReferencesError(message);
+    } finally {
+      setIsFontReferenceUploading(false);
+      setFontReferenceUploadProgress(null);
+      event.target.value = '';
+    }
+  };
 
 
   useEffect(() => {
@@ -5847,6 +6035,17 @@ Return ONLY valid JSON in the format:
                           </button>
                         );
                       })}
+                      <label className="h-16 rounded-lg border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-1 text-slate-400 hover:border-slate-400 hover:text-slate-600 transition-colors cursor-pointer">
+                        <span className="text-base font-medium leading-none">+</span>
+                        <span className="text-[9px] font-bold uppercase tracking-widest">Add Image</span>
+                        <input
+                          ref={referenceStyleUploadRef}
+                          type="file"
+                          accept="image/*"
+                          onChange={handleUploadReferenceStyle}
+                          className="hidden"
+                        />
+                      </label>
                     </div>
                   </>
                 ) : (
@@ -5859,7 +6058,6 @@ Return ONLY valid JSON in the format:
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                   Logo (optional)
                 </label>
-                <div className="flex items-center justify-between" />
                 {logoAssetsError && (
                   <div className="text-[10px] text-red-500">{logoAssetsError}</div>
                 )}
@@ -5917,6 +6115,17 @@ Return ONLY valid JSON in the format:
                           </button>
                         );
                       })}
+                      <label className="h-16 rounded-lg border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-1 text-slate-400 hover:border-slate-400 hover:text-slate-600 transition-colors cursor-pointer">
+                        <span className="text-base font-medium leading-none">+</span>
+                        <span className="text-[9px] font-bold uppercase tracking-widest">Add Image</span>
+                        <input
+                          ref={logoAssetUploadRef}
+                          type="file"
+                          accept="image/*"
+                          onChange={handleUploadLogoAsset}
+                          className="hidden"
+                        />
+                      </label>
                     </div>
                   </>
                 ) : (
@@ -6030,6 +6239,17 @@ Return ONLY valid JSON in the format:
                             </button>
                           );
                         })}
+                        <label className="h-16 rounded-lg border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-1 text-slate-400 hover:border-slate-400 hover:text-slate-600 transition-colors cursor-pointer">
+                          <span className="text-base font-medium leading-none">+</span>
+                          <span className="text-[9px] font-bold uppercase tracking-widest">Add Image</span>
+                          <input
+                            ref={fontReferenceUploadRef}
+                            type="file"
+                            accept="image/*"
+                            onChange={handleUploadFontReference}
+                            className="hidden"
+                          />
+                        </label>
                       </div>
                     )}
                   </>
@@ -6194,6 +6414,25 @@ Return ONLY valid JSON in the format:
         {rightPanelMode === 'generator' && null}
         </aside>
       )}
+
+      <UploadingModal
+        open={isReferenceUploading}
+        title="Uploading reference"
+        progress={referenceUploadProgress}
+        barClassName="h-full bg-orange-500"
+      />
+      <UploadingModal
+        open={isLogoUploading}
+        title="Uploading logo"
+        progress={logoUploadProgress}
+        barClassName="h-full bg-emerald-500"
+      />
+      <UploadingModal
+        open={isFontReferenceUploading}
+        title="Uploading font reference"
+        progress={fontReferenceUploadProgress}
+        barClassName="h-full bg-indigo-500"
+      />
 
       {isPosterModalOpen && activePoster && editablePoster && (
         <div
