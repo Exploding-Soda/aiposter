@@ -6028,9 +6028,20 @@ Return ONLY valid JSON in the format:
                 onChange={(e) => setTheme(e.target.value)}
               />
               <motion.div layout className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                  Reference Styles (optional)
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                    Reference Styles (optional)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => handleNavigate('/personal-space')}
+                    className="text-sm font-semibold text-slate-400 hover:text-slate-600"
+                    aria-label="Open Personal Space"
+                    title="Open Personal Space"
+                  >
+                    ⚙
+                  </button>
+                </div>
                 {referenceStylesError && (
                   <div className="text-[10px] text-red-500">{referenceStylesError}</div>
                 )}
@@ -6139,9 +6150,20 @@ Return ONLY valid JSON in the format:
                 )}
               </motion.div>
               <motion.div layout className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                  Logo (optional)
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                    Logo (optional)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => handleNavigate('/personal-space')}
+                    className="text-sm font-semibold text-slate-400 hover:text-slate-600"
+                    aria-label="Open Personal Space"
+                    title="Open Personal Space"
+                  >
+                    ⚙
+                  </button>
+                </div>
                 {logoAssetsError && (
                   <div className="text-[10px] text-red-500">{logoAssetsError}</div>
                 )}
@@ -6250,9 +6272,20 @@ Return ONLY valid JSON in the format:
                 )}
               </motion.div>
               <motion.div layout className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                  Font (optional)
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                    Font (optional)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => handleNavigate('/personal-space')}
+                    className="text-sm font-semibold text-slate-400 hover:text-slate-600"
+                    aria-label="Open Personal Space"
+                    title="Open Personal Space"
+                  >
+                    ⚙
+                  </button>
+                </div>
                 {availableFonts.length > 0 ? (
                   <>
                     {!selectedServerFont && !fontReferenceImage && (
