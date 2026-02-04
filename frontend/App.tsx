@@ -1,6 +1,7 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, MousePointer2, GripHorizontal, Hand, Sparkles, Loader2, ArrowLeft, Search, Bold, Italic, Underline, Download, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, MessageCircle, Pencil, Square, ArrowUpRight, ImagePlus, Home } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AppStatus, PosterDraft, PlanningStep, Artboard, Asset, Selection, AssetType, Project, TextLayout, TextStyleMap, Connection } from './types';
@@ -5597,33 +5598,35 @@ Return ONLY valid JSON in the format:
       {rightPanelMode && (
         <aside className="w-80 max-h-screen overflow-y-auto border-l border-slate-200 bg-white p-5 flex flex-col space-y-6 z-50">
           {rightPanelMode === 'generator' ? (
-            <div className="space-y-3 rounded-2xl border border-slate-200 p-4 bg-slate-50">
-              <div className="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-widest">
+            <motion.div layout className="space-y-3 rounded-2xl border border-slate-200 p-4 bg-slate-50">
+              <motion.div layout className="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-widest">
                 <Sparkles className="w-3.5 h-3.5" /> AI Poster Generator
-              </div>
-              <textarea
+              </motion.div>
+              <motion.textarea
+                layout
                 className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-1 focus:ring-blue-500 outline-none resize-none"
                 rows={4}
                 placeholder="Describe the event, mood, and style..."
                 value={theme}
                 onChange={(e) => setTheme(e.target.value)}
               />
-              <div className="space-y-2">
+              <motion.div layout className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                   Design Guidance (optional)
                 </label>
-                <textarea
+                <motion.textarea
+                  layout
                   className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-1 focus:ring-blue-500 outline-none resize-none"
                   rows={3}
                   placeholder="Add strict design rules or constraints..."
                   value={designGuidance}
                   onChange={(e) => setDesignGuidance(e.target.value)}
                 />
-                <div className="text-[10px] text-slate-400">
+                <motion.div layout className="text-[10px] text-slate-400">
                   This text is appended to the image model prompt.
-                </div>
-              </div>
-              <div className="space-y-2">
+                </motion.div>
+              </motion.div>
+              <motion.div layout className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                   Uploaded Image (optional)
                 </label>
@@ -5634,21 +5637,29 @@ Return ONLY valid JSON in the format:
                   onChange={handleStyleImagesChange}
                   className="w-full text-[11px] text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-200 file:px-3 file:py-2 file:text-xs file:font-bold file:text-slate-700 hover:file:bg-slate-300"
                 />
-                {styleImages.length > 0 && (
-                  <div className="relative group w-full">
-                    <img src={styleImages[0]} alt="" className="w-full h-24 object-cover rounded-md border border-slate-200" />
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveStyleImage(0)}
-                      className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-slate-900 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
-                      aria-label="Remove image"
+                <AnimatePresence initial={false}>
+                  {styleImages.length > 0 && (
+                    <motion.div
+                      layout
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      className="relative group w-full"
                     >
-                      ×
-                    </button>
-                  </div>
-                )}
-              </div>
-              <div className="space-y-2">
+                      <img src={styleImages[0]} alt="" className="w-full h-24 object-cover rounded-md border border-slate-200" />
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveStyleImage(0)}
+                        className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-slate-900 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                        aria-label="Remove image"
+                      >
+                        ×
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </motion.div>
+              <motion.div layout className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                   Logo (optional)
                 </label>
@@ -5659,21 +5670,29 @@ Return ONLY valid JSON in the format:
                   onChange={handleLogoChange}
                   className="w-full text-[11px] text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-200 file:px-3 file:py-2 file:text-xs file:font-bold file:text-slate-700 hover:file:bg-slate-300"
                 />
-                {logoImage && (
-                  <div className="relative group w-full h-24 rounded-md border border-slate-200 bg-white flex items-center justify-center overflow-hidden">
-                    <img src={logoImage} alt="Logo preview" className="max-h-full max-w-full object-contain" />
-                    <button
-                      type="button"
-                      onClick={handleRemoveLogo}
-                      className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-slate-900 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
-                      aria-label="Remove logo"
+                <AnimatePresence initial={false}>
+                  {logoImage && (
+                    <motion.div
+                      layout
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      className="relative group w-full h-24 rounded-md border border-slate-200 bg-white flex items-center justify-center overflow-hidden"
                     >
-                      ×
-                    </button>
-                  </div>
-                )}
-              </div>
-              <div className="space-y-2">
+                      <img src={logoImage} alt="Logo preview" className="max-h-full max-w-full object-contain" />
+                      <button
+                        type="button"
+                        onClick={handleRemoveLogo}
+                        className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-slate-900 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                        aria-label="Remove logo"
+                      >
+                        ×
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </motion.div>
+              <motion.div layout className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                   Font (optional)
                 </label>
@@ -5711,8 +5730,8 @@ Return ONLY valid JSON in the format:
                 ) : (
                   <div className="text-[11px] text-slate-400">Loading fonts...</div>
                 )}
-              </div>
-              <div className="space-y-2">
+              </motion.div>
+              <motion.div layout className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                   Font Screenshot (optional)
                 </label>
@@ -5724,35 +5743,59 @@ Return ONLY valid JSON in the format:
                   disabled={Boolean(selectedServerFont)}
                   className="w-full text-[11px] text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-200 file:px-3 file:py-2 file:text-xs file:font-bold file:text-slate-700 hover:file:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-70"
                 />
-                {selectedServerFont && (
-                  <div className="text-[10px] text-slate-400">
-                    Font selected. Upload disabled.
-                  </div>
-                )}
-                {fontReferenceImage && (
-                  <div className="relative group w-full">
-                    <img
-                      src={fontReferenceImage}
-                      alt="Font reference preview"
-                      className="w-full h-24 object-contain rounded-md border border-slate-200 bg-white"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleRemoveFontReferenceImage}
-                      className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-slate-900 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
-                      aria-label="Remove font reference"
+                <AnimatePresence initial={false}>
+                  {selectedServerFont && (
+                    <motion.div
+                      layout
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      className="text-[10px] text-slate-400"
                     >
-                      ×
-                    </button>
-                  </div>
-                )}
-                {fontReferenceImage && (
-                  <div className="text-[10px] text-slate-400">
-                    Using uploaded font reference for generation.
-                  </div>
-                )}
-              </div>
-              <div className="grid grid-cols-4 gap-2">
+                      Font selected. Upload disabled.
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                <AnimatePresence initial={false}>
+                  {fontReferenceImage && (
+                    <motion.div
+                      layout
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      className="relative group w-full"
+                    >
+                      <img
+                        src={fontReferenceImage}
+                        alt="Font reference preview"
+                        className="w-full h-24 object-contain rounded-md border border-slate-200 bg-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleRemoveFontReferenceImage}
+                        className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-slate-900 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                        aria-label="Remove font reference"
+                      >
+                        ×
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                <AnimatePresence initial={false}>
+                  {fontReferenceImage && (
+                    <motion.div
+                      layout
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      className="text-[10px] text-slate-400"
+                    >
+                      Using uploaded font reference for generation.
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </motion.div>
+              <motion.div layout className="grid grid-cols-4 gap-2">
                 {[1, 2, 4, 6].map(num => (
                   <button
                     key={num}
@@ -5762,16 +5805,17 @@ Return ONLY valid JSON in the format:
                     {num}
                   </button>
                 ))}
-              </div>
-              <button
+              </motion.div>
+              <motion.button
+                layout
                 onClick={startProduction}
                 disabled={!theme.trim()}
                 className="w-full bg-black text-white text-xs font-bold uppercase tracking-widest py-3 rounded-lg flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 <Sparkles className="w-4 h-4" />
                 Generate Posters
-              </button>
-            </div>
+              </motion.button>
+            </motion.div>
           ) : rightPanelMode === 'gallery' ? (
             <div className="space-y-3 rounded-2xl border border-slate-200 p-4 bg-slate-50">
               <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase tracking-widest">
