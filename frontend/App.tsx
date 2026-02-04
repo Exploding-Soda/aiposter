@@ -262,6 +262,12 @@ const App: React.FC = () => {
   const [fontReferenceSelectLoadingId, setFontReferenceSelectLoadingId] = useState<string | null>(null);
   const [fontReferenceUploadProgress, setFontReferenceUploadProgress] = useState<number | null>(null);
   const [isFontReferenceUploading, setIsFontReferenceUploading] = useState(false);
+  const [refStylesCanLeft, setRefStylesCanLeft] = useState(false);
+  const [refStylesCanRight, setRefStylesCanRight] = useState(false);
+  const [logosCanLeft, setLogosCanLeft] = useState(false);
+  const [logosCanRight, setLogosCanRight] = useState(false);
+  const [fontRefsCanLeft, setFontRefsCanLeft] = useState(false);
+  const [fontRefsCanRight, setFontRefsCanRight] = useState(false);
   const [fadeInCanvasAssetIds, setFadeInCanvasAssetIds] = useState<Set<string>>(new Set());
   const [feedbackSuggestions, setFeedbackSuggestions] = useState<string[]>([]);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
@@ -367,6 +373,9 @@ const App: React.FC = () => {
   const referenceStyleUploadRef = useRef<HTMLInputElement | null>(null);
   const logoAssetUploadRef = useRef<HTMLInputElement | null>(null);
   const fontReferenceUploadRef = useRef<HTMLInputElement | null>(null);
+  const referenceStylesScrollRef = useRef<HTMLDivElement | null>(null);
+  const logoAssetsScrollRef = useRef<HTMLDivElement | null>(null);
+  const fontReferencesScrollRef = useRef<HTMLDivElement | null>(null);
 
   const isAnnotatorReady = Boolean(annotatorImage && annotatorSize.width > 0 && annotatorSize.height > 0);
   const dragState = useRef<{
@@ -2997,6 +3006,50 @@ const App: React.FC = () => {
     setFontReferenceImage(null);
     setSelectedFontReferenceId(null);
   };
+
+  const updateScrollIndicators = useCallback(
+    (
+      ref: React.RefObject<HTMLDivElement>,
+      setCanLeft: React.Dispatch<React.SetStateAction<boolean>>,
+      setCanRight: React.Dispatch<React.SetStateAction<boolean>>
+    ) => {
+      const node = ref.current;
+      if (!node) return;
+      const maxLeft = node.scrollWidth - node.clientWidth;
+      const left = node.scrollLeft;
+      setCanLeft(left > 2);
+      setCanRight(left < maxLeft - 2);
+    },
+    []
+  );
+
+  const scrollRow = (ref: React.RefObject<HTMLDivElement>, direction: 'left' | 'right') => {
+    const node = ref.current;
+    if (!node) return;
+    const step = Math.max(180, Math.round(node.clientWidth * 0.8));
+    node.scrollBy({ left: direction === 'left' ? -step : step, behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    const raf = window.requestAnimationFrame(() => {
+      updateScrollIndicators(referenceStylesScrollRef, setRefStylesCanLeft, setRefStylesCanRight);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [referenceStyles.length, updateScrollIndicators]);
+
+  useEffect(() => {
+    const raf = window.requestAnimationFrame(() => {
+      updateScrollIndicators(logoAssetsScrollRef, setLogosCanLeft, setLogosCanRight);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [logoAssets.length, updateScrollIndicators]);
+
+  useEffect(() => {
+    const raf = window.requestAnimationFrame(() => {
+      updateScrollIndicators(fontReferencesScrollRef, setFontRefsCanLeft, setFontRefsCanRight);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [fontReferences.length, updateScrollIndicators]);
 
   const handleSelectLogoAsset = async (item: LogoItem) => {
     if (selectedLogoAssetId === item.filename) {
@@ -5976,7 +6029,7 @@ Return ONLY valid JSON in the format:
               />
               <motion.div layout className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                  Reference Styles
+                  Reference Styles (optional)
                 </label>
                 {referenceStylesError && (
                   <div className="text-[10px] text-red-500">{referenceStylesError}</div>
@@ -6006,46 +6059,77 @@ Return ONLY valid JSON in the format:
                         </motion.div>
                       )}
                     </AnimatePresence>
-                    <div className="grid grid-cols-3 gap-2 max-h-40 overflow-y-auto pr-1">
-                      {referenceStyles.map((item) => {
-                        const isSelected = selectedReferenceStyleId === item.id;
-                        const isLoading = referenceSelectLoadingId === item.id;
-                        const thumbUrl = `${BACKEND_API}/reference/${item.thumbnail_path || item.file_path}`;
-                        return (
-                          <button
-                            key={item.id}
-                            type="button"
-                            onClick={() => void handleSelectReferenceStyle(item)}
-                            disabled={isLoading}
-                            className={`relative rounded-lg border overflow-hidden focus:outline-none focus:ring-2 focus:ring-blue-500 ${isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-200 hover:border-slate-300'} ${isLoading ? 'opacity-70' : ''}`}
-                            aria-label={`Use ${item.original_name}`}
-                            title={item.original_name}
-                          >
-                            <img src={thumbUrl} alt={item.original_name} className="w-full h-16 object-cover" />
-                            {isSelected && (
-                              <div className="absolute bottom-1 right-1 bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
-                                Using
-                              </div>
-                            )}
-                            {isLoading && (
-                              <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
-                                <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
-                              </div>
-                            )}
-                          </button>
-                        );
-                      })}
-                      <label className="h-16 rounded-lg border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-1 text-slate-400 hover:border-slate-400 hover:text-slate-600 transition-colors cursor-pointer">
-                        <span className="text-base font-medium leading-none">+</span>
-                        <span className="text-[9px] font-bold uppercase tracking-widest">Add Image</span>
-                        <input
-                          ref={referenceStyleUploadRef}
-                          type="file"
-                          accept="image/*"
-                          onChange={handleUploadReferenceStyle}
-                          className="hidden"
-                        />
-                      </label>
+                    <div className="relative">
+                      <div
+                        ref={referenceStylesScrollRef}
+                        className="overflow-x-auto scrollbar-hide"
+                        onScroll={() => updateScrollIndicators(referenceStylesScrollRef, setRefStylesCanLeft, setRefStylesCanRight)}
+                      >
+                        <div
+                          className="grid gap-2 pr-1"
+                          style={{ gridAutoFlow: 'column', gridAutoColumns: 'calc((100% - 16px) / 3)' }}
+                        >
+                          {referenceStyles.map((item) => {
+                            const isSelected = selectedReferenceStyleId === item.id;
+                            const isLoading = referenceSelectLoadingId === item.id;
+                            const thumbUrl = `${BACKEND_API}/reference/${item.thumbnail_path || item.file_path}`;
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => void handleSelectReferenceStyle(item)}
+                                disabled={isLoading}
+                                className={`relative h-16 rounded-lg border overflow-hidden focus:outline-none focus:ring-2 focus:ring-blue-500 ${isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-200 hover:border-slate-300'} ${isLoading ? 'opacity-70' : ''}`}
+                                aria-label={`Use ${item.original_name}`}
+                                title={item.original_name}
+                              >
+                                <img src={thumbUrl} alt={item.original_name} className="w-full h-full object-cover" />
+                                {isSelected && (
+                                  <div className="absolute bottom-1 right-1 bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
+                                    Using
+                                  </div>
+                                )}
+                                {isLoading && (
+                                  <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
+                                    <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
+                                  </div>
+                                )}
+                              </button>
+                            );
+                          })}
+                          <label className="h-16 rounded-lg border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-1 text-slate-400 hover:border-slate-400 hover:text-slate-600 transition-colors cursor-pointer">
+                            <span className="text-base font-medium leading-none">+</span>
+                            <span className="text-[9px] font-bold uppercase tracking-widest">Add Image</span>
+                            <input
+                              ref={referenceStyleUploadRef}
+                              type="file"
+                              accept="image/*"
+                              onChange={handleUploadReferenceStyle}
+                              className="hidden"
+                            />
+                          </label>
+                        </div>
+                      </div>
+                      {refStylesCanLeft && (
+                        <button
+                          type="button"
+                          onClick={() => scrollRow(referenceStylesScrollRef, 'left')}
+                          className="absolute left-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-slate-700 hover:border-slate-300 shadow-sm"
+                          aria-label="Scroll left"
+                        >
+                          ‹
+                        </button>
+                      )}
+                      {refStylesCanRight && (
+                        <button
+                          type="button"
+                          onClick={() => scrollRow(referenceStylesScrollRef, 'right')}
+                          className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-slate-700 hover:border-slate-300 shadow-sm"
+                          aria-label="Scroll right"
+                        >
+                          ›
+                        </button>
+                      )}
                     </div>
                   </>
                 ) : (
@@ -6086,46 +6170,77 @@ Return ONLY valid JSON in the format:
                         </motion.div>
                       )}
                     </AnimatePresence>
-                    <div className="grid grid-cols-3 gap-2 max-h-40 overflow-y-auto pr-1">
-                      {logoAssets.map((item) => {
-                        const isSelected = selectedLogoAssetId === item.filename;
-                        const isLoading = logoSelectLoadingId === item.filename;
-                        const thumbUrl = `${BACKEND_API}${item.webp}`;
-                        return (
-                          <button
-                            key={item.filename}
-                            type="button"
-                            onClick={() => void handleSelectLogoAsset(item)}
-                            disabled={isLoading}
-                            className={`relative rounded-lg border bg-white overflow-hidden focus:outline-none focus:ring-2 focus:ring-emerald-500 ${isSelected ? 'border-emerald-500 ring-2 ring-emerald-200' : 'border-slate-200 hover:border-slate-300'} ${isLoading ? 'opacity-70' : ''}`}
-                            aria-label={`Use ${item.filename}`}
-                            title={item.filename}
-                          >
-                            <img src={thumbUrl} alt={item.filename} className="w-full h-16 object-contain p-1 bg-white" />
-                            {isSelected && (
-                              <div className="absolute bottom-1 right-1 bg-emerald-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
-                                Using
-                              </div>
-                            )}
-                            {isLoading && (
-                              <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
-                                <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
-                              </div>
-                            )}
-                          </button>
-                        );
-                      })}
-                      <label className="h-16 rounded-lg border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-1 text-slate-400 hover:border-slate-400 hover:text-slate-600 transition-colors cursor-pointer">
-                        <span className="text-base font-medium leading-none">+</span>
-                        <span className="text-[9px] font-bold uppercase tracking-widest">Add Image</span>
-                        <input
-                          ref={logoAssetUploadRef}
-                          type="file"
-                          accept="image/*"
-                          onChange={handleUploadLogoAsset}
-                          className="hidden"
-                        />
-                      </label>
+                    <div className="relative">
+                      <div
+                        ref={logoAssetsScrollRef}
+                        className="overflow-x-auto scrollbar-hide"
+                        onScroll={() => updateScrollIndicators(logoAssetsScrollRef, setLogosCanLeft, setLogosCanRight)}
+                      >
+                        <div
+                          className="grid gap-2 pr-1"
+                          style={{ gridAutoFlow: 'column', gridAutoColumns: 'calc((100% - 16px) / 3)' }}
+                        >
+                          {logoAssets.map((item) => {
+                            const isSelected = selectedLogoAssetId === item.filename;
+                            const isLoading = logoSelectLoadingId === item.filename;
+                            const thumbUrl = `${BACKEND_API}${item.webp}`;
+                            return (
+                              <button
+                                key={item.filename}
+                                type="button"
+                                onClick={() => void handleSelectLogoAsset(item)}
+                                disabled={isLoading}
+                                className={`relative h-16 rounded-lg border bg-white overflow-hidden focus:outline-none focus:ring-2 focus:ring-emerald-500 ${isSelected ? 'border-emerald-500 ring-2 ring-emerald-200' : 'border-slate-200 hover:border-slate-300'} ${isLoading ? 'opacity-70' : ''}`}
+                                aria-label={`Use ${item.filename}`}
+                                title={item.filename}
+                              >
+                                <img src={thumbUrl} alt={item.filename} className="w-full h-full object-contain p-1 bg-white" />
+                                {isSelected && (
+                                  <div className="absolute bottom-1 right-1 bg-emerald-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
+                                    Using
+                                  </div>
+                                )}
+                                {isLoading && (
+                                  <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
+                                    <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
+                                  </div>
+                                )}
+                              </button>
+                            );
+                          })}
+                          <label className="h-16 rounded-lg border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-1 text-slate-400 hover:border-slate-400 hover:text-slate-600 transition-colors cursor-pointer">
+                            <span className="text-base font-medium leading-none">+</span>
+                            <span className="text-[9px] font-bold uppercase tracking-widest">Add Image</span>
+                            <input
+                              ref={logoAssetUploadRef}
+                              type="file"
+                              accept="image/*"
+                              onChange={handleUploadLogoAsset}
+                              className="hidden"
+                            />
+                          </label>
+                        </div>
+                      </div>
+                      {logosCanLeft && (
+                        <button
+                          type="button"
+                          onClick={() => scrollRow(logoAssetsScrollRef, 'left')}
+                          className="absolute left-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-slate-700 hover:border-slate-300 shadow-sm"
+                          aria-label="Scroll left"
+                        >
+                          ‹
+                        </button>
+                      )}
+                      {logosCanRight && (
+                        <button
+                          type="button"
+                          onClick={() => scrollRow(logoAssetsScrollRef, 'right')}
+                          className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-slate-700 hover:border-slate-300 shadow-sm"
+                          aria-label="Scroll right"
+                        >
+                          ›
+                        </button>
+                      )}
                     </div>
                   </>
                 ) : (
@@ -6210,46 +6325,77 @@ Return ONLY valid JSON in the format:
                       )}
                     </AnimatePresence>
                     {!selectedServerFont && (
-                      <div className="grid grid-cols-3 gap-2 max-h-40 overflow-y-auto pr-1">
-                        {fontReferences.map((item) => {
-                          const isSelected = selectedFontReferenceId === item.id;
-                          const isLoading = fontReferenceSelectLoadingId === item.id;
-                          const thumbUrl = `${BACKEND_API}/font-reference/${item.thumbnail_path || item.file_path}`;
-                          return (
-                            <button
-                              key={item.id}
-                              type="button"
-                              onClick={() => void handleSelectFontReference(item)}
-                              disabled={isLoading}
-                              className={`relative rounded-lg border bg-white overflow-hidden focus:outline-none focus:ring-2 focus:ring-indigo-500 ${isSelected ? 'border-indigo-500 ring-2 ring-indigo-200' : 'border-slate-200 hover:border-slate-300'} ${isLoading ? 'opacity-70' : ''}`}
-                              aria-label={`Use ${item.original_name}`}
-                              title={item.original_name}
-                            >
-                              <img src={thumbUrl} alt={item.original_name} className="w-full h-16 object-cover" />
-                              {isSelected && (
-                                <div className="absolute bottom-1 right-1 bg-indigo-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
-                                  Using
-                                </div>
-                              )}
-                              {isLoading && (
-                                <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
-                                  <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
-                                </div>
-                              )}
-                            </button>
-                          );
-                        })}
-                        <label className="h-16 rounded-lg border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-1 text-slate-400 hover:border-slate-400 hover:text-slate-600 transition-colors cursor-pointer">
-                          <span className="text-base font-medium leading-none">+</span>
-                          <span className="text-[9px] font-bold uppercase tracking-widest">Add Image</span>
-                          <input
-                            ref={fontReferenceUploadRef}
-                            type="file"
-                            accept="image/*"
-                            onChange={handleUploadFontReference}
-                            className="hidden"
-                          />
-                        </label>
+                      <div className="relative">
+                        <div
+                          ref={fontReferencesScrollRef}
+                          className="overflow-x-auto scrollbar-hide"
+                          onScroll={() => updateScrollIndicators(fontReferencesScrollRef, setFontRefsCanLeft, setFontRefsCanRight)}
+                        >
+                          <div
+                            className="grid gap-2 pr-1"
+                            style={{ gridAutoFlow: 'column', gridAutoColumns: 'calc((100% - 16px) / 3)' }}
+                          >
+                            {fontReferences.map((item) => {
+                              const isSelected = selectedFontReferenceId === item.id;
+                              const isLoading = fontReferenceSelectLoadingId === item.id;
+                              const thumbUrl = `${BACKEND_API}/font-reference/${item.thumbnail_path || item.file_path}`;
+                              return (
+                                <button
+                                  key={item.id}
+                                  type="button"
+                                  onClick={() => void handleSelectFontReference(item)}
+                                  disabled={isLoading}
+                                  className={`relative h-16 rounded-lg border bg-white overflow-hidden focus:outline-none focus:ring-2 focus:ring-indigo-500 ${isSelected ? 'border-indigo-500 ring-2 ring-indigo-200' : 'border-slate-200 hover:border-slate-300'} ${isLoading ? 'opacity-70' : ''}`}
+                                  aria-label={`Use ${item.original_name}`}
+                                  title={item.original_name}
+                                >
+                                  <img src={thumbUrl} alt={item.original_name} className="w-full h-full object-cover" />
+                                  {isSelected && (
+                                    <div className="absolute bottom-1 right-1 bg-indigo-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
+                                      Using
+                                    </div>
+                                  )}
+                                  {isLoading && (
+                                    <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
+                                      <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
+                                    </div>
+                                  )}
+                                </button>
+                              );
+                            })}
+                            <label className="h-16 rounded-lg border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-1 text-slate-400 hover:border-slate-400 hover:text-slate-600 transition-colors cursor-pointer">
+                              <span className="text-base font-medium leading-none">+</span>
+                              <span className="text-[9px] font-bold uppercase tracking-widest">Add Image</span>
+                              <input
+                                ref={fontReferenceUploadRef}
+                                type="file"
+                                accept="image/*"
+                                onChange={handleUploadFontReference}
+                                className="hidden"
+                              />
+                            </label>
+                          </div>
+                        </div>
+                        {fontRefsCanLeft && (
+                          <button
+                            type="button"
+                            onClick={() => scrollRow(fontReferencesScrollRef, 'left')}
+                            className="absolute left-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-slate-700 hover:border-slate-300 shadow-sm"
+                            aria-label="Scroll left"
+                          >
+                            ‹
+                          </button>
+                        )}
+                        {fontRefsCanRight && (
+                          <button
+                            type="button"
+                            onClick={() => scrollRow(fontReferencesScrollRef, 'right')}
+                            className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-slate-700 hover:border-slate-300 shadow-sm"
+                            aria-label="Scroll right"
+                          >
+                            ›
+                          </button>
+                        )}
                       </div>
                     )}
                   </>
