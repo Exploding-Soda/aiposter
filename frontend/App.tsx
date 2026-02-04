@@ -319,7 +319,6 @@ const App: React.FC = () => {
   const [playgroundError, setPlaygroundError] = useState('');
   const imageUploadInputRef = useRef<HTMLInputElement | null>(null);
   const styleImageInputRef = useRef<HTMLInputElement | null>(null);
-  const logoInputRef = useRef<HTMLInputElement | null>(null);
   const fontReferenceInputRef = useRef<HTMLInputElement | null>(null);
 
   const isAnnotatorReady = Boolean(annotatorImage && annotatorSize.width > 0 && annotatorSize.height > 0);
@@ -380,9 +379,6 @@ const App: React.FC = () => {
     setSelectedLogoAssetId(null);
     if (styleImageInputRef.current) {
       styleImageInputRef.current.value = '';
-    }
-    if (logoInputRef.current) {
-      logoInputRef.current.value = '';
     }
     if (fontReferenceInputRef.current) {
       fontReferenceInputRef.current.value = '';
@@ -2604,20 +2600,6 @@ const App: React.FC = () => {
     setSelectedReferenceStyleId(null);
   };
 
-  const handleLogoChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ''));
-      reader.onerror = () => reject(new Error('Failed to read logo image.'));
-      reader.readAsDataURL(file);
-    });
-    setLogoImage(dataUrl);
-    setSelectedLogoAssetId(null);
-    event.target.value = '';
-  };
-
   const handleRemoveLogo = () => {
     setLogoImage(null);
     setSelectedLogoAssetId(null);
@@ -2774,6 +2756,10 @@ const App: React.FC = () => {
   };
 
   const handleSelectLogoAsset = async (item: LogoItem) => {
+    if (selectedLogoAssetId === item.filename) {
+      handleRemoveLogo();
+      return;
+    }
     setLogoSelectLoadingId(item.filename);
     setLogoAssetsError('');
     try {
@@ -2781,9 +2767,6 @@ const App: React.FC = () => {
       const dataUrl = await fetchAuthedImageAsDataUrl(url);
       setLogoImage(dataUrl);
       setSelectedLogoAssetId(item.filename);
-      if (logoInputRef.current) {
-        logoInputRef.current.value = '';
-      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load logo asset';
       setLogoAssetsError(message);
@@ -5848,40 +5831,10 @@ Return ONLY valid JSON in the format:
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                   Logo (optional)
                 </label>
-                <input
-                  ref={logoInputRef}
-                  type="file"
-                  accept="image/*"
-                  onChange={handleLogoChange}
-                  className="w-full text-[11px] text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-200 file:px-3 file:py-2 file:text-xs file:font-bold file:text-slate-700 hover:file:bg-slate-300"
-                />
-                <AnimatePresence initial={false}>
-                  {logoImage && (
-                    <motion.div
-                      layout
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -8 }}
-                      className="relative group w-full h-24 rounded-md border border-slate-200 bg-white flex items-center justify-center overflow-hidden"
-                    >
-                      <img src={logoImage} alt="Logo preview" className="max-h-full max-w-full object-contain" />
-                      <button
-                        type="button"
-                        onClick={handleRemoveLogo}
-                        className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-slate-900 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
-                        aria-label="Remove logo"
-                      >
-                        ×
-                      </button>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </motion.div>
-              <motion.div layout className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                    Logo Assets (Personal Space)
-                  </label>
+                  <div className="text-[11px] text-slate-400">
+                    Select a logo from Personal Space.
+                  </div>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
@@ -5905,36 +5858,59 @@ Return ONLY valid JSON in the format:
                 {logoAssetsLoading ? (
                   <div className="text-[11px] text-slate-400">Loading logos...</div>
                 ) : logoAssets.length > 0 ? (
-                  <div className="grid grid-cols-3 gap-2 max-h-40 overflow-y-auto pr-1">
-                    {logoAssets.map((item) => {
-                      const isSelected = selectedLogoAssetId === item.filename;
-                      const isLoading = logoSelectLoadingId === item.filename;
-                      const thumbUrl = `${BACKEND_API}${item.webp}`;
-                      return (
-                        <button
-                          key={item.filename}
-                          type="button"
-                          onClick={() => void handleSelectLogoAsset(item)}
-                          disabled={isLoading}
-                          className={`relative rounded-lg border bg-white overflow-hidden focus:outline-none focus:ring-2 focus:ring-emerald-500 ${isSelected ? 'border-emerald-500 ring-2 ring-emerald-200' : 'border-slate-200 hover:border-slate-300'} ${isLoading ? 'opacity-70' : ''}`}
-                          aria-label={`Use ${item.filename}`}
-                          title={item.filename}
+                  <>
+                    <AnimatePresence initial={false}>
+                      {logoImage && (
+                        <motion.div
+                          layout
+                          initial={{ opacity: 0, y: 8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -8 }}
+                          className="relative group w-full h-24 rounded-md border border-slate-200 bg-white flex items-center justify-center overflow-hidden"
                         >
-                          <img src={thumbUrl} alt={item.filename} className="w-full h-16 object-contain p-1 bg-white" />
-                          {isSelected && (
-                            <div className="absolute bottom-1 right-1 bg-emerald-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
-                              Using
-                            </div>
-                          )}
-                          {isLoading && (
-                            <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
-                              <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
-                            </div>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
+                          <img src={logoImage} alt="Logo preview" className="max-h-full max-w-full object-contain" />
+                          <button
+                            type="button"
+                            onClick={handleRemoveLogo}
+                            className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-slate-900 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                            aria-label="Remove logo"
+                          >
+                            ×
+                          </button>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                    <div className="grid grid-cols-3 gap-2 max-h-40 overflow-y-auto pr-1">
+                      {logoAssets.map((item) => {
+                        const isSelected = selectedLogoAssetId === item.filename;
+                        const isLoading = logoSelectLoadingId === item.filename;
+                        const thumbUrl = `${BACKEND_API}${item.webp}`;
+                        return (
+                          <button
+                            key={item.filename}
+                            type="button"
+                            onClick={() => void handleSelectLogoAsset(item)}
+                            disabled={isLoading}
+                            className={`relative rounded-lg border bg-white overflow-hidden focus:outline-none focus:ring-2 focus:ring-emerald-500 ${isSelected ? 'border-emerald-500 ring-2 ring-emerald-200' : 'border-slate-200 hover:border-slate-300'} ${isLoading ? 'opacity-70' : ''}`}
+                            aria-label={`Use ${item.filename}`}
+                            title={item.filename}
+                          >
+                            <img src={thumbUrl} alt={item.filename} className="w-full h-16 object-contain p-1 bg-white" />
+                            {isSelected && (
+                              <div className="absolute bottom-1 right-1 bg-emerald-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
+                                Using
+                              </div>
+                            )}
+                            {isLoading && (
+                              <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
+                                <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
                 ) : (
                   <div className="text-[11px] text-slate-400">
                     No logo assets found. Upload some in Personal Space.
