@@ -44,6 +44,7 @@ DB_PATH = BACKEND_DIR / "projects.db"
 FILES_DIR = BACKEND_DIR / "db" / "files"
 LOGOS_DIR = BACKEND_DIR / "db" / "logos"
 REFERENCE_DIR = BACKEND_DIR / "db" / "reference"
+FONT_REFERENCE_DIR = BACKEND_DIR / "db" / "font_reference"
 
 # Auth configuration
 ACCESS_TOKEN_TTL_MINUTES = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "15"))
@@ -192,6 +193,7 @@ def init_database():
   FILES_DIR.mkdir(parents=True, exist_ok=True)
   LOGOS_DIR.mkdir(parents=True, exist_ok=True)
   REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
+  FONT_REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
 
   conn = sqlite3.connect(str(DB_PATH))
   cursor = conn.cursor()
@@ -349,12 +351,40 @@ def init_database():
   if "thumbnail_path" not in reference_columns:
     cursor.execute("ALTER TABLE reference_styles ADD COLUMN thumbnail_path TEXT")
 
+  # Create font_references table for font reference image entries
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS font_references (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      thumbnail_path TEXT,
+      mime_type TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    )
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_font_references_user_id
+    ON font_references(user_id)
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_font_references_created_at
+    ON font_references(created_at DESC)
+  """)
+
+  cursor.execute("PRAGMA table_info(font_references)")
+  font_reference_columns = [row[1] for row in cursor.fetchall()]
+  if "thumbnail_path" not in font_reference_columns:
+    cursor.execute("ALTER TABLE font_references ADD COLUMN thumbnail_path TEXT")
+
   conn.commit()
   conn.close()
   print(f"[info] Database initialized at {DB_PATH}")
   print(f"[info] Files directory at {FILES_DIR}")
   print(f"[info] Logos directory at {LOGOS_DIR}")
   print(f"[info] Reference directory at {REFERENCE_DIR}")
+  print(f"[info] Font reference directory at {FONT_REFERENCE_DIR}")
 
 
 def get_db_connection():
@@ -521,6 +551,53 @@ def save_reference_file(file: UploadFile, user_id: str) -> Dict[str, Optional[st
   user_dir = (REFERENCE_DIR / safe_user_id).resolve()
   if not str(user_dir).startswith(str(REFERENCE_DIR.resolve())):
     raise HTTPException(status_code=400, detail="Invalid reference path")
+  user_dir.mkdir(parents=True, exist_ok=True)
+
+  content = file.file.read()
+  if not content:
+    raise HTTPException(status_code=400, detail="Empty file")
+
+  reference_id = str(uuid.uuid4())
+  stored_name = f"{reference_id}{ext}"
+  stored_path = user_dir / stored_name
+  with open(stored_path, "wb") as f:
+    f.write(content)
+
+  thumbnail_name = f"{reference_id}_thumb.webp"
+  thumbnail_path = user_dir / thumbnail_name
+  try:
+    image = Image.open(io.BytesIO(content))
+    if image.mode not in ("RGB", "RGBA"):
+      if "A" in image.getbands():
+        image = image.convert("RGBA")
+      else:
+        image = image.convert("RGB")
+    thumb = image.copy()
+    thumb.thumbnail((512, 512))
+    thumb.save(thumbnail_path, format="WEBP", quality=82, method=6)
+  except Exception:
+    thumbnail_name = None
+
+  return {
+    "original_name": file.filename,
+    "stored_name": stored_name,
+    "relative_path": f"{safe_user_id}/{stored_name}",
+    "thumbnail_relative_path": f"{safe_user_id}/{thumbnail_name}" if thumbnail_name else None,
+    "mime_type": file.content_type
+  }
+
+
+def save_font_reference_file(file: UploadFile, user_id: str) -> Dict[str, Optional[str]]:
+  if not file.filename:
+    raise HTTPException(status_code=400, detail="Missing filename")
+  ext = Path(file.filename).suffix.lower()
+  if ext not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+    raise HTTPException(status_code=400, detail="Unsupported image type")
+
+  safe_user_id = sanitize_user_id(user_id)
+  user_dir = (FONT_REFERENCE_DIR / safe_user_id).resolve()
+  if not str(user_dir).startswith(str(FONT_REFERENCE_DIR.resolve())):
+    raise HTTPException(status_code=400, detail="Invalid font reference path")
   user_dir.mkdir(parents=True, exist_ok=True)
 
   content = file.file.read()
@@ -1949,6 +2026,88 @@ def delete_reference_style(style_id: str, user: sqlite3.Row = Depends(require_cu
   return JSONResponse({"ok": True})
 
 
+@app.get("/font-references")
+def list_font_references(user: sqlite3.Row = Depends(require_current_user)):
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT id, original_name, file_path, thumbnail_path, mime_type, created_at
+    FROM font_references
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+  """, (user["id"],))
+  rows = cursor.fetchall()
+  conn.close()
+  return JSONResponse({"items": [dict(row) for row in rows]})
+
+
+@app.post("/font-references/upload")
+def upload_font_reference(file: UploadFile = File(...), user: sqlite3.Row = Depends(require_current_user)):
+  saved = save_font_reference_file(file, user["id"])
+  reference_id = str(uuid.uuid4())
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    INSERT INTO font_references (id, user_id, original_name, file_path, thumbnail_path, mime_type)
+    VALUES (?, ?, ?, ?, ?, ?)
+  """, (
+    reference_id,
+    user["id"],
+    saved["original_name"],
+    saved["relative_path"],
+    saved["thumbnail_relative_path"],
+    saved["mime_type"]
+  ))
+  conn.commit()
+  cursor.execute("""
+    SELECT id, original_name, file_path, thumbnail_path, mime_type, created_at
+    FROM font_references
+    WHERE id = ?
+  """, (reference_id,))
+  row = cursor.fetchone()
+  conn.close()
+  return JSONResponse({"item": dict(row)})
+
+
+@app.delete("/font-references/{reference_id}")
+def delete_font_reference(reference_id: str, user: sqlite3.Row = Depends(require_current_user)):
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT id, file_path, thumbnail_path FROM font_references WHERE id = ? AND user_id = ?
+  """, (reference_id, user["id"]))
+  row = cursor.fetchone()
+  if not row:
+    conn.close()
+    raise HTTPException(status_code=404, detail="Font reference not found")
+  file_path = row["file_path"]
+  thumbnail_path = row["thumbnail_path"]
+  conn.execute("""
+    DELETE FROM font_references WHERE id = ? AND user_id = ?
+  """, (reference_id, user["id"]))
+  conn.commit()
+  conn.close()
+
+  safe_user_id = sanitize_user_id(user["id"])
+  user_dir = (FONT_REFERENCE_DIR / safe_user_id).resolve()
+  if str(user_dir).startswith(str(FONT_REFERENCE_DIR.resolve())):
+    stored_file = (user_dir / Path(file_path).name).resolve()
+    if str(stored_file).startswith(str(user_dir)) and stored_file.exists() and stored_file.is_file():
+      try:
+        stored_file.unlink()
+      except OSError:
+        pass
+    if thumbnail_path:
+      thumb_file = (user_dir / Path(thumbnail_path).name).resolve()
+      if str(thumb_file).startswith(str(user_dir)) and thumb_file.exists() and thumb_file.is_file():
+        try:
+          thumb_file.unlink()
+        except OSError:
+          pass
+
+  return JSONResponse({"ok": True})
+
+
 @app.get("/reference/{username}/{filename}")
 def get_reference_style_file(username: str, filename: str):
   safe_username = sanitize_user_id(username)
@@ -1959,6 +2118,19 @@ def get_reference_style_file(username: str, filename: str):
     raise HTTPException(status_code=400, detail="Invalid reference path")
   if not file_path.exists() or not file_path.is_file():
     raise HTTPException(status_code=404, detail="Reference file not found")
+  return FileResponse(file_path)
+
+
+@app.get("/font-reference/{username}/{filename}")
+def get_font_reference_file(username: str, filename: str):
+  safe_username = sanitize_user_id(username)
+  if safe_username != username:
+    raise HTTPException(status_code=404, detail="Font reference file not found")
+  file_path = (FONT_REFERENCE_DIR / safe_username / filename).resolve()
+  if not str(file_path).startswith(str(FONT_REFERENCE_DIR.resolve())):
+    raise HTTPException(status_code=400, detail="Invalid font reference path")
+  if not file_path.exists() or not file_path.is_file():
+    raise HTTPException(status_code=404, detail="Font reference file not found")
   return FileResponse(file_path)
 
 

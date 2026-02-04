@@ -17,6 +17,15 @@ type ReferenceStyleItem = {
   created_at: string;
 };
 
+type FontReferenceItem = {
+  id: string;
+  original_name: string;
+  file_path: string;
+  thumbnail_path?: string | null;
+  mime_type?: string | null;
+  created_at: string;
+};
+
 type LogoItem = {
   webp: string;
   filename: string;
@@ -29,6 +38,12 @@ const PersonalSpacePage: React.FC = () => {
   const [referenceDeleting, setReferenceDeleting] = useState<string | null>(null);
   const [referenceUploadProgress, setReferenceUploadProgress] = useState<number | null>(null);
   const [isReferenceUploading, setIsReferenceUploading] = useState(false);
+  const [fontReferences, setFontReferences] = useState<FontReferenceItem[]>([]);
+  const [fontReferenceLoading, setFontReferenceLoading] = useState(true);
+  const [fontReferenceError, setFontReferenceError] = useState('');
+  const [fontReferenceDeleting, setFontReferenceDeleting] = useState<string | null>(null);
+  const [fontReferenceUploadProgress, setFontReferenceUploadProgress] = useState<number | null>(null);
+  const [isFontReferenceUploading, setIsFontReferenceUploading] = useState(false);
   const [logos, setLogos] = useState<LogoItem[]>([]);
   const [logosLoading, setLogosLoading] = useState(false);
   const [logosError, setLogosError] = useState('');
@@ -82,8 +97,30 @@ const PersonalSpacePage: React.FC = () => {
     }
   };
 
+  const loadFontReferences = async () => {
+    setFontReferenceLoading(true);
+    setFontReferenceError('');
+    try {
+      const response = await fetchWithAuth(
+        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/font-references`
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load font references';
+        throw new Error(message);
+      }
+      setFontReferences(Array.isArray(data.items) ? data.items : []);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load font references';
+      setFontReferenceError(message);
+    } finally {
+      setFontReferenceLoading(false);
+    }
+  };
+
   useEffect(() => {
     void loadReferenceStyles();
+    void loadFontReferences();
     void loadLogos();
   }, []);
 
@@ -138,6 +175,57 @@ const PersonalSpacePage: React.FC = () => {
     }
   };
 
+  const handleFontReferenceUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setFontReferenceError('');
+    setIsFontReferenceUploading(true);
+    setFontReferenceUploadProgress(0);
+    try {
+      const url = `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/font-references/upload`;
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        const token = getAccessToken();
+        if (token) {
+          xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        }
+        xhr.withCredentials = true;
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            const percent = Math.round((event.loaded / event.total) * 100);
+            setFontReferenceUploadProgress(percent);
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve();
+            return;
+          }
+          try {
+            const data = JSON.parse(xhr.responseText || '{}');
+            const message = typeof data?.detail === 'string' ? data.detail : 'Failed to upload font reference';
+            reject(new Error(message));
+          } catch (parseError) {
+            reject(parseError);
+          }
+        };
+        xhr.onerror = () => reject(new Error('Failed to upload font reference'));
+        const formData = new FormData();
+        formData.append('file', file);
+        xhr.send(formData);
+      });
+      await loadFontReferences();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to upload font reference';
+      setFontReferenceError(message);
+    } finally {
+      setIsFontReferenceUploading(false);
+      setFontReferenceUploadProgress(null);
+      event.target.value = '';
+    }
+  };
+
   const handleDeleteReferenceStyle = async (item: ReferenceStyleItem) => {
     if (!window.confirm('Delete this reference style?')) return;
     setReferenceError('');
@@ -164,6 +252,29 @@ const PersonalSpacePage: React.FC = () => {
     }
   };
 
+  const handleDeleteFontReference = async (item: FontReferenceItem) => {
+    if (!window.confirm('Delete this font reference?')) return;
+    setFontReferenceError('');
+    setFontReferenceDeleting(item.id);
+    try {
+      const response = await fetchWithAuth(
+        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/font-references/${item.id}`,
+        { method: 'DELETE' }
+      );
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to delete font reference';
+        throw new Error(message);
+      }
+      setFontReferences((prev) => prev.filter((entry) => entry.id !== item.id));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete font reference';
+      setFontReferenceError(message);
+    } finally {
+      setFontReferenceDeleting(null);
+    }
+  };
+
   const handleOpenReferencePreview = (item: ReferenceStyleItem) => {
     const baseUrl = import.meta.env.VITE_BACKEND_API || 'http://localhost:8001';
     setPreviewImageUrl(`${baseUrl}/reference/${item.file_path}`);
@@ -176,6 +287,14 @@ const PersonalSpacePage: React.FC = () => {
     const baseUrl = import.meta.env.VITE_BACKEND_API || 'http://localhost:8001';
     setPreviewImageUrl(`${baseUrl}${logo.webp}`);
     setPreviewImageName(logo.filename || 'Logo');
+    setPreviewImageSize(null);
+    setIsPreviewClosing(false);
+  };
+
+  const handleOpenFontReferencePreview = (item: FontReferenceItem) => {
+    const baseUrl = import.meta.env.VITE_BACKEND_API || 'http://localhost:8001';
+    setPreviewImageUrl(`${baseUrl}/font-reference/${item.file_path}`);
+    setPreviewImageName(item.original_name);
     setPreviewImageSize(null);
     setIsPreviewClosing(false);
   };
@@ -371,6 +490,67 @@ const PersonalSpacePage: React.FC = () => {
             </div>
           </section>
 
+          <section className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 flex flex-col">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+                  <FileText size={18} />
+                </div>
+                <h3 className="font-bold text-gray-900">Font References</h3>
+              </div>
+
+              <label className="p-2 hover:bg-gray-100 rounded-full cursor-pointer transition-colors">
+                <Plus size={20} className="text-gray-400 hover:text-gray-900" />
+                <input type="file" className="hidden" accept="image/*" onChange={handleFontReferenceUpload} />
+              </label>
+            </div>
+
+            <div className="flex-1">
+              {fontReferenceError && (
+                <div className="text-xs text-red-600 mb-3">{fontReferenceError}</div>
+              )}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                {fontReferenceLoading && fontReferences.length === 0 ? (
+                  <div className="col-span-full text-sm text-gray-400">Loading font references...</div>
+                ) : fontReferences.length > 0 ? (
+                  fontReferences.map((item) => (
+                    <div
+                      key={item.id}
+                      className="aspect-square bg-gray-50 rounded-2xl border border-gray-100 overflow-hidden relative group shadow-sm"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleOpenFontReferencePreview(item)}
+                        className="absolute inset-0"
+                        aria-label={`Preview ${item.original_name}`}
+                      >
+                        <img
+                          src={`${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/font-reference/${item.thumbnail_path || item.file_path}`}
+                          alt={item.original_name}
+                          className="w-full h-full object-cover transition-transform group-hover:scale-110"
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteFontReference(item)}
+                        disabled={fontReferenceDeleting === item.id}
+                        className="absolute top-2 right-2 w-7 h-7 rounded-full bg-white/90 text-gray-700 hover:bg-white text-xs font-bold shadow-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-60"
+                        aria-label="Delete font reference"
+                      >
+                        x
+                      </button>
+                    </div>
+                  ))
+                ) : null}
+                <label className="aspect-square border-2 border-dashed border-gray-200 rounded-2xl flex flex-col items-center justify-center gap-2 text-gray-400 hover:border-indigo-400 hover:text-indigo-500 hover:bg-indigo-50/30 transition-all cursor-pointer">
+                  <Plus size={24} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider">Add Image</span>
+                  <input type="file" className="hidden" accept="image/*" onChange={handleFontReferenceUpload} />
+                </label>
+              </div>
+            </div>
+          </section>
+
           <section className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-3">
@@ -442,6 +622,24 @@ const PersonalSpacePage: React.FC = () => {
             </div>
             <div className="text-xs text-gray-500 mt-3">
               {referenceUploadProgress === null ? 'Starting...' : `${referenceUploadProgress}%`}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isFontReferenceUploading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="text-sm font-semibold text-gray-900 mb-2">Uploading font reference</div>
+            <div className="text-xs text-gray-400 mb-4">Please keep this window open.</div>
+            <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-indigo-500 transition-all"
+                style={{ width: `${fontReferenceUploadProgress ?? 0}%` }}
+              />
+            </div>
+            <div className="text-xs text-gray-500 mt-3">
+              {fontReferenceUploadProgress === null ? 'Starting...' : `${fontReferenceUploadProgress}%`}
             </div>
           </div>
         </div>
