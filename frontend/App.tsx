@@ -104,6 +104,14 @@ type LogoItem = {
   webp: string;
   filename: string;
 };
+type FontReferenceItem = {
+  id: string;
+  original_name: string;
+  file_path: string;
+  thumbnail_path?: string | null;
+  mime_type?: string | null;
+  created_at: string;
+};
 
 const rectsOverlap = (a: Rect, b: Rect, padding = 0) => (
   !(a.right + padding <= b.left || a.left - padding >= b.right || a.bottom + padding <= b.top || a.top - padding >= b.bottom)
@@ -217,6 +225,11 @@ const App: React.FC = () => {
   const [logoAssetsError, setLogoAssetsError] = useState('');
   const [selectedLogoAssetId, setSelectedLogoAssetId] = useState<string | null>(null);
   const [logoSelectLoadingId, setLogoSelectLoadingId] = useState<string | null>(null);
+  const [fontReferences, setFontReferences] = useState<FontReferenceItem[]>([]);
+  const [fontReferencesLoading, setFontReferencesLoading] = useState(false);
+  const [fontReferencesError, setFontReferencesError] = useState('');
+  const [selectedFontReferenceId, setSelectedFontReferenceId] = useState<string | null>(null);
+  const [fontReferenceSelectLoadingId, setFontReferenceSelectLoadingId] = useState<string | null>(null);
   const [fadeInCanvasAssetIds, setFadeInCanvasAssetIds] = useState<Set<string>>(new Set());
   const [feedbackSuggestions, setFeedbackSuggestions] = useState<string[]>([]);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
@@ -376,6 +389,7 @@ const App: React.FC = () => {
     setSelectedSuggestions(new Set());
     setSelectedReferenceStyleId(null);
     setSelectedLogoAssetId(null);
+    setSelectedFontReferenceId(null);
     if (fontReferenceInputRef.current) {
       fontReferenceInputRef.current.value = '';
     }
@@ -2555,6 +2569,29 @@ const App: React.FC = () => {
     }
   }, [authUser]);
 
+  const loadFontReferences = useCallback(async () => {
+    if (!authUser) {
+      setFontReferences([]);
+      return;
+    }
+    setFontReferencesLoading(true);
+    setFontReferencesError('');
+    try {
+      const response = await fetchWithAuth(`${BACKEND_API}/font-references`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load font references';
+        throw new Error(message);
+      }
+      setFontReferences(Array.isArray(data.items) ? data.items : []);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load font references';
+      setFontReferencesError(message);
+    } finally {
+      setFontReferencesLoading(false);
+    }
+  }, [authUser]);
+
 
   useEffect(() => {
     if (rightPanelMode === 'gallery') {
@@ -2576,6 +2613,13 @@ const App: React.FC = () => {
     if (logoAssets.length > 0) return;
     void loadLogoAssets();
   }, [rightPanelMode, loadLogoAssets, logoAssets.length, logoAssetsLoading]);
+
+  useEffect(() => {
+    if (rightPanelMode !== 'generator') return;
+    if (fontReferencesLoading) return;
+    if (fontReferences.length > 0) return;
+    void loadFontReferences();
+  }, [rightPanelMode, loadFontReferences, fontReferences.length, fontReferencesLoading]);
 
   const handleRemoveStyleImage = (index: number) => {
     setStyleImages(prev => prev.filter((_, i) => i !== index));
@@ -2739,6 +2783,33 @@ const App: React.FC = () => {
     }
   };
 
+  const handleSelectFontReference = async (item: FontReferenceItem) => {
+    if (selectedFontReferenceId === item.id) {
+      setFontReferenceImage(null);
+      setSelectedFontReferenceId(null);
+      return;
+    }
+    setFontReferenceSelectLoadingId(item.id);
+    setFontReferencesError('');
+    try {
+      const url = `${BACKEND_API}/font-reference/${item.file_path}`;
+      const dataUrl = await fetchAuthedImageAsDataUrl(url);
+      setFontReferenceImage(dataUrl);
+      setSelectedFontReferenceId(item.id);
+      setSelectedServerFont('');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load font reference';
+      setFontReferencesError(message);
+    } finally {
+      setFontReferenceSelectLoadingId(null);
+    }
+  };
+
+  const handleClearFontReference = () => {
+    setFontReferenceImage(null);
+    setSelectedFontReferenceId(null);
+  };
+
   const handleSelectLogoAsset = async (item: LogoItem) => {
     if (selectedLogoAssetId === item.filename) {
       handleRemoveLogo();
@@ -2763,6 +2834,7 @@ const App: React.FC = () => {
     setSelectedServerFont(fontName);
     if (fontName) {
       setFontReferenceImage(null);
+      setSelectedFontReferenceId(null);
     }
     setRenderedLayoutUrl(null);
     setShowRenderedLayout(false);
@@ -5859,22 +5931,31 @@ Return ONLY valid JSON in the format:
                 </label>
                 {availableFonts.length > 0 ? (
                   <>
-                    <select
-                      value={selectedServerFont}
-                      onChange={(e) => handleGeneratorFontChange(e.target.value)}
-                      disabled={Boolean(fontReferenceImage)}
-                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
-                    >
-                      <option value="">Auto (default)</option>
-                      {availableFonts.map((font) => (
-                        <option key={font} value={font}>
-                          {font}
-                        </option>
-                      ))}
-                    </select>
-                    {fontReferenceImage && (
-                      <div className="text-[10px] text-slate-400">
-                        Font screenshot provided. Font selection disabled.
+                    {!selectedServerFont && !fontReferenceImage && (
+                      <select
+                        value={selectedServerFont}
+                        onChange={(e) => handleGeneratorFontChange(e.target.value)}
+                        disabled={Boolean(fontReferenceImage)}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+                      >
+                        <option value="">Auto (default)</option>
+                        {availableFonts.map((font) => (
+                          <option key={font} value={font}>
+                            {font}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {selectedServerFont && (
+                      <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
+                        <span className="font-semibold text-slate-700 truncate">{selectedServerFont}</span>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedServerFont('')}
+                          className="text-[10px] font-bold uppercase tracking-widest text-slate-400 hover:text-slate-600"
+                        >
+                          Change
+                        </button>
                       </div>
                     )}
                     {selectedServerFont && (
@@ -5890,6 +5971,70 @@ Return ONLY valid JSON in the format:
                   </>
                 ) : (
                   <div className="text-[11px] text-slate-400">Loading fonts...</div>
+                )}
+                {fontReferencesError && (
+                  <div className="text-[10px] text-red-500">{fontReferencesError}</div>
+                )}
+                {fontReferencesLoading ? (
+                  <div className="text-[11px] text-slate-400">Loading font references...</div>
+                ) : fontReferences.length > 0 ? (
+                  <>
+                    <AnimatePresence initial={false}>
+                      {fontReferenceImage && (
+                        <motion.div
+                          layout
+                          initial={{ opacity: 0, y: 8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -8 }}
+                          className="relative group w-full h-24 rounded-md border border-slate-200 bg-white flex items-center justify-center overflow-hidden"
+                        >
+                          <img src={fontReferenceImage} alt="Font reference preview" className="max-h-full max-w-full object-contain" />
+                          <button
+                            type="button"
+                            onClick={handleClearFontReference}
+                            className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-slate-900 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                            aria-label="Remove font reference"
+                          >
+                            ×
+                          </button>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                    {!selectedServerFont && (
+                      <div className="grid grid-cols-3 gap-2 max-h-40 overflow-y-auto pr-1">
+                        {fontReferences.map((item) => {
+                          const isSelected = selectedFontReferenceId === item.id;
+                          const isLoading = fontReferenceSelectLoadingId === item.id;
+                          const thumbUrl = `${BACKEND_API}/font-reference/${item.thumbnail_path || item.file_path}`;
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => void handleSelectFontReference(item)}
+                              disabled={isLoading}
+                              className={`relative rounded-lg border bg-white overflow-hidden focus:outline-none focus:ring-2 focus:ring-indigo-500 ${isSelected ? 'border-indigo-500 ring-2 ring-indigo-200' : 'border-slate-200 hover:border-slate-300'} ${isLoading ? 'opacity-70' : ''}`}
+                              aria-label={`Use ${item.original_name}`}
+                              title={item.original_name}
+                            >
+                              <img src={thumbUrl} alt={item.original_name} className="w-full h-16 object-cover" />
+                              {isSelected && (
+                                <div className="absolute bottom-1 right-1 bg-indigo-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
+                                  Using
+                                </div>
+                              )}
+                              {isLoading && (
+                                <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
+                                  <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-[11px] text-slate-400">No font references found.</div>
                 )}
               </motion.div>
               <motion.div layout className="grid grid-cols-4 gap-2">
