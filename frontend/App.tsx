@@ -613,6 +613,12 @@ const App: React.FC = () => {
     styleImages: [],
     logoImage: null,
     fontReferenceImage: null,
+    selectedReferenceStyleId: null,
+    selectedLogoAssetId: null,
+    selectedFontReferenceId: null,
+    selectedReferenceStyleId: project.selectedReferenceStyleId ?? null,
+    selectedLogoAssetId: project.selectedLogoAssetId ?? null,
+    selectedFontReferenceId: project.selectedFontReferenceId ?? null,
     view: project.view
   });
 
@@ -967,6 +973,9 @@ const App: React.FC = () => {
     setStyleImages(activeProject.styleImages || []);
     setLogoImage(activeProject.logoImage || null);
     setFontReferenceImage(activeProject.fontReferenceImage || null);
+    setSelectedReferenceStyleId(activeProject.selectedReferenceStyleId || null);
+    setSelectedLogoAssetId(activeProject.selectedLogoAssetId || null);
+    setSelectedFontReferenceId(activeProject.selectedFontReferenceId || null);
     setActivePosterId(null);
     setEditablePoster(null);
     setEditableLayout(null);
@@ -4853,6 +4862,9 @@ Return ONLY valid JSON in the format:
       styleImages: sanitizeUploadUrls(styleImages),
       logoImage: sanitizeUploadUrl(logoImage),
       fontReferenceImage: sanitizeUploadUrl(fontReferenceImage),
+      selectedReferenceStyleId,
+      selectedLogoAssetId,
+      selectedFontReferenceId,
       view: {
         x: viewOffset.x,
         y: viewOffset.y,
