@@ -92,6 +92,18 @@ type Annotation = {
   x2?: number;
   y2?: number;
 };
+type ReferenceStyleItem = {
+  id: string;
+  original_name: string;
+  file_path: string;
+  thumbnail_path?: string | null;
+  mime_type?: string | null;
+  created_at: string;
+};
+type LogoItem = {
+  webp: string;
+  filename: string;
+};
 
 const rectsOverlap = (a: Rect, b: Rect, padding = 0) => (
   !(a.right + padding <= b.left || a.left - padding >= b.right || a.bottom + padding <= b.top || a.top - padding >= b.bottom)
@@ -195,6 +207,16 @@ const App: React.FC = () => {
   const [galleryFileUrls, setGalleryFileUrls] = useState<string[]>([]);
   const [galleryLoading, setGalleryLoading] = useState(false);
   const [galleryError, setGalleryError] = useState('');
+  const [referenceStyles, setReferenceStyles] = useState<ReferenceStyleItem[]>([]);
+  const [referenceStylesLoading, setReferenceStylesLoading] = useState(false);
+  const [referenceStylesError, setReferenceStylesError] = useState('');
+  const [selectedReferenceStyleId, setSelectedReferenceStyleId] = useState<string | null>(null);
+  const [referenceSelectLoadingId, setReferenceSelectLoadingId] = useState<string | null>(null);
+  const [logoAssets, setLogoAssets] = useState<LogoItem[]>([]);
+  const [logoAssetsLoading, setLogoAssetsLoading] = useState(false);
+  const [logoAssetsError, setLogoAssetsError] = useState('');
+  const [selectedLogoAssetId, setSelectedLogoAssetId] = useState<string | null>(null);
+  const [logoSelectLoadingId, setLogoSelectLoadingId] = useState<string | null>(null);
   const [fadeInCanvasAssetIds, setFadeInCanvasAssetIds] = useState<Set<string>>(new Set());
   const [feedbackSuggestions, setFeedbackSuggestions] = useState<string[]>([]);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
@@ -354,6 +376,8 @@ const App: React.FC = () => {
     setSelectedServerFont('');
     setCount(4);
     setSelectedSuggestions(new Set());
+    setSelectedReferenceStyleId(null);
+    setSelectedLogoAssetId(null);
     if (styleImageInputRef.current) {
       styleImageInputRef.current.value = '';
     }
@@ -2493,6 +2517,52 @@ const App: React.FC = () => {
     }
   }, [activeProjectId]);
 
+  const loadReferenceStyles = useCallback(async () => {
+    if (!authUser) {
+      setReferenceStyles([]);
+      return;
+    }
+    setReferenceStylesLoading(true);
+    setReferenceStylesError('');
+    try {
+      const response = await fetchWithAuth(`${BACKEND_API}/reference-styles`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load reference styles';
+        throw new Error(message);
+      }
+      setReferenceStyles(Array.isArray(data.items) ? data.items : []);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load reference styles';
+      setReferenceStylesError(message);
+    } finally {
+      setReferenceStylesLoading(false);
+    }
+  }, [authUser]);
+
+  const loadLogoAssets = useCallback(async () => {
+    if (!authUser) {
+      setLogoAssets([]);
+      return;
+    }
+    setLogoAssetsLoading(true);
+    setLogoAssetsError('');
+    try {
+      const response = await fetchWithAuth(`${BACKEND_API}/logos`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load logos';
+        throw new Error(message);
+      }
+      setLogoAssets(Array.isArray(data.logos) ? data.logos : []);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load logos';
+      setLogoAssetsError(message);
+    } finally {
+      setLogoAssetsLoading(false);
+    }
+  }, [authUser]);
+
 
   useEffect(() => {
     if (rightPanelMode === 'gallery') {
@@ -2500,6 +2570,20 @@ const App: React.FC = () => {
       void fetchProjectFileUrls();
     }
   }, [rightPanelMode, fetchProjectFileUrls]);
+
+  useEffect(() => {
+    if (rightPanelMode !== 'generator') return;
+    if (referenceStylesLoading) return;
+    if (referenceStyles.length > 0) return;
+    void loadReferenceStyles();
+  }, [rightPanelMode, loadReferenceStyles, referenceStyles.length, referenceStylesLoading]);
+
+  useEffect(() => {
+    if (rightPanelMode !== 'generator') return;
+    if (logoAssetsLoading) return;
+    if (logoAssets.length > 0) return;
+    void loadLogoAssets();
+  }, [rightPanelMode, loadLogoAssets, logoAssets.length, logoAssetsLoading]);
 
   const handleStyleImagesChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -2511,11 +2595,13 @@ const App: React.FC = () => {
       reader.readAsDataURL(file);
     });
     setStyleImages([dataUrl]);
+    setSelectedReferenceStyleId(null);
     event.target.value = '';
   };
 
   const handleRemoveStyleImage = (index: number) => {
     setStyleImages(prev => prev.filter((_, i) => i !== index));
+    setSelectedReferenceStyleId(null);
   };
 
   const handleLogoChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -2528,11 +2614,13 @@ const App: React.FC = () => {
       reader.readAsDataURL(file);
     });
     setLogoImage(dataUrl);
+    setSelectedLogoAssetId(null);
     event.target.value = '';
   };
 
   const handleRemoveLogo = () => {
     setLogoImage(null);
+    setSelectedLogoAssetId(null);
   };
 
   const handleFontReferenceChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -2623,6 +2711,20 @@ const App: React.FC = () => {
     });
   };
 
+  const fetchAuthedImageAsDataUrl = async (url: string): Promise<string> => {
+    const response = await fetchWithAuth(url);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch image: ${response.status}`);
+    }
+    const blob = await response.blob();
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('Failed to read image as data URL.'));
+      reader.readAsDataURL(blob);
+    });
+  };
+
   const buildAlphabetPreviewDataUrl = async (fontName: string): Promise<string | null> => {
     try {
       const previewUrl = buildAlphabetPreviewUrl(fontName);
@@ -2650,6 +2752,44 @@ const App: React.FC = () => {
     }
     if (!fontName) return null;
     return await buildAlphabetPreviewDataUrl(fontName);
+  };
+
+  const handleSelectReferenceStyle = async (item: ReferenceStyleItem) => {
+    setReferenceSelectLoadingId(item.id);
+    setReferenceStylesError('');
+    try {
+      const url = `${BACKEND_API}/reference/${item.file_path}`;
+      const dataUrl = await fetchAuthedImageAsDataUrl(url);
+      setStyleImages([dataUrl]);
+      setSelectedReferenceStyleId(item.id);
+      if (styleImageInputRef.current) {
+        styleImageInputRef.current.value = '';
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load reference style';
+      setReferenceStylesError(message);
+    } finally {
+      setReferenceSelectLoadingId(null);
+    }
+  };
+
+  const handleSelectLogoAsset = async (item: LogoItem) => {
+    setLogoSelectLoadingId(item.filename);
+    setLogoAssetsError('');
+    try {
+      const url = `${BACKEND_API}${item.webp}`;
+      const dataUrl = await fetchAuthedImageAsDataUrl(url);
+      setLogoImage(dataUrl);
+      setSelectedLogoAssetId(item.filename);
+      if (logoInputRef.current) {
+        logoInputRef.current.value = '';
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load logo asset';
+      setLogoAssetsError(message);
+    } finally {
+      setLogoSelectLoadingId(null);
+    }
   };
 
   const handleGeneratorFontChange = (fontName: string) => {
@@ -5609,7 +5749,7 @@ Return ONLY valid JSON in the format:
               />
               <motion.div layout className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                  Uploaded Image (optional)
+                  Reference Image (optional)
                 </label>
                 <input
                   ref={styleImageInputRef}
@@ -5639,6 +5779,70 @@ Return ONLY valid JSON in the format:
                     </motion.div>
                   )}
                 </AnimatePresence>
+              </motion.div>
+              <motion.div layout className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                    Reference Styles (Personal Space)
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void loadReferenceStyles()}
+                      className="text-[10px] font-semibold text-slate-400 hover:text-slate-600"
+                    >
+                      Refresh
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleNavigate('/personal-space')}
+                      className="text-[10px] font-semibold text-slate-400 hover:text-slate-600"
+                    >
+                      Manage
+                    </button>
+                  </div>
+                </div>
+                {referenceStylesError && (
+                  <div className="text-[10px] text-red-500">{referenceStylesError}</div>
+                )}
+                {referenceStylesLoading ? (
+                  <div className="text-[11px] text-slate-400">Loading reference styles...</div>
+                ) : referenceStyles.length > 0 ? (
+                  <div className="grid grid-cols-3 gap-2 max-h-40 overflow-y-auto pr-1">
+                    {referenceStyles.map((item) => {
+                      const isSelected = selectedReferenceStyleId === item.id;
+                      const isLoading = referenceSelectLoadingId === item.id;
+                      const thumbUrl = `${BACKEND_API}/reference/${item.thumbnail_path || item.file_path}`;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => void handleSelectReferenceStyle(item)}
+                          disabled={isLoading}
+                          className={`relative rounded-lg border overflow-hidden focus:outline-none focus:ring-2 focus:ring-blue-500 ${isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-200 hover:border-slate-300'} ${isLoading ? 'opacity-70' : ''}`}
+                          aria-label={`Use ${item.original_name}`}
+                          title={item.original_name}
+                        >
+                          <img src={thumbUrl} alt={item.original_name} className="w-full h-16 object-cover" />
+                          {isSelected && (
+                            <div className="absolute bottom-1 right-1 bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
+                              Using
+                            </div>
+                          )}
+                          {isLoading && (
+                            <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
+                              <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-slate-400">
+                    No reference styles found. Upload some in Personal Space.
+                  </div>
+                )}
               </motion.div>
               <motion.div layout className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
@@ -5672,6 +5876,70 @@ Return ONLY valid JSON in the format:
                     </motion.div>
                   )}
                 </AnimatePresence>
+              </motion.div>
+              <motion.div layout className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                    Logo Assets (Personal Space)
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void loadLogoAssets()}
+                      className="text-[10px] font-semibold text-slate-400 hover:text-slate-600"
+                    >
+                      Refresh
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleNavigate('/personal-space')}
+                      className="text-[10px] font-semibold text-slate-400 hover:text-slate-600"
+                    >
+                      Manage
+                    </button>
+                  </div>
+                </div>
+                {logoAssetsError && (
+                  <div className="text-[10px] text-red-500">{logoAssetsError}</div>
+                )}
+                {logoAssetsLoading ? (
+                  <div className="text-[11px] text-slate-400">Loading logos...</div>
+                ) : logoAssets.length > 0 ? (
+                  <div className="grid grid-cols-3 gap-2 max-h-40 overflow-y-auto pr-1">
+                    {logoAssets.map((item) => {
+                      const isSelected = selectedLogoAssetId === item.filename;
+                      const isLoading = logoSelectLoadingId === item.filename;
+                      const thumbUrl = `${BACKEND_API}${item.webp}`;
+                      return (
+                        <button
+                          key={item.filename}
+                          type="button"
+                          onClick={() => void handleSelectLogoAsset(item)}
+                          disabled={isLoading}
+                          className={`relative rounded-lg border bg-white overflow-hidden focus:outline-none focus:ring-2 focus:ring-emerald-500 ${isSelected ? 'border-emerald-500 ring-2 ring-emerald-200' : 'border-slate-200 hover:border-slate-300'} ${isLoading ? 'opacity-70' : ''}`}
+                          aria-label={`Use ${item.filename}`}
+                          title={item.filename}
+                        >
+                          <img src={thumbUrl} alt={item.filename} className="w-full h-16 object-contain p-1 bg-white" />
+                          {isSelected && (
+                            <div className="absolute bottom-1 right-1 bg-emerald-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
+                              Using
+                            </div>
+                          )}
+                          {isLoading && (
+                            <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
+                              <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-slate-400">
+                    No logo assets found. Upload some in Personal Space.
+                  </div>
+                )}
               </motion.div>
               <motion.div layout className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
@@ -5711,70 +5979,6 @@ Return ONLY valid JSON in the format:
                 ) : (
                   <div className="text-[11px] text-slate-400">Loading fonts...</div>
                 )}
-              </motion.div>
-              <motion.div layout className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                  Font Screenshot (optional)
-                </label>
-                <input
-                  ref={fontReferenceInputRef}
-                  type="file"
-                  accept="image/*"
-                  onChange={handleFontReferenceChange}
-                  disabled={Boolean(selectedServerFont)}
-                  className="w-full text-[11px] text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-200 file:px-3 file:py-2 file:text-xs file:font-bold file:text-slate-700 hover:file:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-70"
-                />
-                <AnimatePresence initial={false}>
-                  {selectedServerFont && (
-                    <motion.div
-                      layout
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -8 }}
-                      className="text-[10px] text-slate-400"
-                    >
-                      Font selected. Upload disabled.
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-                <AnimatePresence initial={false}>
-                  {fontReferenceImage && (
-                    <motion.div
-                      layout
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -8 }}
-                      className="relative group w-full"
-                    >
-                      <img
-                        src={fontReferenceImage}
-                        alt="Font reference preview"
-                        className="w-full h-24 object-contain rounded-md border border-slate-200 bg-white"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleRemoveFontReferenceImage}
-                        className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-slate-900 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
-                        aria-label="Remove font reference"
-                      >
-                        ×
-                      </button>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-                <AnimatePresence initial={false}>
-                  {fontReferenceImage && (
-                    <motion.div
-                      layout
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -8 }}
-                      className="text-[10px] text-slate-400"
-                    >
-                      Using uploaded font reference for generation.
-                    </motion.div>
-                  )}
-                </AnimatePresence>
               </motion.div>
               <motion.div layout className="grid grid-cols-4 gap-2">
                 {[1, 2, 4, 6].map(num => (
