@@ -77,6 +77,11 @@ const buildDefaultTextLayout = (): TextLayout => ({
   subheadline: { x: 0.08, y: 0.48, width: 0.84, height: 0.14 },
   infoBlock: { x: 0.08, y: 0.66, width: 0.84, height: 0.22 }
 });
+const pickLogoForModel = (preferred: string | null, fallback: string | null) => {
+  if (preferred && preferred.startsWith('data:image/')) return preferred;
+  if (fallback && fallback.startsWith('data:image/')) return fallback;
+  return preferred ?? fallback ?? null;
+};
 
 type Rect = { left: number; top: number; right: number; bottom: number };
 type AnnotationColor = 'red' | 'green' | 'purple';
@@ -2820,6 +2825,66 @@ const App: React.FC = () => {
     void loadFontReferences();
   }, [rightPanelMode, loadFontReferences, fontReferences.length, fontReferencesLoading]);
 
+  useEffect(() => {
+    if (!selectedReferenceStyleId) return;
+    if (referenceStylesLoading) return;
+    if (referenceStyles.length === 0) {
+      void loadReferenceStyles();
+      return;
+    }
+    if (styleImages[0]?.startsWith('data:image/')) return;
+    const item = referenceStyles.find((entry) => entry.id === selectedReferenceStyleId);
+    if (item) {
+      void applyReferenceStyleSelection(item);
+    }
+  }, [
+    selectedReferenceStyleId,
+    referenceStylesLoading,
+    referenceStyles,
+    styleImages,
+    loadReferenceStyles
+  ]);
+
+  useEffect(() => {
+    if (!selectedLogoAssetId) return;
+    if (logoAssetsLoading) return;
+    if (logoAssets.length === 0) {
+      void loadLogoAssets();
+      return;
+    }
+    if (logoImage?.startsWith('data:image/')) return;
+    const item = logoAssets.find((entry) => entry.filename === selectedLogoAssetId);
+    if (item) {
+      void applyLogoAssetSelection(item);
+    }
+  }, [
+    selectedLogoAssetId,
+    logoAssetsLoading,
+    logoAssets,
+    logoImage,
+    loadLogoAssets
+  ]);
+
+  useEffect(() => {
+    if (!selectedFontReferenceId) return;
+    if (fontReferencesLoading) return;
+    if (fontReferences.length === 0) {
+      void loadFontReferences();
+      return;
+    }
+    if (fontReferenceImage?.startsWith('data:image/')) return;
+    const item = fontReferences.find((entry) => entry.id === selectedFontReferenceId);
+    if (item) {
+      void applyFontReferenceSelection(item);
+    }
+  }, [
+    selectedFontReferenceId,
+    fontReferencesLoading,
+    fontReferences,
+    fontReferenceImage,
+    loadFontReferences
+  ]);
+
   const handleRemoveStyleImage = (index: number) => {
     setStyleImages(prev => prev.filter((_, i) => i !== index));
     setSelectedReferenceStyleId(null);
@@ -2932,6 +2997,39 @@ const App: React.FC = () => {
     });
   };
 
+  const fetchLogoAssetsDirect = async (): Promise<LogoItem[]> => {
+    const response = await fetchWithAuth(`${BACKEND_API}/logos`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load logos';
+      throw new Error(message);
+    }
+    return Array.isArray(data.logos) ? data.logos : [];
+  };
+
+  const resolveLogoImageForModel = async (): Promise<string | null> => {
+    if (logoImage?.startsWith('data:image/')) return logoImage;
+    if (!selectedLogoAssetId) return logoImage ?? null;
+    let item = logoAssets.find((entry) => entry.filename === selectedLogoAssetId);
+    if (!item) {
+      try {
+        const list = await fetchLogoAssetsDirect();
+        item = list.find((entry) => entry.filename === selectedLogoAssetId);
+      } catch (err) {
+        console.warn('Failed to fetch logo assets for model', err);
+        return logoImage ?? null;
+      }
+    }
+    if (!item) return logoImage ?? null;
+    try {
+      const url = `${BACKEND_API}${item.webp}`;
+      return await fetchAuthedImageAsDataUrl(url);
+    } catch (err) {
+      console.warn('Failed to resolve logo image for model', err);
+      return logoImage ?? null;
+    }
+  };
+
   const buildAlphabetPreviewDataUrl = async (fontName: string): Promise<string | null> => {
     try {
       const previewUrl = buildAlphabetPreviewUrl(fontName);
@@ -2967,6 +3065,10 @@ const App: React.FC = () => {
       setSelectedReferenceStyleId(null);
       return;
     }
+    await applyReferenceStyleSelection(item);
+  };
+
+  const applyReferenceStyleSelection = async (item: ReferenceStyleItem) => {
     setReferenceSelectLoadingId(item.id);
     setReferenceStylesError('');
     try {
@@ -2988,6 +3090,10 @@ const App: React.FC = () => {
       setSelectedFontReferenceId(null);
       return;
     }
+    await applyFontReferenceSelection(item);
+  };
+
+  const applyFontReferenceSelection = async (item: FontReferenceItem) => {
     setFontReferenceSelectLoadingId(item.id);
     setFontReferencesError('');
     try {
@@ -3058,6 +3164,10 @@ const App: React.FC = () => {
       handleRemoveLogo();
       return;
     }
+    await applyLogoAssetSelection(item);
+  };
+
+  const applyLogoAssetSelection = async (item: LogoItem) => {
     setLogoSelectLoadingId(item.filename);
     setLogoAssetsError('');
     try {
@@ -4279,7 +4389,8 @@ Return ONLY valid JSON in the format:
         return;
       }
 
-      const logoForPoster = currentArtboard.posterData.logoUrl ?? logoImage ?? null;
+      const resolvedLogoImage = await resolveLogoImageForModel();
+      const logoForPoster = pickLogoForModel(resolvedLogoImage, currentArtboard.posterData.logoUrl ?? null);
       const fontReferenceUrl = await resolveFontReferenceUrl(fontReferenceImage, selectedServerFont);
       let targetPoster: PlanningStep = {
         ...editablePoster,
@@ -4385,7 +4496,8 @@ Return ONLY valid JSON in the format:
       if (!posterImageUrl) {
         throw new Error('Missing poster image for resolution generation.');
       }
-      const logoForPoster = currentArtboard.posterData.logoUrl ?? logoImage ?? null;
+      const resolvedLogoImage = await resolveLogoImageForModel();
+      const logoForPoster = pickLogoForModel(resolvedLogoImage, currentArtboard.posterData.logoUrl ?? null);
       const basePoster: PlanningStep = {
         topBanner: currentArtboard.posterData.topBanner || '',
         headline: currentArtboard.posterData.headline || '',
@@ -4456,7 +4568,7 @@ Return ONLY valid JSON in the format:
     const currentTheme = theme;
     const currentCount = count;
     const currentStyleImages = [...styleImages];
-    const currentLogoImage = logoImage;
+    const currentLogoImage = await resolveLogoImageForModel();
     const currentFont = selectedServerFont;
     const currentFontReferenceImage = fontReferenceImage;
     const currentDesignGuidance = '';
@@ -4721,7 +4833,7 @@ Return ONLY valid JSON in the format:
         });
 
         // Submit async tasks and start polling
-        const logoForPoster = currentLogoImage ?? null;
+        const logoForPoster = pickLogoForModel(currentLogoImage ?? null, null);
         const taskSubmissions = await Promise.all(
           plans.map(async (plan, index) => {
             const posterId = placeholderPosters[index].id;

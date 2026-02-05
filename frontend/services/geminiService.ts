@@ -10,7 +10,7 @@ export type ChatMessage = {
 
 const ensureDataUrl = async (value: string): Promise<string> => {
   if (value.startsWith("data:image/")) return value;
-  const response = await fetch(value);
+  const response = await fetchWithAuth(value);
   if (!response.ok) {
     throw new Error(`Failed to fetch image for chat: ${response.status}`);
   }
@@ -21,6 +21,36 @@ const ensureDataUrl = async (value: string): Promise<string> => {
     reader.onerror = () => reject(new Error("Failed to read image as data URL."));
     reader.readAsDataURL(blob);
   });
+};
+
+const resolveImageDataUrl = async (value?: string | null): Promise<string | null> => {
+  if (!value) return null;
+  const normalizedInline = normalizeImageDataUrl(value);
+  if (normalizedInline && normalizedInline.startsWith("data:image/")) return normalizedInline;
+  if (value.startsWith("asset:")) return null;
+  try {
+    const resolved = await ensureDataUrl(value);
+    return normalizeImageDataUrl(resolved);
+  } catch {
+    return null;
+  }
+};
+
+const resolveImageDataUrls = async (values: string[] = []): Promise<string[]> => {
+  const resolved = await Promise.all(values.map((value) => resolveImageDataUrl(value)));
+  return resolved.filter((value): value is string => Boolean(value));
+};
+
+const normalizeImageDataUrl = (value: string): string | null => {
+  if (!value.startsWith("data:")) return value;
+  if (value.startsWith("data:image/")) return value;
+  if (!value.startsWith("data:text/plain;base64,")) return value;
+  const base64 = value.slice("data:text/plain;base64,".length);
+  if (base64.startsWith("UklGR")) return `data:image/webp;base64,${base64}`;
+  if (base64.startsWith("/9j/")) return `data:image/jpeg;base64,${base64}`;
+  if (base64.startsWith("iVBOR")) return `data:image/png;base64,${base64}`;
+  if (base64.startsWith("R0lGOD")) return `data:image/gif;base64,${base64}`;
+  return null;
 };
 
 const BACKEND_API = import.meta.env.VITE_BACKEND_API || "http://localhost:8001";
@@ -271,11 +301,26 @@ export const generatePosterImage = async (
   userPrompt?: string,
   extraPrompt?: string
 ): Promise<string> => {
+  if (import.meta.env.DEV) {
+    console.log("[poster] generate sync: logo selection", {
+      logoUrl,
+      logoKind: logoUrl?.startsWith("data:image/") ? "data" : logoUrl?.startsWith("asset:") ? "asset" : logoUrl ? "url" : "none"
+    });
+  }
+  const resolvedStyleImages = await resolveImageDataUrls(styleImages);
+  const resolvedLogoUrl = await resolveImageDataUrl(logoUrl);
+  const resolvedFontReferenceUrl = await resolveImageDataUrl(fontReferenceUrl);
+  if (import.meta.env.DEV) {
+    console.log("[poster] generate sync: resolved logo", {
+      logoResolved: Boolean(resolvedLogoUrl),
+      logoResolvedLength: resolvedLogoUrl?.length || 0
+    });
+  }
   const payload = buildGeneratePosterPayload(
     poster,
-    styleImages,
-    logoUrl,
-    fontReferenceUrl,
+    resolvedStyleImages,
+    resolvedLogoUrl,
+    resolvedFontReferenceUrl,
     targetSize,
     userPrompt,
     extraPrompt
@@ -380,11 +425,26 @@ export const generatePosterImageAsync = async (
   userPrompt?: string,
   extraPrompt?: string
 ): Promise<string> => {
+  if (import.meta.env.DEV) {
+    console.log("[poster] generate async: logo selection", {
+      logoUrl,
+      logoKind: logoUrl?.startsWith("data:image/") ? "data" : logoUrl?.startsWith("asset:") ? "asset" : logoUrl ? "url" : "none"
+    });
+  }
+  const resolvedStyleImages = await resolveImageDataUrls(styleImages);
+  const resolvedLogoUrl = await resolveImageDataUrl(logoUrl);
+  const resolvedFontReferenceUrl = await resolveImageDataUrl(fontReferenceUrl);
+  if (import.meta.env.DEV) {
+    console.log("[poster] generate async: resolved logo", {
+      logoResolved: Boolean(resolvedLogoUrl),
+      logoResolvedLength: resolvedLogoUrl?.length || 0
+    });
+  }
   const payload = buildGeneratePosterPayload(
     poster,
-    styleImages,
-    logoUrl,
-    fontReferenceUrl,
+    resolvedStyleImages,
+    resolvedLogoUrl,
+    resolvedFontReferenceUrl,
     targetSize,
     userPrompt,
     extraPrompt
