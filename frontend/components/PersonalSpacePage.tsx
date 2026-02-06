@@ -241,9 +241,6 @@ const PersonalSpacePage: React.FC = () => {
         throw new Error(message);
       }
       setReferenceStyles((prev) => prev.filter((entry) => entry.id !== item.id));
-      if (selectedStyle?.id === item.id) {
-        setSelectedStyle(null);
-      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to delete reference style';
       setReferenceError(message);

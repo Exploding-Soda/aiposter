@@ -264,6 +264,16 @@ const App: React.FC = () => {
   const [fontReferencesLoading, setFontReferencesLoading] = useState(false);
   const [fontReferencesError, setFontReferencesError] = useState('');
   const [selectedFontReferenceId, setSelectedFontReferenceId] = useState<string | null>(null);
+  const missingReferenceStyleIdsRef = useRef<Set<string>>(new Set());
+  const missingLogoAssetIdsRef = useRef<Set<string>>(new Set());
+  const missingFontReferenceIdsRef = useRef<Set<string>>(new Set());
+  const referenceStyleFetchAttemptedRef = useRef<Set<string>>(new Set());
+  const logoAssetFetchAttemptedRef = useRef<Set<string>>(new Set());
+  const fontReferenceFetchAttemptedRef = useRef<Set<string>>(new Set());
+  const referenceStylesLoadedOnceRef = useRef(false);
+  const logoAssetsLoadedOnceRef = useRef(false);
+  const fontReferencesLoadedOnceRef = useRef(false);
+  const lastBoardAssetsRefreshRef = useRef<{ projectId: string | null; at: number }>({ projectId: null, at: 0 });
   const [fontReferenceSelectLoadingId, setFontReferenceSelectLoadingId] = useState<string | null>(null);
   const [fontReferenceUploadProgress, setFontReferenceUploadProgress] = useState<number | null>(null);
   const [isFontReferenceUploading, setIsFontReferenceUploading] = useState(false);
@@ -2574,6 +2584,7 @@ const App: React.FC = () => {
   const loadReferenceStyles = useCallback(async () => {
     if (!authUser) {
       setReferenceStyles([]);
+      referenceStylesLoadedOnceRef.current = true;
       return;
     }
     setReferenceStylesLoading(true);
@@ -2591,12 +2602,14 @@ const App: React.FC = () => {
       setReferenceStylesError(message);
     } finally {
       setReferenceStylesLoading(false);
+      referenceStylesLoadedOnceRef.current = true;
     }
   }, [authUser]);
 
   const loadLogoAssets = useCallback(async () => {
     if (!authUser) {
       setLogoAssets([]);
+      logoAssetsLoadedOnceRef.current = true;
       return;
     }
     setLogoAssetsLoading(true);
@@ -2614,12 +2627,14 @@ const App: React.FC = () => {
       setLogoAssetsError(message);
     } finally {
       setLogoAssetsLoading(false);
+      logoAssetsLoadedOnceRef.current = true;
     }
   }, [authUser]);
 
   const loadFontReferences = useCallback(async () => {
     if (!authUser) {
       setFontReferences([]);
+      fontReferencesLoadedOnceRef.current = true;
       return;
     }
     setFontReferencesLoading(true);
@@ -2637,8 +2652,10 @@ const App: React.FC = () => {
       setFontReferencesError(message);
     } finally {
       setFontReferencesLoading(false);
+      fontReferencesLoadedOnceRef.current = true;
     }
   }, [authUser]);
+
 
   const handleUploadReferenceStyle = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -2805,6 +2822,7 @@ const App: React.FC = () => {
     if (rightPanelMode !== 'generator') return;
     if (referenceStylesLoading) return;
     if (referenceStyles.length > 0) return;
+    if (referenceStylesLoadedOnceRef.current) return;
     void loadReferenceStyles();
   }, [rightPanelMode, loadReferenceStyles, referenceStyles.length, referenceStylesLoading]);
 
@@ -2812,6 +2830,7 @@ const App: React.FC = () => {
     if (rightPanelMode !== 'generator') return;
     if (logoAssetsLoading) return;
     if (logoAssets.length > 0) return;
+    if (logoAssetsLoadedOnceRef.current) return;
     void loadLogoAssets();
   }, [rightPanelMode, loadLogoAssets, logoAssets.length, logoAssetsLoading]);
 
@@ -2819,21 +2838,44 @@ const App: React.FC = () => {
     if (rightPanelMode !== 'generator') return;
     if (fontReferencesLoading) return;
     if (fontReferences.length > 0) return;
+    if (fontReferencesLoadedOnceRef.current) return;
     void loadFontReferences();
   }, [rightPanelMode, loadFontReferences, fontReferences.length, fontReferencesLoading]);
 
   useEffect(() => {
     if (!selectedReferenceStyleId) return;
+    if (missingReferenceStyleIdsRef.current.has(selectedReferenceStyleId)) {
+      setSelectedReferenceStyleId(null);
+      setStyleImages([]);
+      return;
+    }
     if (referenceStylesLoading) return;
     if (referenceStyles.length === 0) {
-      void loadReferenceStyles();
+      if (referenceStylesLoadedOnceRef.current) {
+        missingReferenceStyleIdsRef.current.add(selectedReferenceStyleId);
+        setSelectedReferenceStyleId(null);
+        setStyleImages([]);
+        return;
+      }
+      if (!referenceStyleFetchAttemptedRef.current.has(selectedReferenceStyleId)) {
+        referenceStyleFetchAttemptedRef.current.add(selectedReferenceStyleId);
+        void loadReferenceStyles();
+        return;
+      }
+      missingReferenceStyleIdsRef.current.add(selectedReferenceStyleId);
+      setSelectedReferenceStyleId(null);
+      setStyleImages([]);
       return;
     }
     if (styleImages[0]?.startsWith('data:image/')) return;
     const item = referenceStyles.find((entry) => entry.id === selectedReferenceStyleId);
     if (item) {
       void applyReferenceStyleSelection(item);
+      return;
     }
+    missingReferenceStyleIdsRef.current.add(selectedReferenceStyleId);
+    setSelectedReferenceStyleId(null);
+    setStyleImages([]);
   }, [
     selectedReferenceStyleId,
     referenceStylesLoading,
@@ -2844,16 +2886,38 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!selectedLogoAssetId) return;
+    if (missingLogoAssetIdsRef.current.has(selectedLogoAssetId)) {
+      setSelectedLogoAssetId(null);
+      setLogoImage(null);
+      return;
+    }
     if (logoAssetsLoading) return;
     if (logoAssets.length === 0) {
-      void loadLogoAssets();
+      if (logoAssetsLoadedOnceRef.current) {
+        missingLogoAssetIdsRef.current.add(selectedLogoAssetId);
+        setSelectedLogoAssetId(null);
+        setLogoImage(null);
+        return;
+      }
+      if (!logoAssetFetchAttemptedRef.current.has(selectedLogoAssetId)) {
+        logoAssetFetchAttemptedRef.current.add(selectedLogoAssetId);
+        void loadLogoAssets();
+        return;
+      }
+      missingLogoAssetIdsRef.current.add(selectedLogoAssetId);
+      setSelectedLogoAssetId(null);
+      setLogoImage(null);
       return;
     }
     if (logoImage?.startsWith('data:image/')) return;
     const item = logoAssets.find((entry) => entry.filename === selectedLogoAssetId);
     if (item) {
       void applyLogoAssetSelection(item);
+      return;
     }
+    missingLogoAssetIdsRef.current.add(selectedLogoAssetId);
+    setSelectedLogoAssetId(null);
+    setLogoImage(null);
   }, [
     selectedLogoAssetId,
     logoAssetsLoading,
@@ -2864,16 +2928,38 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!selectedFontReferenceId) return;
+    if (missingFontReferenceIdsRef.current.has(selectedFontReferenceId)) {
+      setSelectedFontReferenceId(null);
+      setFontReferenceImage(null);
+      return;
+    }
     if (fontReferencesLoading) return;
     if (fontReferences.length === 0) {
-      void loadFontReferences();
+      if (fontReferencesLoadedOnceRef.current) {
+        missingFontReferenceIdsRef.current.add(selectedFontReferenceId);
+        setSelectedFontReferenceId(null);
+        setFontReferenceImage(null);
+        return;
+      }
+      if (!fontReferenceFetchAttemptedRef.current.has(selectedFontReferenceId)) {
+        fontReferenceFetchAttemptedRef.current.add(selectedFontReferenceId);
+        void loadFontReferences();
+        return;
+      }
+      missingFontReferenceIdsRef.current.add(selectedFontReferenceId);
+      setSelectedFontReferenceId(null);
+      setFontReferenceImage(null);
       return;
     }
     if (fontReferenceImage?.startsWith('data:image/')) return;
     const item = fontReferences.find((entry) => entry.id === selectedFontReferenceId);
     if (item) {
       void applyFontReferenceSelection(item);
+      return;
     }
+    missingFontReferenceIdsRef.current.add(selectedFontReferenceId);
+    setSelectedFontReferenceId(null);
+    setFontReferenceImage(null);
   }, [
     selectedFontReferenceId,
     fontReferencesLoading,
@@ -4990,6 +5076,27 @@ Return ONLY valid JSON in the format:
   const isPersonalSpaceRoute = route === '/personal-space';
 
   useEffect(() => {
+    if (!isOnBoardRoute) return;
+    if (!authUser) return;
+    const now = Date.now();
+    const last = lastBoardAssetsRefreshRef.current;
+    const shouldRefresh =
+      last.projectId !== activeProjectId || now - last.at > 5000;
+    if (!shouldRefresh) return;
+    lastBoardAssetsRefreshRef.current = { projectId: activeProjectId ?? null, at: now };
+    void loadReferenceStyles();
+    void loadLogoAssets();
+    void loadFontReferences();
+  }, [
+    isOnBoardRoute,
+    activeProjectId,
+    authUser,
+    loadReferenceStyles,
+    loadLogoAssets,
+    loadFontReferences
+  ]);
+
+  useEffect(() => {
     if (!authReady || authUser) return;
     if (!isLandingRoute && !isLoginRoute) {
       handleNavigate('/landing');
@@ -6161,7 +6268,7 @@ Return ONLY valid JSON in the format:
                 )}
                 {referenceStylesLoading ? (
                   <div className="text-[11px] text-slate-400">Loading reference styles...</div>
-                ) : referenceStyles.length > 0 ? (
+                ) : (
                   <>
                     <AnimatePresence initial={false}>
                       {styleImages.length > 0 && (
@@ -6262,10 +6369,6 @@ Return ONLY valid JSON in the format:
                       )}
                     </div>
                   </>
-                ) : (
-                  <div className="text-[11px] text-slate-400">
-                    No reference styles found. Upload some in Personal Space.
-                  </div>
                 )}
               </motion.div>
               <motion.div layout className="space-y-2">
