@@ -1,4 +1,3 @@
-
 import { PlanningStep } from "../types";
 import { fetchWithAuth } from "./authService";
 
@@ -18,15 +17,19 @@ const ensureDataUrl = async (value: string): Promise<string> => {
   return await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("Failed to read image as data URL."));
+    reader.onerror = () =>
+      reject(new Error("Failed to read image as data URL."));
     reader.readAsDataURL(blob);
   });
 };
 
-const resolveImageDataUrl = async (value?: string | null): Promise<string | null> => {
+const resolveImageDataUrl = async (
+  value?: string | null,
+): Promise<string | null> => {
   if (!value) return null;
   const normalizedInline = normalizeImageDataUrl(value);
-  if (normalizedInline && normalizedInline.startsWith("data:image/")) return normalizedInline;
+  if (normalizedInline && normalizedInline.startsWith("data:image/"))
+    return normalizedInline;
   if (value.startsWith("asset:")) return null;
   try {
     const resolved = await ensureDataUrl(value);
@@ -36,8 +39,12 @@ const resolveImageDataUrl = async (value?: string | null): Promise<string | null
   }
 };
 
-const resolveImageDataUrls = async (values: string[] = []): Promise<string[]> => {
-  const resolved = await Promise.all(values.map((value) => resolveImageDataUrl(value)));
+const resolveImageDataUrls = async (
+  values: string[] = [],
+): Promise<string[]> => {
+  const resolved = await Promise.all(
+    values.map((value) => resolveImageDataUrl(value)),
+  );
   return resolved.filter((value): value is string => Boolean(value));
 };
 
@@ -56,7 +63,7 @@ const normalizeImageDataUrl = (value: string): string | null => {
 const BACKEND_API = import.meta.env.VITE_BACKEND_API || "http://localhost:8001";
 
 // Async task types
-export type AITaskStatus = 'pending' | 'running' | 'completed' | 'error';
+export type AITaskStatus = "pending" | "running" | "completed" | "error";
 
 export type AITaskResult = {
   taskId: string;
@@ -77,16 +84,18 @@ export type PendingTask = {
 };
 
 // Submit an async AI task
-export const submitAITask = async (payload: Record<string, unknown>): Promise<string> => {
+export const submitAITask = async (
+  payload: Record<string, unknown>,
+): Promise<string> => {
   const response = await fetchWithAuth(`${BACKEND_API}/ai/task/submit`, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
     },
     body: JSON.stringify({
       taskType: "chat",
-      payload
-    })
+      payload,
+    }),
   });
 
   if (!response.ok) {
@@ -98,8 +107,12 @@ export const submitAITask = async (payload: Record<string, unknown>): Promise<st
 };
 
 // Poll for task status
-export const getAITaskStatus = async (taskId: string): Promise<AITaskResult> => {
-  const response = await fetchWithAuth(`${BACKEND_API}/ai/task/${taskId}/status`);
+export const getAITaskStatus = async (
+  taskId: string,
+): Promise<AITaskResult> => {
+  const response = await fetchWithAuth(
+    `${BACKEND_API}/ai/task/${taskId}/status`,
+  );
 
   if (!response.ok) {
     throw new Error(`Failed to get task status: ${response.status}`);
@@ -125,7 +138,7 @@ export const waitForAITask = async (
   taskId: string,
   onProgress?: (status: AITaskResult) => void,
   pollIntervalMs = 2000,
-  timeoutMs = 300000 // 5 minutes default
+  timeoutMs = 300000, // 5 minutes default
 ): Promise<AITaskResult> => {
   const startTime = Date.now();
 
@@ -133,21 +146,24 @@ export const waitForAITask = async (
     const result = await getAITaskStatus(taskId);
     onProgress?.(result);
 
-    if (result.status === 'completed' || result.status === 'error') {
+    if (result.status === "completed" || result.status === "error") {
       return result;
     }
 
     if (Date.now() - startTime > timeoutMs) {
-      throw new Error('Task timeout');
+      throw new Error("Task timeout");
     }
 
-    await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
 };
 
 type PoloMessageContent =
   | string
-  | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
+  | Array<
+      | { type: "text"; text: string }
+      | { type: "image_url"; image_url: { url: string } }
+    >;
 
 type PoloResponse = {
   choices?: Array<{
@@ -157,7 +173,9 @@ type PoloResponse = {
   }>;
 };
 
-const extractTextContent = (content: PoloMessageContent | undefined): string => {
+const extractTextContent = (
+  content: PoloMessageContent | undefined,
+): string => {
   if (!content) return "";
   if (typeof content === "string") return content;
   const textPart = content.find((part) => part.type === "text");
@@ -173,7 +191,9 @@ const sanitizeJsonResponse = (content: string): string => {
   return trimmed;
 };
 
-const extractImageUrl = (content: PoloMessageContent | undefined): string | null => {
+const extractImageUrl = (
+  content: PoloMessageContent | undefined,
+): string | null => {
   if (!content) return null;
   if (Array.isArray(content)) {
     const imagePart = content.find((part) => part.type === "image_url");
@@ -197,19 +217,23 @@ const extractImageUrl = (content: PoloMessageContent | undefined): string | null
   return null;
 };
 
-const callPoloApi = async (payload: Record<string, unknown>): Promise<PoloResponse> => {
+const callPoloApi = async (
+  payload: Record<string, unknown>,
+): Promise<PoloResponse> => {
   const response = await fetchWithAuth(`${BACKEND_API}/ai/chat`, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   const data = (await response.json().catch(() => ({}))) as PoloResponse;
   if (!response.ok) {
     const errorText = JSON.stringify(data);
-    throw new Error(`PoloAPI request failed (${response.status}): ${errorText}`);
+    throw new Error(
+      `PoloAPI request failed (${response.status}): ${errorText}`,
+    );
   }
 
   return data;
@@ -219,9 +243,12 @@ export const planPosters = async (
   userInput: string,
   count: number,
   styleImages: string[] = [],
-  logoUrl?: string | null
+  logoUrl?: string | null,
 ): Promise<PlanningStep[]> => {
-  const messageContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
+  const messageContent: Array<
+    | { type: "text"; text: string }
+    | { type: "image_url"; image_url: { url: string } }
+  > = [
     {
       type: "text",
       text: `You are an elite creative director and professional poster designer.
@@ -249,8 +276,8 @@ Output JSON only. Each item must include:
 - infoBlock: object with orgName, details (date/time/location), and credits.
 - accentColor: a professional hex color code (e.g., #A11F2B).
 
-Return ONLY a valid JSON array with ${count} items. No extra commentary, no markdown.`
-    }
+Return ONLY a valid JSON array with ${count} items. No extra commentary, no markdown.`,
+    },
   ];
 
   styleImages.forEach((url) => {
@@ -263,14 +290,14 @@ Return ONLY a valid JSON array with ${count} items. No extra commentary, no mark
   }
 
   const response = await callPoloApi({
-    model: "gemini-2.5-flash",
+    model: "google/gemini-3-flash-preview",
     stream: false,
     messages: [
       {
         role: "user",
-        content: messageContent
-      }
-    ]
+        content: messageContent,
+      },
+    ],
   });
 
   try {
@@ -287,7 +314,7 @@ const buildImagePrompt = (
   poster: PlanningStep,
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
-  targetSize?: { width: number; height: number; label?: string }
+  targetSize?: { width: number; height: number; label?: string },
 ): string => {
   return poster.visualPrompt?.trim() || "";
 };
@@ -299,12 +326,18 @@ export const generatePosterImage = async (
   fontReferenceUrl?: string | null,
   targetSize?: { width: number; height: number; label?: string },
   userPrompt?: string,
-  extraPrompt?: string
+  extraPrompt?: string,
 ): Promise<string> => {
   if (import.meta.env.DEV) {
     console.log("[poster] generate sync: logo selection", {
       logoUrl,
-      logoKind: logoUrl?.startsWith("data:image/") ? "data" : logoUrl?.startsWith("asset:") ? "asset" : logoUrl ? "url" : "none"
+      logoKind: logoUrl?.startsWith("data:image/")
+        ? "data"
+        : logoUrl?.startsWith("asset:")
+          ? "asset"
+          : logoUrl
+            ? "url"
+            : "none",
     });
   }
   const resolvedStyleImages = await resolveImageDataUrls(styleImages);
@@ -313,7 +346,7 @@ export const generatePosterImage = async (
   if (import.meta.env.DEV) {
     console.log("[poster] generate sync: resolved logo", {
       logoResolved: Boolean(resolvedLogoUrl),
-      logoResolvedLength: resolvedLogoUrl?.length || 0
+      logoResolvedLength: resolvedLogoUrl?.length || 0,
     });
   }
   const payload = buildGeneratePosterPayload(
@@ -323,7 +356,7 @@ export const generatePosterImage = async (
     resolvedFontReferenceUrl,
     targetSize,
     userPrompt,
-    extraPrompt
+    extraPrompt,
   );
   const response = await callPoloApi(payload);
 
@@ -342,14 +375,21 @@ const buildGeneratePosterPayload = (
   fontReferenceUrl?: string | null,
   targetSize?: { width: number; height: number; label?: string },
   userPrompt?: string,
-  extraPrompt?: string
+  extraPrompt?: string,
 ): Record<string, unknown> => {
   const userPrefix = userPrompt?.trim() ? `${userPrompt.trim()}; ` : "";
-  const hasStyleReference = styleImages.some((url) => url && url.startsWith("data:image/"));
-  const hasLogoReference = Boolean(logoUrl && logoUrl.startsWith("data:image/"));
-  const hasFontReference = Boolean(fontReferenceUrl && fontReferenceUrl.startsWith("data:image/"));
+  const hasStyleReference = styleImages.some(
+    (url) => url && url.startsWith("data:image/"),
+  );
+  const hasLogoReference = Boolean(
+    logoUrl && logoUrl.startsWith("data:image/"),
+  );
+  const hasFontReference = Boolean(
+    fontReferenceUrl && fontReferenceUrl.startsWith("data:image/"),
+  );
 
-  const imageOrder: Array<{ kind: "style" | "logo" | "font"; url: string }> = [];
+  const imageOrder: Array<{ kind: "style" | "logo" | "font"; url: string }> =
+    [];
   styleImages.forEach((url) => {
     if (url && url.startsWith("data:image/")) {
       imageOrder.push({ kind: "style", url });
@@ -383,7 +423,10 @@ const buildGeneratePosterPayload = (
   const extraInstruction = extraPrompt?.trim()
     ? `Additional design guidance: ${extraPrompt.trim()}`
     : "";
-  const messageContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
+  const messageContent: Array<
+    | { type: "text"; text: string }
+    | { type: "image_url"; image_url: { url: string } }
+  > = [
     {
       type: "text",
       text: [
@@ -392,11 +435,11 @@ const buildGeneratePosterPayload = (
         "Create a vertical 9:16 poster.",
         buildImagePrompt(poster, logoUrl, fontReferenceUrl, targetSize),
         logoInstruction,
-        extraInstruction
+        extraInstruction,
       ]
         .filter(Boolean)
-        .join(" ")
-    }
+        .join(" "),
+    },
   ];
 
   imageOrder.forEach((entry) => {
@@ -404,14 +447,14 @@ const buildGeneratePosterPayload = (
   });
 
   return {
-    model: "gemini-3-pro-image-preview",
+    model: "google/gemini-3.1-flash-image-preview",
     stream: false,
     messages: [
       {
         role: "user",
-        content: messageContent
-      }
-    ]
+        content: messageContent,
+      },
+    ],
   };
 };
 
@@ -423,12 +466,18 @@ export const generatePosterImageAsync = async (
   fontReferenceUrl?: string | null,
   targetSize?: { width: number; height: number; label?: string },
   userPrompt?: string,
-  extraPrompt?: string
+  extraPrompt?: string,
 ): Promise<string> => {
   if (import.meta.env.DEV) {
     console.log("[poster] generate async: logo selection", {
       logoUrl,
-      logoKind: logoUrl?.startsWith("data:image/") ? "data" : logoUrl?.startsWith("asset:") ? "asset" : logoUrl ? "url" : "none"
+      logoKind: logoUrl?.startsWith("data:image/")
+        ? "data"
+        : logoUrl?.startsWith("asset:")
+          ? "asset"
+          : logoUrl
+            ? "url"
+            : "none",
     });
   }
   const resolvedStyleImages = await resolveImageDataUrls(styleImages);
@@ -437,7 +486,7 @@ export const generatePosterImageAsync = async (
   if (import.meta.env.DEV) {
     console.log("[poster] generate async: resolved logo", {
       logoResolved: Boolean(resolvedLogoUrl),
-      logoResolvedLength: resolvedLogoUrl?.length || 0
+      logoResolvedLength: resolvedLogoUrl?.length || 0,
     });
   }
   const payload = buildGeneratePosterPayload(
@@ -447,40 +496,47 @@ export const generatePosterImageAsync = async (
     resolvedFontReferenceUrl,
     targetSize,
     userPrompt,
-    extraPrompt
+    extraPrompt,
   );
   return submitAITask(payload);
 };
 
 // Extract image URL from task result
-export const extractImageFromTaskResult = (result: AITaskResult): string | null => {
-  if (result.status !== 'completed' || !result.result) {
+export const extractImageFromTaskResult = (
+  result: AITaskResult,
+): string | null => {
+  if (result.status !== "completed" || !result.result) {
     return null;
   }
   return extractImageUrl(result.result.choices?.[0]?.message?.content);
 };
 
-export const generatePosterNoTextImage = async (posterImageUrl: string): Promise<string> => {
-  const messageContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
+export const generatePosterNoTextImage = async (
+  posterImageUrl: string,
+): Promise<string> => {
+  const messageContent: Array<
+    | { type: "text"; text: string }
+    | { type: "image_url"; image_url: { url: string } }
+  > = [
     {
       type: "text",
-      text: "Remove all poster elements from the provided image and keep only the background environment. Eliminate all text, logos, banners, overlays, and graphic elements so the result is a clean background-only scene. Preserve composition, lighting, and colors. Output a clean background-only version with strictly NO TEXT."
+      text: "Remove all poster elements from the provided image and keep only the background environment. Eliminate all text, logos, banners, overlays, and graphic elements so the result is a clean background-only scene. Preserve composition, lighting, and colors. Output a clean background-only version with strictly NO TEXT.",
     },
     {
       type: "image_url",
-      image_url: { url: posterImageUrl }
-    }
+      image_url: { url: posterImageUrl },
+    },
   ];
 
   const response = await callPoloApi({
-    model: "gemini-3-pro-image-preview",
+    model: "google/gemini-3.1-flash-image-preview",
     stream: false,
     messages: [
       {
         role: "user",
-        content: messageContent
-      }
-    ]
+        content: messageContent,
+      },
+    ],
   });
 
   const imageUrl = extractImageUrl(response.choices?.[0]?.message?.content);
@@ -492,32 +548,35 @@ export const generatePosterNoTextImage = async (posterImageUrl: string): Promise
 
 export const generatePosterMergedImage = async (
   originalImageUrl: string,
-  layoutImageUrl: string
+  layoutImageUrl: string,
 ): Promise<string> => {
-  const messageContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
+  const messageContent: Array<
+    | { type: "text"; text: string }
+    | { type: "image_url"; image_url: { url: string } }
+  > = [
     {
       type: "text",
-      text: "Replace the text in image 1 using only the letterforms from image 2 (font shape, weight, size, color, tracking, line breaks). Keep all text boxes, panels, background patterns, and textures exactly as in image 1. Do NOT add new decorations; only swap the glyphs."
+      text: "Replace the text in image 1 using only the letterforms from image 2 (font shape, weight, size, color, tracking, line breaks). Keep all text boxes, panels, background patterns, and textures exactly as in image 1. Do NOT add new decorations; only swap the glyphs.",
     },
     {
       type: "image_url",
-      image_url: { url: originalImageUrl }
+      image_url: { url: originalImageUrl },
     },
     {
       type: "image_url",
-      image_url: { url: layoutImageUrl }
-    }
+      image_url: { url: layoutImageUrl },
+    },
   ];
 
   const response = await callPoloApi({
-    model: "gemini-3-pro-image-preview",
+    model: "google/gemini-3.1-flash-image-preview",
     stream: false,
     messages: [
       {
         role: "user",
-        content: messageContent
-      }
-    ]
+        content: messageContent,
+      },
+    ],
   });
 
   const imageUrl = extractImageUrl(response.choices?.[0]?.message?.content);
@@ -529,13 +588,16 @@ export const generatePosterMergedImage = async (
 
 export const generateImageFromPrompt = async (
   prompt: string,
-  referenceImages: string[] = []
+  referenceImages: string[] = [],
 ): Promise<string> => {
-  const messageContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
+  const messageContent: Array<
+    | { type: "text"; text: string }
+    | { type: "image_url"; image_url: { url: string } }
+  > = [
     {
       type: "text",
-      text: prompt.trim()
-    }
+      text: prompt.trim(),
+    },
   ];
 
   referenceImages.forEach((url) => {
@@ -545,14 +607,14 @@ export const generateImageFromPrompt = async (
   });
 
   const response = await callPoloApi({
-    model: "gemini-3-pro-image-preview",
+    model: "google/gemini-3.1-flash-image-preview",
     stream: false,
     messages: [
       {
         role: "user",
-        content: messageContent
-      }
-    ]
+        content: messageContent,
+      },
+    ],
   });
 
   const imageUrl = extractImageUrl(response.choices?.[0]?.message?.content);
@@ -564,25 +626,19 @@ export const generateImageFromPrompt = async (
 
 export const refinePoster = async (
   currentPoster: PlanningStep,
-  feedback: string
+  feedback: string,
 ): Promise<PlanningStep> => {
   /**
-   * CRITICAL: Strip the base64 image data and other unnecessary UI state properties 
-   * before sending the object to the model. Base64 strings can contain millions 
-   * of characters, which translates to millions of tokens, exceeding the API's 
+   * CRITICAL: Strip the base64 image data and other unnecessary UI state properties
+   * before sending the object to the model. Base64 strings can contain millions
+   * of characters, which translates to millions of tokens, exceeding the API's
    * input token limit and causing 400 errors.
    */
-  const { 
-    imageUrl, 
-    logoUrl,
-    id, 
-    status, 
-    error, 
-    ...cleanPosterMetadata 
-  } = currentPoster as any;
+  const { imageUrl, logoUrl, id, status, error, ...cleanPosterMetadata } =
+    currentPoster as any;
 
   const response = await callPoloApi({
-    model: "gemini-2.5-flash",
+    model: "google/gemini-3-flash-preview",
     stream: false,
     messages: [
       {
@@ -596,11 +652,11 @@ User Feedback/Request: ${feedback}
 
 Preserve all core requirements (like location/dates) unless the user explicitly asks to change them.
     Make incremental updates to visualPrompt, accentColor, and copy fields when requested.
-Provide ONLY the updated full design JSON object, no extra commentary or markdown.`
-          }
-        ]
-      }
-    ]
+Provide ONLY the updated full design JSON object, no extra commentary or markdown.`,
+          },
+        ],
+      },
+    ],
   });
 
   try {
@@ -617,22 +673,24 @@ export const editPosterWithMarkup = async (
   originalImageUrl: string,
   markedImageUrl: string,
   instructions: string,
-  referenceImageUrl?: string | null
+  referenceImageUrl?: string | null,
 ): Promise<string> => {
   const originalDataUrl = await ensureDataUrl(originalImageUrl);
   const markedDataUrl = await ensureDataUrl(markedImageUrl);
-  const referenceDataUrl = referenceImageUrl ? await ensureDataUrl(referenceImageUrl) : null;
-  console.log('[edit] sending markup edit', {
+  const referenceDataUrl = referenceImageUrl
+    ? await ensureDataUrl(referenceImageUrl)
+    : null;
+  console.log("[edit] sending markup edit", {
     originalLength: originalDataUrl?.length,
     markedLength: markedDataUrl?.length,
     instructions,
-    hasReference: Boolean(referenceDataUrl)
+    hasReference: Boolean(referenceDataUrl),
   });
   const referenceBlock = referenceDataUrl
     ? "Image 3 is an optional reference provided by the user. Use it as guidance for the requested changes, but do not copy it directly."
     : "";
   const response = await callPoloApi({
-    model: "gemini-3-pro-image-preview",
+    model: "google/gemini-3.1-flash-image-preview",
     stream: false,
     messages: [
       {
@@ -640,28 +698,32 @@ export const editPosterWithMarkup = async (
         content: [
           {
             type: "text",
-            text: `You will receive two images: image 1 is the original poster, image 2 is the same poster with numbered boxes/arrows. ${referenceBlock} Apply the requested edits to the original while preserving overall composition and typography unless specified. The final output must NOT include any annotation boxes, arrows, or numbers. ${instructions}`
+            text: `You will receive two images: image 1 is the original poster, image 2 is the same poster with numbered boxes/arrows. ${referenceBlock} Apply the requested edits to the original while preserving overall composition and typography unless specified. The final output must NOT include any annotation boxes, arrows, or numbers. ${instructions}`,
           },
           {
             type: "image_url",
-            image_url: { url: originalDataUrl }
+            image_url: { url: originalDataUrl },
           },
           {
             type: "image_url",
-            image_url: { url: markedDataUrl }
+            image_url: { url: markedDataUrl },
           },
-          ...(referenceDataUrl ? [{
-            type: "image_url",
-            image_url: { url: referenceDataUrl }
-          }] : [])
-        ]
-      }
-    ]
+          ...(referenceDataUrl
+            ? [
+                {
+                  type: "image_url",
+                  image_url: { url: referenceDataUrl },
+                },
+              ]
+            : []),
+        ],
+      },
+    ],
   });
 
   const imageUrl = extractImageUrl(response.choices?.[0]?.message?.content);
   if (imageUrl) {
-    console.log('[edit] received edited image');
+    console.log("[edit] received edited image");
     return imageUrl;
   }
   throw new Error("No image data received");
@@ -669,29 +731,32 @@ export const editPosterWithMarkup = async (
 
 export const generatePosterResolutionFromImage = async (
   posterImageUrl: string,
-  targetSize: { width: number; height: number }
+  targetSize: { width: number; height: number },
 ): Promise<string> => {
   const dataUrl = await ensureDataUrl(posterImageUrl);
-  const messageContent: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
+  const messageContent: Array<
+    | { type: "text"; text: string }
+    | { type: "image_url"; image_url: { url: string } }
+  > = [
     {
       type: "text",
-      text: `Resize the provided image to ${targetSize.width}x${targetSize.height}. Do not change any content, text, colors, or composition. Only scale to fit; do not crop. If aspect ratio differs, add neutral padding to preserve the full image.`
+      text: `Resize the provided image to ${targetSize.width}x${targetSize.height}. Do not change any content, text, colors, or composition. Only scale to fit; do not crop. If aspect ratio differs, add neutral padding to preserve the full image.`,
     },
     {
       type: "image_url",
-      image_url: { url: dataUrl }
-    }
+      image_url: { url: dataUrl },
+    },
   ];
 
   const response = await callPoloApi({
-    model: "gemini-3-pro-image-preview",
+    model: "google/gemini-3.1-flash-image-preview",
     stream: false,
     messages: [
       {
         role: "user",
-        content: messageContent
-      }
-    ]
+        content: messageContent,
+      },
+    ],
   });
 
   const imageUrl = extractImageUrl(response.choices?.[0]?.message?.content);
@@ -701,17 +766,19 @@ export const generatePosterResolutionFromImage = async (
   throw new Error("No image data received");
 };
 
-export const chatWithModel = async (messages: ChatMessage[]): Promise<string> => {
+export const chatWithModel = async (
+  messages: ChatMessage[],
+): Promise<string> => {
   const resolvedMessages = await Promise.all(
     messages.map(async (message) => {
       const images = message.images || [];
       if (images.length === 0) return message;
       const resolvedImages = await Promise.all(images.map(ensureDataUrl));
       return { ...message, images: resolvedImages };
-    })
+    }),
   );
   const response = await callPoloApi({
-    model: "gemini-2.5-flash",
+    model: "google/gemini-3-flash-preview",
     stream: false,
     messages: [
       {
@@ -719,24 +786,24 @@ export const chatWithModel = async (messages: ChatMessage[]): Promise<string> =>
         content: [
           {
             type: "text",
-            text: "You are a concise, helpful creative assistant for poster projects. Keep responses short, clear, and actionable."
-          }
-        ]
+            text: "You are a concise, helpful creative assistant for poster projects. Keep responses short, clear, and actionable.",
+          },
+        ],
       },
       ...resolvedMessages.map((message) => ({
         role: message.role,
         content: [
           {
             type: "text",
-            text: message.content
+            text: message.content,
           },
           ...(message.images || []).map((url) => ({
             type: "image_url",
-            image_url: { url }
-          }))
-        ]
-      }))
-    ]
+            image_url: { url },
+          })),
+        ],
+      })),
+    ],
   });
 
   const content = extractTextContent(response.choices?.[0]?.message?.content);

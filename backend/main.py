@@ -66,7 +66,7 @@ FRONTEND_ORIGINS = [
   if origin.strip()
 ]
 
-POLO_API_URL = os.getenv("POLO_API_URL", "https://work.poloapi.com/v1/chat/completions")
+POLO_API_URL = os.getenv("POLO_API_URL", "https://open.cherryin.net/v1/chat/completions")
 POLO_API_KEY = os.getenv("POLO_API_KEY", "")
 POLO_TIMEOUT_SECONDS = int(os.getenv("POLO_TIMEOUT_SECONDS", "180"))
 
