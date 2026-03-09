@@ -28,12 +28,17 @@ const resolveImageDataUrl = async (
 ): Promise<string | null> => {
   if (!value) return null;
   const normalizedInline = normalizeImageDataUrl(value);
-  if (normalizedInline && normalizedInline.startsWith("data:image/"))
-    return normalizedInline;
+  if (normalizedInline && normalizedInline.startsWith("data:image/")) {
+    const pngInline = await coerceDataUrlToPng(normalizedInline);
+    return pngInline ?? normalizedInline;
+  }
   if (value.startsWith("asset:")) return null;
   try {
     const resolved = await ensureDataUrl(value);
-    return normalizeImageDataUrl(resolved);
+    const normalized = normalizeImageDataUrl(resolved);
+    if (!normalized || !normalized.startsWith("data:image/")) return normalized;
+    const pngResolved = await coerceDataUrlToPng(normalized);
+    return pngResolved ?? normalized;
   } catch {
     return null;
   }
@@ -58,6 +63,38 @@ const normalizeImageDataUrl = (value: string): string | null => {
   if (base64.startsWith("iVBOR")) return `data:image/png;base64,${base64}`;
   if (base64.startsWith("R0lGOD")) return `data:image/gif;base64,${base64}`;
   return null;
+};
+
+const coerceDataUrlToPng = async (value: string): Promise<string | null> => {
+  if (!value.startsWith("data:image/")) return null;
+  if (value.startsWith("data:image/png")) return value;
+  return await new Promise<string | null>((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      try {
+        const width = image.naturalWidth || image.width;
+        const height = image.naturalHeight || image.height;
+        if (!width || !height) {
+          resolve(null);
+          return;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext("2d");
+        if (!context) {
+          resolve(null);
+          return;
+        }
+        context.drawImage(image, 0, 0);
+        resolve(canvas.toDataURL("image/png"));
+      } catch {
+        resolve(null);
+      }
+    };
+    image.onerror = () => resolve(null);
+    image.src = value;
+  });
 };
 
 const BACKEND_API = import.meta.env.VITE_BACKEND_API || "http://localhost:8001";

@@ -106,6 +106,7 @@ type ReferenceStyleItem = {
   created_at: string;
 };
 type LogoItem = {
+  png?: string;
   webp: string;
   filename: string;
 };
@@ -3091,7 +3092,6 @@ const App: React.FC = () => {
   };
 
   const resolveLogoImageForModel = async (): Promise<string | null> => {
-    if (logoImage?.startsWith('data:image/')) return logoImage;
     if (!selectedLogoAssetId) return logoImage ?? null;
     let item = logoAssets.find((entry) => entry.filename === selectedLogoAssetId);
     if (!item) {
@@ -3105,7 +3105,8 @@ const App: React.FC = () => {
     }
     if (!item) return logoImage ?? null;
     try {
-      const url = `${BACKEND_API}${item.webp}`;
+      const sourcePath = item.png || item.webp;
+      const url = `${BACKEND_API}${sourcePath}`;
       return await fetchAuthedImageAsDataUrl(url);
     } catch (err) {
       console.warn('Failed to resolve logo image for model', err);
@@ -3254,7 +3255,8 @@ const App: React.FC = () => {
     setLogoSelectLoadingId(item.filename);
     setLogoAssetsError('');
     try {
-      const url = `${BACKEND_API}${item.webp}`;
+      const sourcePath = item.png || item.webp;
+      const url = `${BACKEND_API}${sourcePath}`;
       const dataUrl = await fetchAuthedImageAsDataUrl(url);
       setLogoImage(dataUrl);
       setSelectedLogoAssetId(item.filename);

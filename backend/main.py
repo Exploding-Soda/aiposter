@@ -518,12 +518,6 @@ def save_logo_files(file: UploadFile, user_id: str) -> Dict[str, str]:
   if not content:
     raise HTTPException(status_code=400, detail="Empty file")
 
-  logo_id = str(uuid.uuid4())
-  original_name = f"{logo_id}{ext}"
-  original_path = user_dir / original_name
-  with open(original_path, "wb") as f:
-    f.write(content)
-
   try:
     image = Image.open(io.BytesIO(content))
   except Exception:
@@ -535,14 +529,17 @@ def save_logo_files(file: UploadFile, user_id: str) -> Dict[str, str]:
     else:
       image = image.convert("RGB")
 
-  thumb = image.copy()
-  thumb.thumbnail((512, 512))
+  logo_id = str(uuid.uuid4())
+  png_name = f"{logo_id}.png"
+  png_path = user_dir / png_name
+  image.save(png_path, format="PNG")
+
   webp_name = f"{logo_id}.webp"
   webp_path = user_dir / webp_name
-  thumb.save(webp_path, format="WEBP", quality=82, method=6)
+  image.save(webp_path, format="WEBP", quality=82, method=6)
 
   return {
-    "original": f"{safe_user_id}/{original_name}",
+    "png": f"{safe_user_id}/{png_name}",
     "webp": f"{safe_user_id}/{webp_name}"
   }
 
@@ -564,33 +561,31 @@ def save_reference_file(file: UploadFile, user_id: str) -> Dict[str, Optional[st
   if not content:
     raise HTTPException(status_code=400, detail="Empty file")
 
-  reference_id = str(uuid.uuid4())
-  stored_name = f"{reference_id}{ext}"
-  stored_path = user_dir / stored_name
-  with open(stored_path, "wb") as f:
-    f.write(content)
-
-  thumbnail_name = f"{reference_id}_thumb.webp"
-  thumbnail_path = user_dir / thumbnail_name
   try:
     image = Image.open(io.BytesIO(content))
-    if image.mode not in ("RGB", "RGBA"):
-      if "A" in image.getbands():
-        image = image.convert("RGBA")
-      else:
-        image = image.convert("RGB")
-    thumb = image.copy()
-    thumb.thumbnail((512, 512))
-    thumb.save(thumbnail_path, format="WEBP", quality=82, method=6)
   except Exception:
-    thumbnail_name = None
+    raise HTTPException(status_code=400, detail="Invalid image file")
+
+  if image.mode not in ("RGB", "RGBA"):
+    if "A" in image.getbands():
+      image = image.convert("RGBA")
+    else:
+      image = image.convert("RGB")
+
+  reference_id = str(uuid.uuid4())
+  png_name = f"{reference_id}.png"
+  png_path = user_dir / png_name
+  image.save(png_path, format="PNG")
+
+  webp_name = f"{reference_id}.webp"
+  webp_path = user_dir / webp_name
+  image.save(webp_path, format="WEBP", quality=82, method=6)
 
   return {
     "original_name": file.filename,
-    "stored_name": stored_name,
-    "relative_path": f"{safe_user_id}/{stored_name}",
-    "thumbnail_relative_path": f"{safe_user_id}/{thumbnail_name}" if thumbnail_name else None,
-    "mime_type": file.content_type
+    "relative_path": f"{safe_user_id}/{png_name}",
+    "thumbnail_relative_path": f"{safe_user_id}/{webp_name}",
+    "mime_type": "image/png"
   }
 
 
@@ -611,33 +606,31 @@ def save_font_reference_file(file: UploadFile, user_id: str) -> Dict[str, Option
   if not content:
     raise HTTPException(status_code=400, detail="Empty file")
 
-  reference_id = str(uuid.uuid4())
-  stored_name = f"{reference_id}{ext}"
-  stored_path = user_dir / stored_name
-  with open(stored_path, "wb") as f:
-    f.write(content)
-
-  thumbnail_name = f"{reference_id}_thumb.webp"
-  thumbnail_path = user_dir / thumbnail_name
   try:
     image = Image.open(io.BytesIO(content))
-    if image.mode not in ("RGB", "RGBA"):
-      if "A" in image.getbands():
-        image = image.convert("RGBA")
-      else:
-        image = image.convert("RGB")
-    thumb = image.copy()
-    thumb.thumbnail((512, 512))
-    thumb.save(thumbnail_path, format="WEBP", quality=82, method=6)
   except Exception:
-    thumbnail_name = None
+    raise HTTPException(status_code=400, detail="Invalid image file")
+
+  if image.mode not in ("RGB", "RGBA"):
+    if "A" in image.getbands():
+      image = image.convert("RGBA")
+    else:
+      image = image.convert("RGB")
+
+  reference_id = str(uuid.uuid4())
+  png_name = f"{reference_id}.png"
+  png_path = user_dir / png_name
+  image.save(png_path, format="PNG")
+
+  webp_name = f"{reference_id}.webp"
+  webp_path = user_dir / webp_name
+  image.save(webp_path, format="WEBP", quality=82, method=6)
 
   return {
     "original_name": file.filename,
-    "stored_name": stored_name,
-    "relative_path": f"{safe_user_id}/{stored_name}",
-    "thumbnail_relative_path": f"{safe_user_id}/{thumbnail_name}" if thumbnail_name else None,
-    "mime_type": file.content_type
+    "relative_path": f"{safe_user_id}/{png_name}",
+    "thumbnail_relative_path": f"{safe_user_id}/{webp_name}",
+    "mime_type": "image/png"
   }
 
 
@@ -1999,7 +1992,7 @@ def delete_reference_style(style_id: str, user: sqlite3.Row = Depends(require_cu
   conn = get_db_connection()
   cursor = conn.cursor()
   cursor.execute("""
-    SELECT id, file_path FROM reference_styles WHERE id = ? AND user_id = ?
+    SELECT id, file_path, thumbnail_path FROM reference_styles WHERE id = ? AND user_id = ?
   """, (style_id, user["id"]))
   row = cursor.fetchone()
   if not row:
@@ -2191,7 +2184,11 @@ def list_logos(user: sqlite3.Row = Depends(require_current_user)):
       continue
     if entry.suffix.lower() != ".webp":
       continue
+    png_name = f"{entry.stem}.png"
+    png_file = user_dir / png_name
+    png_url = f"/logos/{safe_user_id}/{png_name}" if png_file.exists() and png_file.is_file() else f"/logos/{safe_user_id}/{entry.name}"
     entries.append({
+      "png": png_url,
       "webp": f"/logos/{safe_user_id}/{entry.name}",
       "filename": entry.name,
       "mtime": entry.stat().st_mtime
@@ -2204,7 +2201,8 @@ def list_logos(user: sqlite3.Row = Depends(require_current_user)):
 def upload_logo(file: UploadFile = File(...), user: sqlite3.Row = Depends(require_current_user)):
   saved = save_logo_files(file, user["id"])
   return JSONResponse({
-    "original": f"/logos/{saved['original']}",
+    "original": f"/logos/{saved['png']}",
+    "png": f"/logos/{saved['png']}",
     "webp": f"/logos/{saved['webp']}"
   })
 

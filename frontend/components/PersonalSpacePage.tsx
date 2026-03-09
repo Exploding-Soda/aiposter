@@ -27,6 +27,7 @@ type FontReferenceItem = {
 };
 
 type LogoItem = {
+  png?: string;
   webp: string;
   filename: string;
 };
