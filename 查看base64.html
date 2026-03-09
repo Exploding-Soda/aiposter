@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Base64 图片预览</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 24px;
+      background: #f7f7f9;
+      color: #222;
+    }
+
+    h1 {
+      margin-bottom: 16px;
+      font-size: 24px;
+    }
+
+    .box {
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+      max-width: 900px;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 180px;
+      resize: vertical;
+      font-size: 14px;
+      line-height: 1.5;
+      padding: 12px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      box-sizing: border-box;
+      margin-bottom: 12px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      background: #1677ff;
+      color: #fff;
+      font-size: 14px;
+    }
+
+    button.secondary {
+      background: #666;
+    }
+
+    .hint {
+      font-size: 13px;
+      color: #666;
+      margin-bottom: 12px;
+    }
+
+    .error {
+      color: #c62828;
+      margin-bottom: 12px;
+      white-space: pre-wrap;
+    }
+
+    .preview-wrap {
+      border: 1px dashed #ccc;
+      border-radius: 10px;
+      padding: 16px;
+      min-height: 120px;
+      background: #fafafa;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+    }
+
+    img {
+      max-width: 100%;
+      max-height: 70vh;
+      display: none;
+      border-radius: 8px;
+    }
+
+    .placeholder {
+      color: #999;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>Base64 图片预览</h1>
+
+    <div class="hint">
+      支持粘贴：
+      <br>
+      <code>data:image/webp;base64,UklGR...</code>
+      <br>
+      也支持前后带引号：
+      <br>
+      <code>"data:image/webp;base64,UklGR..."</code>
+    </div>
+
+    <textarea id="input" placeholder='请粘贴 base64 图片字符串，例如：
+"data:image/webp;base64,UklGRuRSAABXRUJQVlA4WAoAAA..."'></textarea>
+
+    <div class="actions">
+      <button id="renderBtn">渲染图片</button>
+      <button id="clearBtn" class="secondary">清空</button>
+    </div>
+
+    <div id="error" class="error"></div>
+
+    <div class="preview-wrap">
+      <span id="placeholder" class="placeholder">图片预览区域</span>
+      <img id="preview" alt="Base64 图片预览" />
+    </div>
+  </div>
+
+  <script>
+    const input = document.getElementById("input");
+    const renderBtn = document.getElementById("renderBtn");
+    const clearBtn = document.getElementById("clearBtn");
+    const preview = document.getElementById("preview");
+    const errorEl = document.getElementById("error");
+    const placeholder = document.getElementById("placeholder");
+
+    function normalizeDataUrl(raw) {
+      if (!raw) return "";
+
+      let text = raw.trim();
+
+      // 去掉前后包裹的单引号或双引号
+      if (
+        (text.startsWith('"') && text.endsWith('"')) ||
+        (text.startsWith("'") && text.endsWith("'"))
+      ) {
+        text = text.slice(1, -1).trim();
+      }
+
+      // 去掉可能出现的换行和多余空白
+      text = text.replace(/\s+/g, "");
+
+      return text;
+    }
+
+    function isValidDataImageUrl(text) {
+      return /^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/.test(text);
+    }
+
+    function renderImage() {
+      errorEl.textContent = "";
+      preview.style.display = "none";
+      placeholder.style.display = "inline";
+
+      const raw = input.value;
+      const value = normalizeDataUrl(raw);
+
+      if (!value) {
+        errorEl.textContent = "请输入 base64 图片字符串。";
+        return;
+      }
+
+      if (!value.startsWith("data:image/")) {
+        errorEl.textContent = "格式不正确：必须是 data:image/...;base64,... 这种完整 Data URL。";
+        return;
+      }
+
+      if (!isValidDataImageUrl(value)) {
+        errorEl.textContent = "图片字符串格式校验未通过，请检查是否为完整且合法的 base64 图片 Data URL。";
+        return;
+      }
+
+      preview.onload = function () {
+        preview.style.display = "block";
+        placeholder.style.display = "none";
+      };
+
+      preview.onerror = function () {
+        preview.style.display = "none";
+        placeholder.style.display = "inline";
+        errorEl.textContent = "图片加载失败，请检查 base64 内容是否有效。";
+      };
+
+      preview.src = value;
+    }
+
+    renderBtn.addEventListener("click", renderImage);
+
+    clearBtn.addEventListener("click", () => {
+      input.value = "";
+      preview.removeAttribute("src");
+      preview.style.display = "none";
+      placeholder.style.display = "inline";
+      errorEl.textContent = "";
+    });
+
+    input.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        renderImage();
+      }
+    });
+  </script>
+</body>
+</html>
