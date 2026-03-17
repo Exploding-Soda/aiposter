@@ -84,9 +84,11 @@ export interface Project {
   styleImages?: string[];
   logoImage?: string | null;
   fontReferenceImage?: string | null;
+  colorReferenceImage?: string | null;
   selectedReferenceStyleId?: string | null;
   selectedLogoAssetId?: string | null;
   selectedFontReferenceId?: string | null;
+  selectedColorReferenceId?: string | null;
   canvasAssets?: Asset[];
   connections?: Connection[];
   view?: {
