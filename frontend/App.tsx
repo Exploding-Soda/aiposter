@@ -18,6 +18,14 @@ const DEFAULT_BOARD_HEIGHT = 480;
 const ARTBOARD_GAP = 140;
 const EXPORT_VERSION = 1;
 const BOARD_BOUNDS = { minX: -2500, maxX: 2500, minY: -2500, maxY: 2500 };
+
+const normalizeSecureImageUrl = (value?: string | null): string => {
+  if (!value) return '';
+  if (typeof window !== 'undefined' && window.location.protocol === 'https:' && value.startsWith('http://')) {
+    return `https://${value.slice('http://'.length)}`;
+  }
+  return value;
+};
 const BOARD_WIDTH = BOARD_BOUNDS.maxX - BOARD_BOUNDS.minX;
 const BOARD_HEIGHT = BOARD_BOUNDS.maxY - BOARD_BOUNDS.minY;
 const BOARD_PADDING = 24;
@@ -1187,7 +1195,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!isPosterModalOpen) return;
-    const imageUrl = activePoster?.imageUrlMerged || activePoster?.imageUrl;
+    const imageUrl = normalizeSecureImageUrl(activePoster?.imageUrlMerged || activePoster?.imageUrl);
     console.log('[annotator] modal open', { imageUrl, posterId: activePoster?.id });
     if (!imageUrl) return;
     const img = new Image();
@@ -4047,7 +4055,7 @@ const App: React.FC = () => {
 
   const buildAnnotatedImageDataUrl = useCallback(async (sourceUrl: string) => {
     try {
-      const response = await fetch(sourceUrl);
+      const response = await fetch(normalizeSecureImageUrl(sourceUrl));
       if (!response.ok) {
         console.warn('[annotator] failed to fetch source for markup', response.status);
         return null;
@@ -6981,7 +6989,7 @@ Return ONLY valid JSON in the format:
                   }}
                 >
                   <img
-                    src={activePoster.imageUrlMerged || activePoster.imageUrl}
+                    src={normalizeSecureImageUrl(activePoster.imageUrlMerged || activePoster.imageUrl)}
                     alt="Poster Preview"
                     className="absolute left-0 top-0 w-full h-full pointer-events-none"
                     draggable={false}

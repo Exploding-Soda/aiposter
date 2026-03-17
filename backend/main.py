@@ -1804,7 +1804,10 @@ def extract_vod_output_file_url(task: vod_models.AigcImageTask) -> str:
 
   for file_info in output.FileInfos:
     if file_info and file_info.FileUrl:
-      return file_info.FileUrl
+      file_url = file_info.FileUrl.strip()
+      if file_url.startswith("http://"):
+        return "https://" + file_url[len("http://"):]
+      return file_url
 
   raise HTTPException(status_code=502, detail="VOD task completed without a usable file URL")
 
