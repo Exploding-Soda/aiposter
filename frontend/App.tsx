@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, MousePointer2, GripHorizontal, Hand, Sparkles, Loader2, ArrowLeft, Search, Bold, Italic, Underline, Download, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, MessageCircle, Pencil, Square, ArrowUpRight, ImagePlus, Home } from 'lucide-react';
+import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, MousePointer2, GripHorizontal, Hand, Sparkles, Loader2, ArrowLeft, Search, Bold, Italic, Underline, Download, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, MessageCircle, Pencil, Square, ArrowUpRight, ImagePlus, Home, Info } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -2989,7 +2989,6 @@ const App: React.FC = () => {
       reader.readAsDataURL(file);
     });
     setFontReferenceImage(dataUrl);
-    setSelectedServerFont('');
     event.target.value = '';
   };
 
@@ -3127,18 +3126,21 @@ const App: React.FC = () => {
 
   const resolveFontReferenceUrl = async (
     fontImage: string | null,
+  ): Promise<string | null> => {
+    if (!fontImage) return null;
+    if (fontImage.startsWith('data:image/')) return fontImage;
+    try {
+      const dataUrl = await fetchImageAsDataUrl(fontImage);
+      return dataUrl.startsWith('data:image/') ? dataUrl : null;
+    } catch (err) {
+      console.warn('Failed to convert font reference to data URL', err);
+      return null;
+    }
+  };
+
+  const resolveServerFontPreviewUrl = async (
     fontName: string
   ): Promise<string | null> => {
-    if (fontImage) {
-      if (fontImage.startsWith('data:image/')) return fontImage;
-      try {
-        const dataUrl = await fetchImageAsDataUrl(fontImage);
-        return dataUrl.startsWith('data:image/') ? dataUrl : null;
-      } catch (err) {
-        console.warn('Failed to convert font reference to data URL', err);
-        return null;
-      }
-    }
     if (!fontName) return null;
     return await buildAlphabetPreviewDataUrl(fontName);
   };
@@ -3185,7 +3187,6 @@ const App: React.FC = () => {
       const dataUrl = await fetchAuthedImageAsDataUrl(url);
       setFontReferenceImage(dataUrl);
       setSelectedFontReferenceId(item.id);
-      setSelectedServerFont('');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load font reference';
       setFontReferencesError(message);
@@ -3270,10 +3271,6 @@ const App: React.FC = () => {
 
   const handleGeneratorFontChange = (fontName: string) => {
     setSelectedServerFont(fontName);
-    if (fontName) {
-      setFontReferenceImage(null);
-      setSelectedFontReferenceId(null);
-    }
     setRenderedLayoutUrl(null);
     setShowRenderedLayout(false);
     lastRenderedSignatureRef.current = '';
@@ -4476,7 +4473,8 @@ Return ONLY valid JSON in the format:
 
       const resolvedLogoImage = await resolveLogoImageForModel();
       const logoForPoster = pickLogoForModel(resolvedLogoImage, currentArtboard.posterData.logoUrl ?? null);
-      const fontReferenceUrl = await resolveFontReferenceUrl(fontReferenceImage, selectedServerFont);
+      const fontReferenceUrl = await resolveFontReferenceUrl(fontReferenceImage);
+      const serverFontReferenceUrl = await resolveServerFontPreviewUrl(selectedServerFont);
       let targetPoster: PlanningStep = {
         ...editablePoster,
         logoUrl: logoForPoster ?? undefined
@@ -4499,7 +4497,13 @@ Return ONLY valid JSON in the format:
       });
 
       // Submit async task
-      const taskId = await generatePosterImageAsync(targetPoster, styleImages, logoForPoster, fontReferenceUrl);
+      const taskId = await generatePosterImageAsync(
+        targetPoster,
+        styleImages,
+        logoForPoster,
+        fontReferenceUrl,
+        serverFontReferenceUrl
+      );
 
       // Store taskId for recovery
       updatePosterArtboard(baseDerivedId, (ab) => ({
@@ -4897,7 +4901,8 @@ Return ONLY valid JSON in the format:
     void (async () => {
       try {
         const plans = await planPosters(currentTheme, currentCount, currentStyleImages, currentLogoImage);
-        const fontReferenceUrl = await resolveFontReferenceUrl(currentFontReferenceImage, currentFont);
+        const fontReferenceUrl = await resolveFontReferenceUrl(currentFontReferenceImage);
+        const serverFontReferenceUrl = await resolveServerFontPreviewUrl(currentFont);
 
         // Update placeholder artboards with actual poster data
         plans.forEach((plan, index) => {
@@ -4928,6 +4933,7 @@ Return ONLY valid JSON in the format:
                 currentStyleImages,
                 logoForPoster,
                 fontReferenceUrl,
+                serverFontReferenceUrl,
                 undefined,
                 currentTheme,
                 currentDesignGuidance
@@ -6502,9 +6508,25 @@ Return ONLY valid JSON in the format:
               </motion.div>
               <motion.div layout className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                    Font (optional)
-                  </label>
+                  <div className="flex items-center gap-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                      Font (optional)
+                    </label>
+                    {Boolean(selectedServerFont && fontReferenceImage) && (
+                      <div className="relative group">
+                        <button
+                          type="button"
+                          className="text-slate-400 hover:text-slate-600"
+                          aria-label="Font rule info"
+                        >
+                          <Info className="w-3.5 h-3.5" />
+                        </button>
+                        <div className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 w-56 -translate-x-1/2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] font-medium normal-case tracking-normal text-slate-600 shadow-lg opacity-0 transition-opacity group-hover:opacity-100">
+                          When both are selected, the uploaded font image guides typography color and styling, while the server font preview guides the letterform and font shape.
+                        </div>
+                      </div>
+                    )}
+                  </div>
                   <button
                     type="button"
                     onClick={() => handleNavigate('/personal-space')}
@@ -6517,21 +6539,18 @@ Return ONLY valid JSON in the format:
                 </div>
                 {availableFonts.length > 0 ? (
                   <>
-                    {!selectedServerFont && !fontReferenceImage && (
-                      <select
-                        value={selectedServerFont}
-                        onChange={(e) => handleGeneratorFontChange(e.target.value)}
-                        disabled={Boolean(fontReferenceImage)}
-                        className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
-                      >
-                        <option value="">Auto (default)</option>
-                        {availableFonts.map((font) => (
-                          <option key={font} value={font}>
-                            {font}
-                          </option>
-                        ))}
-                      </select>
-                    )}
+                    <select
+                      value={selectedServerFont}
+                      onChange={(e) => handleGeneratorFontChange(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none"
+                    >
+                      <option value="">Auto (default)</option>
+                      {availableFonts.map((font) => (
+                        <option key={font} value={font}>
+                          {font}
+                        </option>
+                      ))}
+                    </select>
                     {selectedServerFont && (
                       <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
                         <span className="font-semibold text-slate-700 truncate">{selectedServerFont}</span>
@@ -6586,8 +6605,7 @@ Return ONLY valid JSON in the format:
                         </motion.div>
                       )}
                     </AnimatePresence>
-                    {!selectedServerFont && (
-                      <div className="relative">
+                    <div className="relative">
                         <div
                           ref={fontReferencesScrollRef}
                           className="overflow-x-auto scrollbar-hide"
@@ -6664,7 +6682,6 @@ Return ONLY valid JSON in the format:
                           </button>
                         )}
                       </div>
-                    )}
                   </>
                 ) : (
                   <div className="text-[11px] text-slate-400">No font references found.</div>

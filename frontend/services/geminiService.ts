@@ -351,6 +351,7 @@ const buildImagePrompt = (
   poster: PlanningStep,
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
+  serverFontReferenceUrl?: string | null,
   targetSize?: { width: number; height: number; label?: string },
 ): string => {
   return poster.visualPrompt?.trim() || "";
@@ -361,6 +362,7 @@ export const generatePosterImage = async (
   styleImages: string[] = [],
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
+  serverFontReferenceUrl?: string | null,
   targetSize?: { width: number; height: number; label?: string },
   userPrompt?: string,
   extraPrompt?: string,
@@ -380,6 +382,7 @@ export const generatePosterImage = async (
   const resolvedStyleImages = await resolveImageDataUrls(styleImages);
   const resolvedLogoUrl = await resolveImageDataUrl(logoUrl);
   const resolvedFontReferenceUrl = await resolveImageDataUrl(fontReferenceUrl);
+  const resolvedServerFontReferenceUrl = await resolveImageDataUrl(serverFontReferenceUrl);
   if (import.meta.env.DEV) {
     console.log("[poster] generate sync: resolved logo", {
       logoResolved: Boolean(resolvedLogoUrl),
@@ -391,6 +394,7 @@ export const generatePosterImage = async (
     resolvedStyleImages,
     resolvedLogoUrl,
     resolvedFontReferenceUrl,
+    resolvedServerFontReferenceUrl,
     targetSize,
     userPrompt,
     extraPrompt,
@@ -410,6 +414,7 @@ const buildGeneratePosterPayload = (
   styleImages: string[] = [],
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
+  serverFontReferenceUrl?: string | null,
   targetSize?: { width: number; height: number; label?: string },
   userPrompt?: string,
   extraPrompt?: string,
@@ -424,8 +429,11 @@ const buildGeneratePosterPayload = (
   const hasFontReference = Boolean(
     fontReferenceUrl && fontReferenceUrl.startsWith("data:image/"),
   );
+  const hasServerFontReference = Boolean(
+    serverFontReferenceUrl && serverFontReferenceUrl.startsWith("data:image/"),
+  );
 
-  const imageOrder: Array<{ kind: "style" | "logo" | "font"; url: string }> =
+  const imageOrder: Array<{ kind: "style" | "logo" | "font" | "server-font"; url: string }> =
     [];
   styleImages.forEach((url) => {
     if (url && url.startsWith("data:image/")) {
@@ -438,8 +446,11 @@ const buildGeneratePosterPayload = (
   if (hasFontReference && fontReferenceUrl) {
     imageOrder.push({ kind: "font", url: fontReferenceUrl });
   }
+  if (hasServerFontReference && serverFontReferenceUrl) {
+    imageOrder.push({ kind: "server-font", url: serverFontReferenceUrl });
+  }
 
-  const indexOf = (kind: "style" | "logo" | "font") => {
+  const indexOf = (kind: "style" | "logo" | "font" | "server-font") => {
     const idx = imageOrder.findIndex((entry) => entry.kind === kind);
     return idx >= 0 ? idx + 1 : null;
   };
@@ -447,6 +458,7 @@ const buildGeneratePosterPayload = (
   const styleIndex = indexOf("style");
   const logoIndex = indexOf("logo");
   const fontIndex = indexOf("font");
+  const serverFontIndex = indexOf("server-font");
 
   const styleInstruction = styleIndex
     ? `The poster style must match Image ${styleIndex} as closely as possible (composition, palette, textures, lighting, mood, and overall visual language). Do not deviate.`
@@ -454,9 +466,13 @@ const buildGeneratePosterPayload = (
   const logoInstruction = logoIndex
     ? `Place the logo from Image ${logoIndex} in an appropriate position on the poster. Do not alter the logo.`
     : "";
-  const fontPrefix = fontIndex
-    ? `Generate a new poster using the font style shown in Image ${fontIndex}. `
-    : "";
+  const fontInstruction = fontIndex && serverFontIndex
+    ? `When designing typography, use the color treatment, decoration, and styling approach from Image ${fontIndex}, while the actual letterforms and font shape should reference Image ${serverFontIndex}.`
+    : fontIndex
+      ? `Generate a new poster using the font style shown in Image ${fontIndex}.`
+      : serverFontIndex
+        ? `Generate a new poster using the font style shown in Image ${serverFontIndex}.`
+        : "";
   const extraInstruction = extraPrompt?.trim()
     ? `Additional design guidance: ${extraPrompt.trim()}`
     : "";
@@ -467,10 +483,10 @@ const buildGeneratePosterPayload = (
     {
       type: "text",
       text: [
-        `${userPrefix}${fontPrefix}`.trim(),
+        `${userPrefix}${fontInstruction}`.trim(),
         styleInstruction,
         "Create a vertical 9:16 poster.",
-        buildImagePrompt(poster, logoUrl, fontReferenceUrl, targetSize),
+        buildImagePrompt(poster, logoUrl, fontReferenceUrl, serverFontReferenceUrl, targetSize),
         logoInstruction,
         extraInstruction,
       ]
@@ -501,6 +517,7 @@ export const generatePosterImageAsync = async (
   styleImages: string[] = [],
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
+  serverFontReferenceUrl?: string | null,
   targetSize?: { width: number; height: number; label?: string },
   userPrompt?: string,
   extraPrompt?: string,
@@ -520,6 +537,7 @@ export const generatePosterImageAsync = async (
   const resolvedStyleImages = await resolveImageDataUrls(styleImages);
   const resolvedLogoUrl = await resolveImageDataUrl(logoUrl);
   const resolvedFontReferenceUrl = await resolveImageDataUrl(fontReferenceUrl);
+  const resolvedServerFontReferenceUrl = await resolveImageDataUrl(serverFontReferenceUrl);
   if (import.meta.env.DEV) {
     console.log("[poster] generate async: resolved logo", {
       logoResolved: Boolean(resolvedLogoUrl),
@@ -531,6 +549,7 @@ export const generatePosterImageAsync = async (
     resolvedStyleImages,
     resolvedLogoUrl,
     resolvedFontReferenceUrl,
+    resolvedServerFontReferenceUrl,
     targetSize,
     userPrompt,
     extraPrompt,
