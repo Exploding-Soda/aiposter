@@ -467,11 +467,11 @@ const buildGeneratePosterPayload = (
     ? `Place the logo from Image ${logoIndex} in an appropriate position on the poster. Do not alter the logo.`
     : "";
   const fontInstruction = fontIndex && serverFontIndex
-    ? `When designing typography, use the color treatment, decoration, and styling approach from Image ${fontIndex}, while the actual letterforms and font shape should reference Image ${serverFontIndex}.`
+    ? `All poster copy typography, excluding any text that is part of the logo, must follow one consistent font system. Apply this rule to every editable text element, including the top banner, headline, subheadline, info block, credits, and any other non-logo visible text. Use the color treatment, decoration, and styling approach from Image ${fontIndex}, while the actual letterforms and font shape must reference Image ${serverFontIndex}. Do not apply these references to only part of the text; they must govern all non-logo poster text. Never change, redraw, restyle, or replace any text that belongs to the logo.`
     : fontIndex
-      ? `Generate a new poster using the font style shown in Image ${fontIndex}.`
+      ? `All poster copy typography, excluding any text that is part of the logo, must follow the font style shown in Image ${fontIndex}. Apply it consistently to every editable text element, including the top banner, headline, subheadline, info block, credits, and any other non-logo visible text. Do not limit this reference to only one section. Never change, redraw, restyle, or replace any text that belongs to the logo.`
       : serverFontIndex
-        ? `Generate a new poster using the font style shown in Image ${serverFontIndex}.`
+        ? `All poster copy typography, excluding any text that is part of the logo, must follow the font style shown in Image ${serverFontIndex}. Apply it consistently to every editable text element, including the top banner, headline, subheadline, info block, credits, and any other non-logo visible text. Do not limit this reference to only one section. Never change, redraw, restyle, or replace any text that belongs to the logo.`
         : "";
   const extraInstruction = extraPrompt?.trim()
     ? `Additional design guidance: ${extraPrompt.trim()}`
