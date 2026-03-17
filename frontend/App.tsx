@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, MousePointer2, GripHorizontal, Hand, Sparkles, Loader2, ArrowLeft, Search, Bold, Italic, Underline, Download, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, MessageCircle, Pencil, Square, ArrowUpRight, ImagePlus, Home, Info } from 'lucide-react';
+import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, MousePointer2, GripHorizontal, Hand, Sparkles, Loader2, ArrowLeft, Search, Bold, Italic, Underline, Download, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, MessageCircle, Pencil, Square, ArrowUpRight, ImagePlus, Home, Info, Lock } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -303,6 +303,7 @@ const App: React.FC = () => {
   const [annotatorReadyTick, setAnnotatorReadyTick] = useState(0);
   const [refineReferenceImage, setRefineReferenceImage] = useState<string | null>(null);
   const [posterFeedback, setPosterFeedback] = useState('');
+  const [refineSolutionCount, setRefineSolutionCount] = useState(1);
   const [selectedRefineResolutions, setSelectedRefineResolutions] = useState<Set<string>>(new Set());
   const [isPosterModalOpen, setIsPosterModalOpen] = useState(false);
   const [isPosterModalClosing, setIsPosterModalClosing] = useState(false);
@@ -3985,6 +3986,31 @@ const App: React.FC = () => {
     }
   }, [canvasSelectionId, canvasAssets, selection, deleteCanvasAsset]);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName?.toLowerCase();
+      const isTypingTarget =
+        Boolean(target?.isContentEditable) ||
+        tagName === 'input' ||
+        tagName === 'textarea' ||
+        tagName === 'select';
+      if (isTypingTarget) return;
+
+      if (!canvasSelectionId && !selection.artboardId) return;
+
+      event.preventDefault();
+      deleteSelected();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canvasSelectionId, selection.artboardId, deleteSelected]);
+
   const applySnapshot = useCallback((snapshot: { artboards: Artboard[]; canvasAssets: Asset[]; connections: Connection[] }) => {
     isRestoringRef.current = true;
     setArtboards(snapshot.artboards);
@@ -4441,59 +4467,67 @@ Return ONLY valid JSON in the format:
 
     try {
       if (useMarkup && originalImageUrl) {
-        const derivedPosterData: PosterDraft = {
-          ...currentArtboard.posterData,
-          imageUrl: currentArtboard.posterData.imageUrl,
-          imageUrlMerged: currentArtboard.posterData.imageUrlMerged,
-          status: 'generating'
-        };
-        const derivedId = createDerivedArtboard(currentArtboard, derivedPosterData);
         console.log('[refine] generating annotated image');
         const markedImageUrl = await buildAnnotatedImageDataUrl(originalImageUrl);
         console.log('[refine] marked image ready', { length: markedImageUrl?.length });
         if (!markedImageUrl) throw new Error('Failed to create annotated image.');
-        console.log('[refine] submitting async edit task');
-        const taskId = await editPosterWithMarkupAsync(
-          originalImageUrl,
-          markedImageUrl,
-          annotationPrompt,
-          refineReferenceImage
-        );
-        updatePosterArtboard(derivedId, (ab) => ({
-          ...ab,
-          posterData: {
-            ...ab.posterData!,
-            taskId,
-            status: 'generating'
-          }
-        }));
-
-        while (true) {
-          const result = await getAITaskStatus(taskId);
-
-          if (result.status === 'completed') {
-            const editedUrl = extractImageFromTaskResult(result);
-            if (!editedUrl) {
-              throw new Error('No image in result');
-            }
-            console.log('[refine] edit response', { editedUrl });
+        const runCount = Math.min(3, Math.max(1, refineSolutionCount));
+        await Promise.all(
+          Array.from({ length: runCount }).map(async (_, index) => {
+            const derivedPosterData: PosterDraft = {
+              ...currentArtboard.posterData,
+              imageUrl: currentArtboard.posterData.imageUrl,
+              imageUrlMerged: currentArtboard.posterData.imageUrlMerged,
+              status: 'generating'
+            };
+            const derivedId = createDerivedArtboard(currentArtboard, derivedPosterData, {
+              x: currentArtboard.x + (currentArtboard.width + ARTBOARD_GAP) * (index + 1),
+              nameSuffix: runCount > 1 ? `Variation ${index + 1}` : undefined
+            });
+            console.log('[refine] submitting async edit task', { variation: index + 1 });
+            const taskId = await editPosterWithMarkupAsync(
+              originalImageUrl,
+              markedImageUrl,
+              annotationPrompt,
+              refineReferenceImage
+            );
             updatePosterArtboard(derivedId, (ab) => ({
               ...ab,
               posterData: {
                 ...ab.posterData!,
-                imageUrlMerged: editedUrl,
-                imageUrl: editedUrl,
-                status: 'completed',
-                taskId: undefined
+                taskId,
+                status: 'generating'
               }
             }));
-            break;
-          } else if (result.status === 'error') {
-            throw new Error(result.error || 'Task failed');
-          }
 
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
+            while (true) {
+              const result = await getAITaskStatus(taskId);
+
+              if (result.status === 'completed') {
+                const editedUrl = extractImageFromTaskResult(result);
+                if (!editedUrl) {
+                  throw new Error('No image in result');
+                }
+                console.log('[refine] edit response', { editedUrl, variation: index + 1 });
+                updatePosterArtboard(derivedId, (ab) => ({
+                  ...ab,
+                  posterData: {
+                    ...ab.posterData!,
+                    imageUrlMerged: editedUrl,
+                    imageUrl: editedUrl,
+                    status: 'completed',
+                    taskId: undefined
+                  }
+                }));
+                break;
+              } else if (result.status === 'error') {
+                throw new Error(result.error || 'Task failed');
+              }
+
+              await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+          })
+        );
 
         return;
       }
@@ -4519,70 +4553,76 @@ Return ONLY valid JSON in the format:
         || currentArtboard.posterData?.textLayout
         || buildDefaultTextLayout();
 
-      const baseDerivedId = createDerivedArtboard(currentArtboard, {
-        ...currentArtboard.posterData,
-        status: 'generating'
-      });
+      const runCount = Math.min(3, Math.max(1, refineSolutionCount));
+      await Promise.all(
+        Array.from({ length: runCount }).map(async (_, index) => {
+          const baseDerivedId = createDerivedArtboard(currentArtboard, {
+            ...currentArtboard.posterData,
+            status: 'generating'
+          }, {
+            x: currentArtboard.x + (currentArtboard.width + ARTBOARD_GAP) * (index + 1),
+            nameSuffix: runCount > 1 ? `Variation ${index + 1}` : undefined
+          });
 
-      // Submit async task
-      const taskId = await generatePosterImageAsync(
-        targetPoster,
-        styleImages,
-        logoForPoster,
-        fontReferenceUrl,
-        serverFontReferenceUrl,
-        undefined,
-        feedback
-          ? `Refine the current poster according to this feedback while preserving the existing composition unless the feedback explicitly asks for a larger change: ${feedback}`
-          : undefined,
-        feedback ? currentPosterImageUrl : null,
+          const taskId = await generatePosterImageAsync(
+            targetPoster,
+            styleImages,
+            logoForPoster,
+            fontReferenceUrl,
+            serverFontReferenceUrl,
+            undefined,
+            feedback
+              ? `Refine the current poster according to this feedback while preserving the existing composition unless the feedback explicitly asks for a larger change: ${feedback}`
+              : undefined,
+            feedback ? currentPosterImageUrl : null,
+          );
+
+          updatePosterArtboard(baseDerivedId, (ab) => ({
+            ...ab,
+            posterData: {
+              ...ab.posterData!,
+              ...targetPoster,
+              taskId,
+              logoUrl: logoForPoster ?? undefined
+            }
+          }));
+
+          while (true) {
+            const result = await getAITaskStatus(taskId);
+
+            if (result.status === 'completed') {
+              const imageUrl = extractImageFromTaskResult(result);
+              if (imageUrl) {
+                updatePosterArtboard(baseDerivedId, (ab) => ({
+                  ...ab,
+                  posterData: {
+                    ...ab.posterData!,
+                    ...targetPoster,
+                    logoUrl: logoForPoster ?? undefined,
+                    imageUrl,
+                    imageUrlMerged: imageUrl,
+                    imageUrlNoText: undefined,
+                    textLayout: nextLayout,
+                    textStyles: editableStyles || ab.posterData?.textStyles,
+                    status: 'completed',
+                    taskId: undefined
+                  }
+                }));
+              } else {
+                throw new Error('No image in result');
+              }
+              break;
+            } else if (result.status === 'error') {
+              throw new Error(result.error || 'Task failed');
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+        })
       );
 
-      // Store taskId for recovery
-      updatePosterArtboard(baseDerivedId, (ab) => ({
-        ...ab,
-        posterData: {
-          ...ab.posterData!,
-          ...targetPoster,
-          taskId,
-          logoUrl: logoForPoster ?? undefined
-        }
-      }));
-
-      // Poll until completion
-      while (true) {
-        const result = await getAITaskStatus(taskId);
-
-        if (result.status === 'completed') {
-          const imageUrl = extractImageFromTaskResult(result);
-          if (imageUrl) {
-            updatePosterArtboard(baseDerivedId, (ab) => ({
-              ...ab,
-              posterData: {
-                ...ab.posterData!,
-                ...targetPoster,
-                logoUrl: logoForPoster ?? undefined,
-                imageUrl,
-                imageUrlMerged: imageUrl,
-                imageUrlNoText: undefined,
-                textLayout: nextLayout,
-                textStyles: editableStyles || ab.posterData?.textStyles,
-                status: 'completed',
-                taskId: undefined
-              }
-            }));
-          } else {
-            throw new Error('No image in result');
-          }
-          break;
-        } else if (result.status === 'error') {
-          throw new Error(result.error || 'Task failed');
-        }
-
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      }
-
       setPosterFeedback('');
+      setRefineSolutionCount(1);
       setEditablePoster(targetPoster);
       setEditableLayout(nextLayout);
       if (editableStyles) {
@@ -7226,6 +7266,34 @@ Return ONLY valid JSON in the format:
                       value={posterFeedback}
                       onChange={(e) => setPosterFeedback(e.target.value)}
                     />
+                    <div className="w-full border border-slate-200 rounded-xl bg-slate-50/80 px-3 py-2 flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-widest text-slate-500">
+                        <Lock className="w-3.5 h-3.5" />
+                        More Solutions
+                      </div>
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Locked</span>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                        Solutions
+                      </label>
+                      <div className="grid grid-cols-3 gap-2">
+                        {[1, 2, 3].map((count) => (
+                          <button
+                            key={count}
+                            type="button"
+                            onClick={() => setRefineSolutionCount(count)}
+                            className={`rounded-lg border px-3 py-2 text-xs font-bold transition-colors ${
+                              refineSolutionCount === count
+                                ? 'border-blue-500 bg-blue-50 text-blue-700'
+                                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                            }`}
+                          >
+                            {count}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                     <button
                       type="button"
                       className="relative w-full overflow-hidden py-2 rounded-lg text-xs font-bold uppercase tracking-widest border border-slate-200 text-slate-700 bg-white hover:bg-slate-50"
