@@ -7,6 +7,8 @@ import hashlib
 import secrets
 import uuid
 import shutil
+import mimetypes
+import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, timezone
@@ -15,7 +17,6 @@ from fastapi import FastAPI, HTTPException, Depends, Request, BackgroundTasks, U
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, FileResponse
 from concurrent.futures import ThreadPoolExecutor
-import threading
 from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont
 from fontTools.ttLib import TTFont
@@ -25,6 +26,13 @@ import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from dotenv import load_dotenv
+from qcloud_cos import CosConfig, CosS3Client
+from tencentcloud.common import credential
+from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
+from tencentcloud.common.profile.client_profile import ClientProfile
+from tencentcloud.common.profile.http_profile import HttpProfile
+from tencentcloud.vod.v20180717 import models as vod_models
+from tencentcloud.vod.v20180717 import vod_client
 
 load_dotenv()
 
@@ -69,6 +77,17 @@ FRONTEND_ORIGINS = [
 POLO_API_URL = os.getenv("POLO_API_URL", "https://open.cherryin.net/v1/chat/completions")
 POLO_API_KEY = os.getenv("POLO_API_KEY", "")
 POLO_TIMEOUT_SECONDS = int(os.getenv("POLO_TIMEOUT_SECONDS", "180"))
+IMAGE_EDIT_PROVIDER = os.getenv("IMAGE_EDIT_PROVIDER", "traditional").strip().lower()
+VOD_SECRET_ID = os.getenv("VOD_SECRET_ID", "")
+VOD_SECRET_KEY = os.getenv("VOD_SECRET_KEY", "")
+VOD_REGION = os.getenv("VOD_REGION", "ap-guangzhou")
+VOD_ENDPOINT = os.getenv("VOD_ENDPOINT", "vod.tencentcloudapi.com")
+VOD_HTTP_TIMEOUT_MS = int(os.getenv("VOD_HTTP_TIMEOUT_MS", "60000"))
+VOD_SUB_APP_ID = int(os.getenv("VOD_SUB_APP_ID", "0") or "0")
+VOD_MODEL_NAME = os.getenv("VOD_MODEL_NAME", "GEM")
+VOD_MODEL_VERSION = os.getenv("VOD_MODEL_VERSION", "3.1")
+VOD_TASK_POLL_INTERVAL_SECONDS = float(os.getenv("VOD_TASK_POLL_INTERVAL_SECONDS", "2"))
+VOD_TASK_TIMEOUT_SECONDS = int(os.getenv("VOD_TASK_TIMEOUT_SECONDS", "180"))
 SQLITE_TIMEOUT_SECONDS = float(os.getenv("SQLITE_TIMEOUT_SECONDS", "30"))
 
 password_hasher = PasswordHasher()
@@ -172,6 +191,11 @@ class AITaskStatusResponse(BaseModel):
   createdAt: str
   startedAt: Optional[str] = None
   completedAt: Optional[str] = None
+
+
+class ImageEditRequest(BaseModel):
+  prompt: str
+  images: List[str] = []
 
 
 # Thread pool for background AI tasks
@@ -1612,8 +1636,341 @@ def admin_register(payload: Dict[str, Any], user: sqlite3.Row = Depends(require_
   })
 
 
+def extract_image_url_from_polo_response(data: Dict[str, Any]) -> Optional[str]:
+  choices = data.get("choices")
+  if not isinstance(choices, list) or not choices:
+    return None
+  message = (choices[0] or {}).get("message") or {}
+  content = message.get("content")
+  if isinstance(content, list):
+    for part in content:
+      if part.get("type") == "image_url":
+        return ((part.get("image_url") or {}).get("url"))
+  if isinstance(content, str):
+    if content.startswith("data:image/"):
+      return content
+    match = None
+    try:
+      parsed = json.loads(content)
+      match = ((parsed.get("image_url") or {}).get("url"))
+    except Exception:
+      match = None
+    return match
+  return None
+
+
+def normalize_image_response(image_url: str, provider: str) -> Dict[str, Any]:
+  return {
+    "choices": [
+      {
+        "message": {
+          "content": [
+            {
+              "type": "image_url",
+              "image_url": {
+                "url": image_url
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "_meta": {
+      "provider": provider
+    }
+  }
+
+
+def parse_data_url(data_url: str) -> tuple[bytes, str, str]:
+  if not data_url.startswith("data:") or "," not in data_url:
+    raise HTTPException(status_code=400, detail="Only data URLs are supported for image edit requests")
+  header, encoded = data_url.split(",", 1)
+  if ";base64" not in header:
+    raise HTTPException(status_code=400, detail="Image data URL must be base64-encoded")
+  mime_type = header[5:].split(";", 1)[0] or "application/octet-stream"
+  try:
+    image_bytes = base64.b64decode(encoded)
+  except Exception as exc:
+    raise HTTPException(status_code=400, detail="Invalid base64 image data") from exc
+  extension = mimetypes.guess_extension(mime_type) or ".png"
+  if extension == ".jpe":
+    extension = ".jpg"
+  return image_bytes, mime_type, extension
+
+
+def build_vod_client() -> vod_client.VodClient:
+  if not VOD_SECRET_ID or not VOD_SECRET_KEY:
+    raise HTTPException(status_code=500, detail="VOD secret credentials are not fully configured on server")
+
+  try:
+    vod_credential = credential.Credential(VOD_SECRET_ID, VOD_SECRET_KEY)
+    http_profile = HttpProfile()
+    http_profile.endpoint = VOD_ENDPOINT
+    http_profile.reqTimeout = max(1, int(VOD_HTTP_TIMEOUT_MS / 1000))
+    client_profile = ClientProfile(httpProfile=http_profile)
+    return vod_client.VodClient(vod_credential, VOD_REGION, client_profile)
+  except Exception as exc:
+    raise HTTPException(status_code=500, detail=f"Failed to initialize VOD client: {exc}") from exc
+
+
+def apply_vod_sub_app_id(request: Any) -> None:
+  if VOD_SUB_APP_ID > 0:
+    request.SubAppId = VOD_SUB_APP_ID
+
+
+def upload_image_to_vod(client: vod_client.VodClient, image: str, index: int) -> str:
+  image_bytes, mime_type, extension = parse_data_url(image)
+  media_type = extension.lstrip(".") or "png"
+  if media_type == "jpeg":
+    media_type = "jpg"
+
+  apply_request = vod_models.ApplyUploadRequest()
+  apply_vod_sub_app_id(apply_request)
+  apply_request.MediaType = media_type
+  apply_request.MediaName = f"poster-reference-{index}{extension}"
+
+  try:
+    apply_response = client.ApplyUpload(apply_request)
+  except TencentCloudSDKException as exc:
+    raise HTTPException(status_code=502, detail=f"VOD ApplyUpload failed: {exc}") from exc
+
+  temp_certificate = apply_response.TempCertificate
+  if not temp_certificate:
+    raise HTTPException(status_code=502, detail="VOD ApplyUpload did not return a temporary certificate")
+
+  try:
+    cos_config = CosConfig(
+      Region=apply_response.StorageRegion,
+      SecretId=temp_certificate.SecretId,
+      SecretKey=temp_certificate.SecretKey,
+      Token=temp_certificate.Token,
+      Scheme="https",
+    )
+    cos_client = CosS3Client(cos_config)
+    cos_client.put_object(
+      Bucket=apply_response.StorageBucket,
+      Key=apply_response.MediaStoragePath,
+      Body=image_bytes,
+      ContentType=mime_type,
+    )
+  except Exception as exc:
+    raise HTTPException(status_code=502, detail=f"Uploading image to COS failed: {exc}") from exc
+
+  commit_request = vod_models.CommitUploadRequest()
+  apply_vod_sub_app_id(commit_request)
+  commit_request.VodSessionKey = apply_response.VodSessionKey
+
+  try:
+    commit_response = client.CommitUpload(commit_request)
+  except TencentCloudSDKException as exc:
+    raise HTTPException(status_code=502, detail=f"VOD CommitUpload failed: {exc}") from exc
+
+  file_id = commit_response.FileId
+  if not file_id:
+    raise HTTPException(status_code=502, detail="VOD CommitUpload did not return FileId")
+  return file_id
+
+
+def extract_vod_output_file_url(task: vod_models.AigcImageTask) -> str:
+  output = task.Output
+  if not output or not output.FileInfos:
+    raise HTTPException(status_code=502, detail="VOD task completed without output files")
+
+  for file_info in output.FileInfos:
+    if file_info and file_info.FileUrl:
+      return file_info.FileUrl
+
+  raise HTTPException(status_code=502, detail="VOD task completed without a usable file URL")
+
+
+def call_vod_image_api(prompt: str, images: List[str]) -> str:
+  client = build_vod_client()
+  uploaded_file_ids = [
+    upload_image_to_vod(client, image, index)
+    for index, image in enumerate(images)
+  ]
+
+  request = vod_models.CreateAigcImageTaskRequest()
+  apply_vod_sub_app_id(request)
+  request.ModelName = VOD_MODEL_NAME
+  request.ModelVersion = VOD_MODEL_VERSION
+  request.Prompt = prompt
+
+  output_config = vod_models.AigcImageOutputConfig()
+  output_config.StorageMode = "Temporary"
+  request.OutputConfig = output_config
+
+  if uploaded_file_ids:
+    request.FileInfos = []
+    for file_id in uploaded_file_ids:
+      file_info = vod_models.AigcImageTaskInputFileInfo()
+      file_info.FileId = file_id
+      request.FileInfos.append(file_info)
+
+  try:
+    create_response = client.CreateAigcImageTask(request)
+  except TencentCloudSDKException as exc:
+    raise HTTPException(status_code=502, detail=f"VOD CreateAigcImageTask failed: {exc}") from exc
+
+  task_id = create_response.TaskId
+  if not task_id:
+    raise HTTPException(status_code=502, detail="VOD CreateAigcImageTask did not return TaskId")
+
+  deadline = datetime.now(timezone.utc) + timedelta(seconds=VOD_TASK_TIMEOUT_SECONDS)
+  last_status = "UNKNOWN"
+  while datetime.now(timezone.utc) < deadline:
+    describe_request = vod_models.DescribeTaskDetailRequest()
+    apply_vod_sub_app_id(describe_request)
+    describe_request.TaskId = task_id
+
+    try:
+      describe_response = client.DescribeTaskDetail(describe_request)
+    except TencentCloudSDKException as exc:
+      raise HTTPException(status_code=502, detail=f"VOD DescribeTaskDetail failed: {exc}") from exc
+
+    task = describe_response.AigcImageTask
+    if not task:
+      raise HTTPException(status_code=502, detail="VOD DescribeTaskDetail returned no AigcImageTask payload")
+
+    last_status = task.Status or "UNKNOWN"
+    if last_status in {"FINISH", "SUCCESS"}:
+      if task.ErrCode and task.ErrCode != 0:
+        raise HTTPException(status_code=502, detail=f"VOD task failed: {task.Message or task.ErrCode}")
+      return extract_vod_output_file_url(task)
+
+    if task.ErrCode and task.ErrCode != 0:
+      raise HTTPException(status_code=502, detail=f"VOD task failed: {task.Message or task.ErrCode}")
+
+    time.sleep(max(0.2, VOD_TASK_POLL_INTERVAL_SECONDS))
+
+  raise HTTPException(status_code=504, detail=f"VOD task timed out, last status: {last_status}")
+
+
+def call_traditional_image_api(prompt: str, images: List[str]) -> str:
+  if not POLO_API_KEY:
+    raise HTTPException(status_code=500, detail="POLO_API_KEY not configured on server")
+
+  auth_value = POLO_API_KEY.strip()
+  if auth_value and not auth_value.lower().startswith("bearer "):
+    auth_value = f"Bearer {auth_value}"
+
+  content = [{"type": "text", "text": prompt}]
+  for image in images:
+    content.append({"type": "image_url", "image_url": {"url": image}})
+
+  payload = {
+    "model": "google/gemini-3.1-flash-image-preview",
+    "stream": False,
+    "messages": [
+      {
+        "role": "user",
+        "content": content,
+      }
+    ],
+  }
+
+  try:
+    response = httpx.post(
+      POLO_API_URL,
+      json=payload,
+      headers={
+        "Authorization": auth_value,
+        "Content-Type": "application/json"
+      },
+      timeout=httpx.Timeout(POLO_TIMEOUT_SECONDS)
+    )
+  except httpx.RequestError as exc:
+    raise HTTPException(status_code=502, detail=f"Polo image request failed: {exc}") from exc
+
+  try:
+    data = response.json()
+  except ValueError:
+    data = {"error": response.text}
+
+  if response.status_code >= 400:
+    raise HTTPException(status_code=response.status_code, detail=json.dumps(data))
+
+  image_url = extract_image_url_from_polo_response(data)
+  if not image_url:
+    raise HTTPException(status_code=502, detail="Traditional image API returned no image")
+  return image_url
+
+
+def extract_prompt_and_images_from_chat_payload(payload: Dict[str, Any]) -> tuple[Optional[str], List[str]]:
+  messages = payload.get("messages")
+  if not isinstance(messages, list):
+    return None, []
+
+  for message in reversed(messages):
+    if not isinstance(message, dict) or message.get("role") != "user":
+      continue
+    content = message.get("content")
+    if isinstance(content, str):
+      text = content.strip()
+      return (text or None), []
+    if not isinstance(content, list):
+      continue
+
+    prompt_parts: List[str] = []
+    images: List[str] = []
+    for part in content:
+      if not isinstance(part, dict):
+        continue
+      if part.get("type") == "text":
+        text = str(part.get("text", "")).strip()
+        if text:
+          prompt_parts.append(text)
+      elif part.get("type") == "image_url":
+        url = ((part.get("image_url") or {}).get("url"))
+        if isinstance(url, str) and url:
+          images.append(url)
+    prompt = "\n".join(prompt_parts).strip()
+    return (prompt or None), images
+
+  return None, []
+
+
+def is_image_model_payload(payload: Dict[str, Any]) -> bool:
+  model = str(payload.get("model", "")).strip().lower()
+  return "image" in model
+
+
+def handle_image_model_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+  prompt, images = extract_prompt_and_images_from_chat_payload(payload)
+  if not prompt:
+    raise HTTPException(status_code=400, detail="Image request is missing prompt")
+
+  provider = IMAGE_EDIT_PROVIDER
+  if provider == "vod":
+    image_url = call_vod_image_api(prompt, images)
+  else:
+    image_url = call_traditional_image_api(prompt, images)
+  return normalize_image_response(image_url, provider)
+
+
+@app.post("/ai/image/edit")
+def ai_image_edit(request: ImageEditRequest, user: sqlite3.Row = Depends(require_current_user)):
+  prompt = request.prompt.strip()
+  if not prompt:
+    raise HTTPException(status_code=400, detail="Prompt is required")
+
+  provider = IMAGE_EDIT_PROVIDER
+  if provider == "vod":
+    image_url = call_vod_image_api(prompt, request.images)
+  else:
+    image_url = call_traditional_image_api(prompt, request.images)
+
+  return JSONResponse({
+    "imageUrl": image_url,
+    "provider": provider
+  })
+
+
 @app.post("/ai/chat")
 def ai_chat(payload: Dict[str, Any], user: sqlite3.Row = Depends(require_current_user)):
+  if is_image_model_payload(payload):
+    return JSONResponse(content=handle_image_model_payload(payload))
+
   if not POLO_API_KEY:
     raise HTTPException(status_code=500, detail="POLO_API_KEY not configured on server")
   auth_value = POLO_API_KEY.strip()
@@ -1678,6 +2035,16 @@ def execute_ai_task(task_id: str):
 
     # Parse payload and execute
     payload = json.loads(task["payload"])
+
+    if is_image_model_payload(payload):
+      data = handle_image_model_payload(payload)
+      cursor.execute(
+        "UPDATE ai_tasks SET status = 'completed', result = ?, completed_at = ? WHERE id = ?",
+        (json.dumps(data), datetime.now(timezone.utc).isoformat(), task_id)
+      )
+      conn.commit()
+      print(f"[info] AI task {task_id} completed successfully")
+      return
 
     if not POLO_API_KEY:
       raise Exception("POLO_API_KEY not configured on server")

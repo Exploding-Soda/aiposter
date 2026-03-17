@@ -276,6 +276,37 @@ const callPoloApi = async (
   return data;
 };
 
+const callImageEditApi = async (
+  prompt: string,
+  images: string[] = [],
+): Promise<string> => {
+  const response = await fetchWithAuth(`${BACKEND_API}/ai/image/edit`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      prompt,
+      images,
+    }),
+  });
+
+  const data = (await response.json().catch(() => ({}))) as {
+    imageUrl?: string;
+    detail?: string;
+  };
+
+  if (!response.ok || !data.imageUrl) {
+    const message =
+      typeof data.detail === "string"
+        ? data.detail
+        : `Image edit request failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  return data.imageUrl;
+};
+
 export const planPosters = async (
   userInput: string,
   count: number,
@@ -570,82 +601,36 @@ export const extractImageFromTaskResult = (
 export const generatePosterNoTextImage = async (
   posterImageUrl: string,
 ): Promise<string> => {
-  const messageContent: Array<
-    | { type: "text"; text: string }
-    | { type: "image_url"; image_url: { url: string } }
-  > = [
-    {
-      type: "text",
-      text: "Remove all poster elements from the provided image and keep only the background environment. Eliminate all text, logos, banners, overlays, and graphic elements so the result is a clean background-only scene. Preserve composition, lighting, and colors. Output a clean background-only version with strictly NO TEXT.",
-    },
-    {
-      type: "image_url",
-      image_url: { url: posterImageUrl },
-    },
-  ];
-
-  const response = await callPoloApi({
-    model: "google/gemini-3.1-flash-image-preview",
-    stream: false,
-    messages: [
-      {
-        role: "user",
-        content: messageContent,
-      },
-    ],
-  });
-
-  const imageUrl = extractImageUrl(response.choices?.[0]?.message?.content);
-  if (imageUrl) {
-    return imageUrl;
-  }
-  throw new Error("No image data received");
+  const dataUrl = await ensureDataUrl(posterImageUrl);
+  return callImageEditApi(
+    "Remove all poster elements from the provided image and keep only the background environment. Eliminate all text, logos, banners, overlays, and graphic elements so the result is a clean background-only scene. Preserve composition, lighting, and colors. Output a clean background-only version with strictly NO TEXT.",
+    [dataUrl],
+  );
 };
 
 export const generatePosterMergedImage = async (
   originalImageUrl: string,
   layoutImageUrl: string,
 ): Promise<string> => {
-  const messageContent: Array<
-    | { type: "text"; text: string }
-    | { type: "image_url"; image_url: { url: string } }
-  > = [
-    {
-      type: "text",
-      text: "Replace the text in image 1 using only the letterforms from image 2 (font shape, weight, size, color, tracking, line breaks). Keep all text boxes, panels, background patterns, and textures exactly as in image 1. Do NOT add new decorations; only swap the glyphs.",
-    },
-    {
-      type: "image_url",
-      image_url: { url: originalImageUrl },
-    },
-    {
-      type: "image_url",
-      image_url: { url: layoutImageUrl },
-    },
-  ];
-
-  const response = await callPoloApi({
-    model: "google/gemini-3.1-flash-image-preview",
-    stream: false,
-    messages: [
-      {
-        role: "user",
-        content: messageContent,
-      },
-    ],
-  });
-
-  const imageUrl = extractImageUrl(response.choices?.[0]?.message?.content);
-  if (imageUrl) {
-    return imageUrl;
-  }
-  throw new Error("No image data received");
+  const [originalDataUrl, layoutDataUrl] = await Promise.all([
+    ensureDataUrl(originalImageUrl),
+    ensureDataUrl(layoutImageUrl),
+  ]);
+  return callImageEditApi(
+    "Replace the text in image 1 using only the letterforms from image 2 (font shape, weight, size, color, tracking, line breaks). Keep all text boxes, panels, background patterns, and textures exactly as in image 1. Do NOT add new decorations; only swap the glyphs.",
+    [originalDataUrl, layoutDataUrl],
+  );
 };
 
 export const generateImageFromPrompt = async (
   prompt: string,
   referenceImages: string[] = [],
 ): Promise<string> => {
+  const resolvedReferenceImages = await resolveImageDataUrls(referenceImages);
+  if (resolvedReferenceImages.length > 0) {
+    return callImageEditApi(prompt.trim(), resolvedReferenceImages);
+  }
+
   const messageContent: Array<
     | { type: "text"; text: string }
     | { type: "image_url"; image_url: { url: string } }
@@ -745,44 +730,16 @@ export const editPosterWithMarkup = async (
   const referenceBlock = referenceDataUrl
     ? "Image 3 is an optional reference provided by the user. Use it as guidance for the requested changes, but do not copy it directly."
     : "";
-  const response = await callPoloApi({
-    model: "google/gemini-3.1-flash-image-preview",
-    stream: false,
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: `You will receive two images: image 1 is the original poster, image 2 is the same poster with numbered boxes/arrows. ${referenceBlock} Apply the requested edits to the original while preserving overall composition and typography unless specified. The final output must NOT include any annotation boxes, arrows, or numbers. ${instructions}`,
-          },
-          {
-            type: "image_url",
-            image_url: { url: originalDataUrl },
-          },
-          {
-            type: "image_url",
-            image_url: { url: markedDataUrl },
-          },
-          ...(referenceDataUrl
-            ? [
-                {
-                  type: "image_url",
-                  image_url: { url: referenceDataUrl },
-                },
-              ]
-            : []),
-        ],
-      },
+  const imageUrl = await callImageEditApi(
+    `You will receive two images: image 1 is the original poster, image 2 is the same poster with numbered boxes/arrows. ${referenceBlock} Apply the requested edits to the original while preserving overall composition and typography unless specified. The final output must NOT include any annotation boxes, arrows, or numbers. ${instructions}`,
+    [
+      originalDataUrl,
+      markedDataUrl,
+      ...(referenceDataUrl ? [referenceDataUrl] : []),
     ],
-  });
-
-  const imageUrl = extractImageUrl(response.choices?.[0]?.message?.content);
-  if (imageUrl) {
-    console.log("[edit] received edited image");
-    return imageUrl;
-  }
-  throw new Error("No image data received");
+  );
+  console.log("[edit] received edited image");
+  return imageUrl;
 };
 
 export const generatePosterResolutionFromImage = async (
@@ -790,36 +747,10 @@ export const generatePosterResolutionFromImage = async (
   targetSize: { width: number; height: number },
 ): Promise<string> => {
   const dataUrl = await ensureDataUrl(posterImageUrl);
-  const messageContent: Array<
-    | { type: "text"; text: string }
-    | { type: "image_url"; image_url: { url: string } }
-  > = [
-    {
-      type: "text",
-      text: `Resize the provided image to ${targetSize.width}x${targetSize.height}. Do not change any content, text, colors, or composition. Only scale to fit; do not crop. If aspect ratio differs, add neutral padding to preserve the full image.`,
-    },
-    {
-      type: "image_url",
-      image_url: { url: dataUrl },
-    },
-  ];
-
-  const response = await callPoloApi({
-    model: "google/gemini-3.1-flash-image-preview",
-    stream: false,
-    messages: [
-      {
-        role: "user",
-        content: messageContent,
-      },
-    ],
-  });
-
-  const imageUrl = extractImageUrl(response.choices?.[0]?.message?.content);
-  if (imageUrl) {
-    return imageUrl;
-  }
-  throw new Error("No image data received");
+  return callImageEditApi(
+    `Resize the provided image to ${targetSize.width}x${targetSize.height}. Do not change any content, text, colors, or composition. Only scale to fit; do not crop. If aspect ratio differs, add neutral padding to preserve the full image.`,
+    [dataUrl],
+  );
 };
 
 export const chatWithModel = async (
