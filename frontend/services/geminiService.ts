@@ -351,7 +351,6 @@ const buildImagePrompt = (
   poster: PlanningStep,
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
-  colorReferenceUrl?: string | null,
   targetSize?: { width: number; height: number; label?: string },
 ): string => {
   return poster.visualPrompt?.trim() || "";
@@ -362,7 +361,6 @@ export const generatePosterImage = async (
   styleImages: string[] = [],
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
-  colorReferenceUrl?: string | null,
   targetSize?: { width: number; height: number; label?: string },
   userPrompt?: string,
   extraPrompt?: string,
@@ -382,7 +380,6 @@ export const generatePosterImage = async (
   const resolvedStyleImages = await resolveImageDataUrls(styleImages);
   const resolvedLogoUrl = await resolveImageDataUrl(logoUrl);
   const resolvedFontReferenceUrl = await resolveImageDataUrl(fontReferenceUrl);
-  const resolvedColorReferenceUrl = await resolveImageDataUrl(colorReferenceUrl);
   if (import.meta.env.DEV) {
     console.log("[poster] generate sync: resolved logo", {
       logoResolved: Boolean(resolvedLogoUrl),
@@ -394,7 +391,6 @@ export const generatePosterImage = async (
     resolvedStyleImages,
     resolvedLogoUrl,
     resolvedFontReferenceUrl,
-    resolvedColorReferenceUrl,
     targetSize,
     userPrompt,
     extraPrompt,
@@ -414,7 +410,6 @@ const buildGeneratePosterPayload = (
   styleImages: string[] = [],
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
-  colorReferenceUrl?: string | null,
   targetSize?: { width: number; height: number; label?: string },
   userPrompt?: string,
   extraPrompt?: string,
@@ -429,11 +424,8 @@ const buildGeneratePosterPayload = (
   const hasFontReference = Boolean(
     fontReferenceUrl && fontReferenceUrl.startsWith("data:image/"),
   );
-  const hasColorReference = Boolean(
-    colorReferenceUrl && colorReferenceUrl.startsWith("data:image/"),
-  );
 
-  const imageOrder: Array<{ kind: "style" | "logo" | "font" | "color"; url: string }> =
+  const imageOrder: Array<{ kind: "style" | "logo" | "font"; url: string }> =
     [];
   styleImages.forEach((url) => {
     if (url && url.startsWith("data:image/")) {
@@ -446,11 +438,8 @@ const buildGeneratePosterPayload = (
   if (hasFontReference && fontReferenceUrl) {
     imageOrder.push({ kind: "font", url: fontReferenceUrl });
   }
-  if (hasColorReference && colorReferenceUrl) {
-    imageOrder.push({ kind: "color", url: colorReferenceUrl });
-  }
 
-  const indexOf = (kind: "style" | "logo" | "font" | "color") => {
+  const indexOf = (kind: "style" | "logo" | "font") => {
     const idx = imageOrder.findIndex((entry) => entry.kind === kind);
     return idx >= 0 ? idx + 1 : null;
   };
@@ -458,7 +447,6 @@ const buildGeneratePosterPayload = (
   const styleIndex = indexOf("style");
   const logoIndex = indexOf("logo");
   const fontIndex = indexOf("font");
-  const colorIndex = indexOf("color");
 
   const styleInstruction = styleIndex
     ? `The poster style must match Image ${styleIndex} as closely as possible (composition, palette, textures, lighting, mood, and overall visual language). Do not deviate.`
@@ -468,9 +456,6 @@ const buildGeneratePosterPayload = (
     : "";
   const fontPrefix = fontIndex
     ? `Generate a new poster using the font style shown in Image ${fontIndex}. `
-    : "";
-  const colorInstruction = colorIndex
-    ? `The poster's main color palette should reference Image ${colorIndex} closely. Treat Image ${colorIndex} as the primary color reference for the poster.`
     : "";
   const extraInstruction = extraPrompt?.trim()
     ? `Additional design guidance: ${extraPrompt.trim()}`
@@ -485,9 +470,8 @@ const buildGeneratePosterPayload = (
         `${userPrefix}${fontPrefix}`.trim(),
         styleInstruction,
         "Create a vertical 9:16 poster.",
-        buildImagePrompt(poster, logoUrl, fontReferenceUrl, colorReferenceUrl, targetSize),
+        buildImagePrompt(poster, logoUrl, fontReferenceUrl, targetSize),
         logoInstruction,
-        colorInstruction,
         extraInstruction,
       ]
         .filter(Boolean)
@@ -517,7 +501,6 @@ export const generatePosterImageAsync = async (
   styleImages: string[] = [],
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
-  colorReferenceUrl?: string | null,
   targetSize?: { width: number; height: number; label?: string },
   userPrompt?: string,
   extraPrompt?: string,
@@ -537,7 +520,6 @@ export const generatePosterImageAsync = async (
   const resolvedStyleImages = await resolveImageDataUrls(styleImages);
   const resolvedLogoUrl = await resolveImageDataUrl(logoUrl);
   const resolvedFontReferenceUrl = await resolveImageDataUrl(fontReferenceUrl);
-  const resolvedColorReferenceUrl = await resolveImageDataUrl(colorReferenceUrl);
   if (import.meta.env.DEV) {
     console.log("[poster] generate async: resolved logo", {
       logoResolved: Boolean(resolvedLogoUrl),
@@ -549,7 +531,6 @@ export const generatePosterImageAsync = async (
     resolvedStyleImages,
     resolvedLogoUrl,
     resolvedFontReferenceUrl,
-    resolvedColorReferenceUrl,
     targetSize,
     userPrompt,
     extraPrompt,

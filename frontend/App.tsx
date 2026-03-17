@@ -118,14 +118,6 @@ type FontReferenceItem = {
   mime_type?: string | null;
   created_at: string;
 };
-type ColorReferenceItem = {
-  id: string;
-  original_name: string;
-  file_path: string;
-  thumbnail_path?: string | null;
-  mime_type?: string | null;
-  created_at: string;
-};
 
 const rectsOverlap = (a: Rect, b: Rect, padding = 0) => (
   !(a.right + padding <= b.left || a.left - padding >= b.right || a.bottom + padding <= b.top || a.top - padding >= b.bottom)
@@ -137,8 +129,7 @@ const computeProductionMetrics = (
   boardHeight: number,
   includeStyle: boolean,
   includeLogo: boolean,
-  includeFontReference: boolean,
-  includeColorReference: boolean
+  includeFontReference: boolean
 ) => {
   const assetStartX = -300;
   let currentY = 40;
@@ -146,7 +137,6 @@ const computeProductionMetrics = (
   if (includeStyle) currentY += 166;
   if (includeLogo) currentY += 116;
   if (includeFontReference) currentY += 116;
-  if (includeColorReference) currentY += 116;
   const groupHeight = currentY + 16;
 
   const rows = Math.max(1, Math.ceil(count / 3));
@@ -225,7 +215,6 @@ const App: React.FC = () => {
   const [styleImages, setStyleImages] = useState<string[]>([]);
   const [logoImage, setLogoImage] = useState<string | null>(null);
   const [fontReferenceImage, setFontReferenceImage] = useState<string | null>(null);
-  const [colorReferenceImage, setColorReferenceImage] = useState<string | null>(null);
   const [activePosterId, setActivePosterId] = useState<string | null>(null);
   const [editablePoster, setEditablePoster] = useState<PlanningStep | null>(null);
   const [editableLayout, setEditableLayout] = useState<TextLayout | null>(null);
@@ -276,37 +265,25 @@ const App: React.FC = () => {
   const [fontReferencesLoading, setFontReferencesLoading] = useState(false);
   const [fontReferencesError, setFontReferencesError] = useState('');
   const [selectedFontReferenceId, setSelectedFontReferenceId] = useState<string | null>(null);
-  const [colorReferences, setColorReferences] = useState<ColorReferenceItem[]>([]);
-  const [colorReferencesLoading, setColorReferencesLoading] = useState(false);
-  const [colorReferencesError, setColorReferencesError] = useState('');
-  const [selectedColorReferenceId, setSelectedColorReferenceId] = useState<string | null>(null);
   const missingReferenceStyleIdsRef = useRef<Set<string>>(new Set());
   const missingLogoAssetIdsRef = useRef<Set<string>>(new Set());
   const missingFontReferenceIdsRef = useRef<Set<string>>(new Set());
-  const missingColorReferenceIdsRef = useRef<Set<string>>(new Set());
   const referenceStyleFetchAttemptedRef = useRef<Set<string>>(new Set());
   const logoAssetFetchAttemptedRef = useRef<Set<string>>(new Set());
   const fontReferenceFetchAttemptedRef = useRef<Set<string>>(new Set());
-  const colorReferenceFetchAttemptedRef = useRef<Set<string>>(new Set());
   const referenceStylesLoadedOnceRef = useRef(false);
   const logoAssetsLoadedOnceRef = useRef(false);
   const fontReferencesLoadedOnceRef = useRef(false);
-  const colorReferencesLoadedOnceRef = useRef(false);
   const lastBoardAssetsRefreshRef = useRef<{ projectId: string | null; at: number }>({ projectId: null, at: 0 });
   const [fontReferenceSelectLoadingId, setFontReferenceSelectLoadingId] = useState<string | null>(null);
   const [fontReferenceUploadProgress, setFontReferenceUploadProgress] = useState<number | null>(null);
   const [isFontReferenceUploading, setIsFontReferenceUploading] = useState(false);
-  const [colorReferenceSelectLoadingId, setColorReferenceSelectLoadingId] = useState<string | null>(null);
-  const [colorReferenceUploadProgress, setColorReferenceUploadProgress] = useState<number | null>(null);
-  const [isColorReferenceUploading, setIsColorReferenceUploading] = useState(false);
   const [refStylesCanLeft, setRefStylesCanLeft] = useState(false);
   const [refStylesCanRight, setRefStylesCanRight] = useState(false);
   const [logosCanLeft, setLogosCanLeft] = useState(false);
   const [logosCanRight, setLogosCanRight] = useState(false);
   const [fontRefsCanLeft, setFontRefsCanLeft] = useState(false);
   const [fontRefsCanRight, setFontRefsCanRight] = useState(false);
-  const [colorRefsCanLeft, setColorRefsCanLeft] = useState(false);
-  const [colorRefsCanRight, setColorRefsCanRight] = useState(false);
   const [fadeInCanvasAssetIds, setFadeInCanvasAssetIds] = useState<Set<string>>(new Set());
   const [feedbackSuggestions, setFeedbackSuggestions] = useState<string[]>([]);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
@@ -412,11 +389,9 @@ const App: React.FC = () => {
   const referenceStyleUploadRef = useRef<HTMLInputElement | null>(null);
   const logoAssetUploadRef = useRef<HTMLInputElement | null>(null);
   const fontReferenceUploadRef = useRef<HTMLInputElement | null>(null);
-  const colorReferenceUploadRef = useRef<HTMLInputElement | null>(null);
   const referenceStylesScrollRef = useRef<HTMLDivElement | null>(null);
   const logoAssetsScrollRef = useRef<HTMLDivElement | null>(null);
   const fontReferencesScrollRef = useRef<HTMLDivElement | null>(null);
-  const colorReferencesScrollRef = useRef<HTMLDivElement | null>(null);
 
   const isAnnotatorReady = Boolean(annotatorImage && annotatorSize.width > 0 && annotatorSize.height > 0);
   const dragState = useRef<{
@@ -586,18 +561,6 @@ const App: React.FC = () => {
     return () => window.removeEventListener('popstate', handlePopState);
   }, [syncRouteState]);
 
-  useEffect(() => {
-    if (!route.startsWith('/board/')) return;
-    referenceStylesLoadedOnceRef.current = false;
-    logoAssetsLoadedOnceRef.current = false;
-    fontReferencesLoadedOnceRef.current = false;
-    colorReferencesLoadedOnceRef.current = false;
-    referenceStyleFetchAttemptedRef.current.clear();
-    logoAssetFetchAttemptedRef.current.clear();
-    fontReferenceFetchAttemptedRef.current.clear();
-    colorReferenceFetchAttemptedRef.current.clear();
-  }, [route]);
-
   const convertFileUrlsToHttp = (project: Project): Project => {
     const convertUrl = (url?: string): string | undefined => {
       if (!url) return url;
@@ -626,7 +589,6 @@ const App: React.FC = () => {
       styleImages: convertUrls(project.styleImages),
       logoImage: convertUrl(project.logoImage) || project.logoImage || undefined,
       fontReferenceImage: convertUrl(project.fontReferenceImage) || project.fontReferenceImage || undefined,
-      colorReferenceImage: convertUrl(project.colorReferenceImage) || project.colorReferenceImage || undefined,
       canvasAssets: convertAssets(project.canvasAssets),
       artboards: project.artboards?.map((ab) => ({
         ...ab,
@@ -660,11 +622,9 @@ const App: React.FC = () => {
     styleImages: [],
     logoImage: null,
     fontReferenceImage: null,
-    colorReferenceImage: null,
     selectedReferenceStyleId: project.selectedReferenceStyleId ?? null,
     selectedLogoAssetId: project.selectedLogoAssetId ?? null,
     selectedFontReferenceId: project.selectedFontReferenceId ?? null,
-    selectedColorReferenceId: project.selectedColorReferenceId ?? null,
     view: project.view
   });
 
@@ -1019,11 +979,9 @@ const App: React.FC = () => {
     setStyleImages(activeProject.styleImages || []);
     setLogoImage(activeProject.logoImage || null);
     setFontReferenceImage(activeProject.fontReferenceImage || null);
-    setColorReferenceImage(activeProject.colorReferenceImage || null);
     setSelectedReferenceStyleId(activeProject.selectedReferenceStyleId || null);
     setSelectedLogoAssetId(activeProject.selectedLogoAssetId || null);
     setSelectedFontReferenceId(activeProject.selectedFontReferenceId || null);
-    setSelectedColorReferenceId(activeProject.selectedColorReferenceId || null);
     setActivePosterId(null);
     setEditablePoster(null);
     setEditableLayout(null);
@@ -2699,31 +2657,6 @@ const App: React.FC = () => {
     }
   }, [authUser]);
 
-  const loadColorReferences = useCallback(async () => {
-    if (!authUser) {
-      setColorReferences([]);
-      colorReferencesLoadedOnceRef.current = true;
-      return;
-    }
-    setColorReferencesLoading(true);
-    setColorReferencesError('');
-    try {
-      const response = await fetchWithAuth(`${BACKEND_API}/color-references`);
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load color references';
-        throw new Error(message);
-      }
-      setColorReferences(Array.isArray(data.items) ? data.items : []);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load color references';
-      setColorReferencesError(message);
-    } finally {
-      setColorReferencesLoading(false);
-      colorReferencesLoadedOnceRef.current = true;
-    }
-  }, [authUser]);
-
 
   const handleUploadReferenceStyle = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -2878,57 +2811,6 @@ const App: React.FC = () => {
     }
   };
 
-  const handleUploadColorReference = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setColorReferencesError('');
-    setIsColorReferenceUploading(true);
-    setColorReferenceUploadProgress(0);
-    try {
-      const url = `${BACKEND_API}/color-references/upload`;
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', url);
-        const token = getAccessToken();
-        if (token) {
-          xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-        }
-        xhr.withCredentials = true;
-        xhr.upload.onprogress = (evt) => {
-          if (evt.lengthComputable) {
-            const percent = Math.round((evt.loaded / evt.total) * 100);
-            setColorReferenceUploadProgress(percent);
-          }
-        };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve();
-            return;
-          }
-          try {
-            const data = JSON.parse(xhr.responseText || '{}');
-            const message = typeof data?.detail === 'string' ? data.detail : 'Failed to upload color reference';
-            reject(new Error(message));
-          } catch (parseError) {
-            reject(parseError);
-          }
-        };
-        xhr.onerror = () => reject(new Error('Failed to upload color reference'));
-        const formData = new FormData();
-        formData.append('file', file);
-        xhr.send(formData);
-      });
-      await loadColorReferences();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to upload color reference';
-      setColorReferencesError(message);
-    } finally {
-      setIsColorReferenceUploading(false);
-      setColorReferenceUploadProgress(null);
-      event.target.value = '';
-    }
-  };
-
 
   useEffect(() => {
     if (rightPanelMode === 'gallery') {
@@ -2960,32 +2842,6 @@ const App: React.FC = () => {
     if (fontReferencesLoadedOnceRef.current) return;
     void loadFontReferences();
   }, [rightPanelMode, loadFontReferences, fontReferences.length, fontReferencesLoading]);
-
-  useEffect(() => {
-    if (rightPanelMode !== 'generator') return;
-    if (colorReferencesLoading) return;
-    if (colorReferences.length > 0) return;
-    if (colorReferencesLoadedOnceRef.current) return;
-    void loadColorReferences();
-  }, [rightPanelMode, loadColorReferences, colorReferences.length, colorReferencesLoading]);
-
-  useEffect(() => {
-    if (!authUser) return;
-    if (!route.startsWith('/board/')) return;
-    if (rightPanelMode !== 'generator') return;
-    void loadReferenceStyles();
-    void loadLogoAssets();
-    void loadFontReferences();
-    void loadColorReferences();
-  }, [
-    authUser,
-    route,
-    rightPanelMode,
-    loadReferenceStyles,
-    loadLogoAssets,
-    loadFontReferences,
-    loadColorReferences
-  ]);
 
   useEffect(() => {
     if (!selectedReferenceStyleId) return;
@@ -3111,48 +2967,6 @@ const App: React.FC = () => {
     fontReferences,
     fontReferenceImage,
     loadFontReferences
-  ]);
-
-  useEffect(() => {
-    if (!selectedColorReferenceId) return;
-    if (missingColorReferenceIdsRef.current.has(selectedColorReferenceId)) {
-      setSelectedColorReferenceId(null);
-      setColorReferenceImage(null);
-      return;
-    }
-    if (colorReferencesLoading) return;
-    if (colorReferences.length === 0) {
-      if (colorReferencesLoadedOnceRef.current) {
-        missingColorReferenceIdsRef.current.add(selectedColorReferenceId);
-        setSelectedColorReferenceId(null);
-        setColorReferenceImage(null);
-        return;
-      }
-      if (!colorReferenceFetchAttemptedRef.current.has(selectedColorReferenceId)) {
-        colorReferenceFetchAttemptedRef.current.add(selectedColorReferenceId);
-        void loadColorReferences();
-        return;
-      }
-      missingColorReferenceIdsRef.current.add(selectedColorReferenceId);
-      setSelectedColorReferenceId(null);
-      setColorReferenceImage(null);
-      return;
-    }
-    if (colorReferenceImage?.startsWith('data:image/')) return;
-    const item = colorReferences.find((entry) => entry.id === selectedColorReferenceId);
-    if (item) {
-      void applyColorReferenceSelection(item);
-      return;
-    }
-    missingColorReferenceIdsRef.current.add(selectedColorReferenceId);
-    setSelectedColorReferenceId(null);
-    setColorReferenceImage(null);
-  }, [
-    selectedColorReferenceId,
-    colorReferencesLoading,
-    colorReferences,
-    colorReferenceImage,
-    loadColorReferences
   ]);
 
   const handleRemoveStyleImage = (index: number) => {
@@ -3385,36 +3199,6 @@ const App: React.FC = () => {
     setSelectedFontReferenceId(null);
   };
 
-  const handleSelectColorReference = async (item: ColorReferenceItem) => {
-    if (selectedColorReferenceId === item.id) {
-      setColorReferenceImage(null);
-      setSelectedColorReferenceId(null);
-      return;
-    }
-    await applyColorReferenceSelection(item);
-  };
-
-  const applyColorReferenceSelection = async (item: ColorReferenceItem) => {
-    setColorReferenceSelectLoadingId(item.id);
-    setColorReferencesError('');
-    try {
-      const url = `${BACKEND_API}/color-reference/${item.file_path}`;
-      const dataUrl = await fetchAuthedImageAsDataUrl(url);
-      setColorReferenceImage(dataUrl);
-      setSelectedColorReferenceId(item.id);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load color reference';
-      setColorReferencesError(message);
-    } finally {
-      setColorReferenceSelectLoadingId(null);
-    }
-  };
-
-  const handleClearColorReference = () => {
-    setColorReferenceImage(null);
-    setSelectedColorReferenceId(null);
-  };
-
   const updateScrollIndicators = useCallback(
     (
       ref: React.RefObject<HTMLDivElement>,
@@ -3458,13 +3242,6 @@ const App: React.FC = () => {
     });
     return () => window.cancelAnimationFrame(raf);
   }, [fontReferences.length, updateScrollIndicators]);
-
-  useEffect(() => {
-    const raf = window.requestAnimationFrame(() => {
-      updateScrollIndicators(colorReferencesScrollRef, setColorRefsCanLeft, setColorRefsCanRight);
-    });
-    return () => window.cancelAnimationFrame(raf);
-  }, [colorReferences.length, updateScrollIndicators]);
 
   const handleSelectLogoAsset = async (item: LogoItem) => {
     if (selectedLogoAssetId === item.filename) {
@@ -4722,7 +4499,7 @@ Return ONLY valid JSON in the format:
       });
 
       // Submit async task
-      const taskId = await generatePosterImageAsync(targetPoster, styleImages, logoForPoster, fontReferenceUrl, colorReferenceImage);
+      const taskId = await generatePosterImageAsync(targetPoster, styleImages, logoForPoster, fontReferenceUrl);
 
       // Store taskId for recovery
       updatePosterArtboard(baseDerivedId, (ab) => ({
@@ -4879,7 +4656,6 @@ Return ONLY valid JSON in the format:
     const currentLogoImage = await resolveLogoImageForModel();
     const currentFont = selectedServerFont;
     const currentFontReferenceImage = fontReferenceImage;
-    const currentColorReferenceImage = colorReferenceImage;
     const currentDesignGuidance = '';
 
     // Clear generator inputs immediately after submission
@@ -4891,15 +4667,13 @@ Return ONLY valid JSON in the format:
     const includeStyle = currentStyleImages.length > 0 && Boolean(currentStyleImages[0]);
     const includeLogo = Boolean(currentLogoImage);
     const includeFontReference = Boolean(currentFontReferenceImage);
-    const includeColorReference = Boolean(currentColorReferenceImage);
     const metrics = computeProductionMetrics(
       currentCount,
       boardWidth,
       boardHeight,
       includeStyle,
       includeLogo,
-      includeFontReference,
-      includeColorReference
+      includeFontReference
     );
     const viewCenter = getViewCenterWorld();
     const baseXSeed = viewCenter.x - metrics.leftRel - metrics.width / 2;
@@ -5039,23 +4813,6 @@ Return ONLY valid JSON in the format:
       currentY += 116;
     }
 
-    if (currentColorReferenceImage) {
-      const colorAsset: Asset = {
-        id: `color-ref-${timeSeed}-1`,
-        type: 'image',
-        x: assetStartX + 16,
-        y: currentY,
-        width: 200,
-        height: 100,
-        content: currentColorReferenceImage,
-        zIndex: 16,
-        isProductionAsset: true,
-        groupId
-      };
-      newAssets.push(colorAsset);
-      currentY += 116;
-    }
-
     // Calculate group background bounds
     const groupPadding = 16;
     const groupHeight = currentY - baseY + groupPadding;
@@ -5171,7 +4928,6 @@ Return ONLY valid JSON in the format:
                 currentStyleImages,
                 logoForPoster,
                 fontReferenceUrl,
-                currentColorReferenceImage,
                 undefined,
                 currentTheme,
                 currentDesignGuidance
@@ -5296,11 +5052,9 @@ Return ONLY valid JSON in the format:
       styleImages: sanitizeUploadUrls(styleImages),
       logoImage: sanitizeUploadUrl(logoImage),
       fontReferenceImage: sanitizeUploadUrl(fontReferenceImage),
-      colorReferenceImage: sanitizeUploadUrl(colorReferenceImage),
       selectedReferenceStyleId,
       selectedLogoAssetId,
       selectedFontReferenceId,
-      selectedColorReferenceId,
       view: {
         x: viewOffset.x,
         y: viewOffset.y,
@@ -6617,133 +6371,6 @@ Return ONLY valid JSON in the format:
                       )}
                     </div>
                   </>
-                )}
-              </motion.div>
-              <motion.div layout className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                    Main Color (optional)
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => handleNavigate('/personal-space')}
-                    className="text-sm font-semibold text-slate-400 hover:text-slate-600"
-                    aria-label="Open Personal Space"
-                    title="Open Personal Space"
-                  >
-                    鈿?
-                  </button>
-                </div>
-                {colorReferencesError && (
-                  <div className="text-[10px] text-red-500">{colorReferencesError}</div>
-                )}
-                {colorReferencesLoading ? (
-                  <div className="text-[11px] text-slate-400">Loading color references...</div>
-                ) : colorReferences.length > 0 ? (
-                  <>
-                    <AnimatePresence initial={false}>
-                      {colorReferenceImage && (
-                        <motion.div
-                          layout
-                          initial={{ opacity: 0, y: 8 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -8 }}
-                          className="relative group w-full h-24 rounded-md border border-slate-200 bg-white flex items-center justify-center overflow-hidden"
-                        >
-                          <img src={colorReferenceImage} alt="Color reference preview" className="w-full h-full object-cover" />
-                          <button
-                            type="button"
-                            onClick={handleClearColorReference}
-                            className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-slate-900 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
-                            aria-label="Remove color reference"
-                          >
-                            脳
-                          </button>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                    <div className="relative">
-                      <div
-                        ref={colorReferencesScrollRef}
-                        className="overflow-x-auto scrollbar-hide"
-                        onScroll={() => updateScrollIndicators(colorReferencesScrollRef, setColorRefsCanLeft, setColorRefsCanRight)}
-                        onWheel={(event) => {
-                          if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-                          event.preventDefault();
-                          event.currentTarget.scrollBy({ left: event.deltaY, behavior: 'auto' });
-                        }}
-                      >
-                        <div
-                          className="grid gap-2 pr-1"
-                          style={{ gridAutoFlow: 'column', gridAutoColumns: 'calc((100% - 16px) / 3)' }}
-                        >
-                          {colorReferences.map((item) => {
-                            const isSelected = selectedColorReferenceId === item.id;
-                            const isLoading = colorReferenceSelectLoadingId === item.id;
-                            const thumbUrl = `${BACKEND_API}/color-reference/${item.thumbnail_path || item.file_path}`;
-                            return (
-                              <button
-                                key={item.id}
-                                type="button"
-                                onClick={() => void handleSelectColorReference(item)}
-                                disabled={isLoading}
-                                className={`relative h-16 rounded-lg border bg-white overflow-hidden focus:outline-none focus:ring-2 focus:ring-amber-500 ${isSelected ? 'border-amber-500 ring-2 ring-amber-200' : 'border-slate-200 hover:border-slate-300'} ${isLoading ? 'opacity-70' : ''}`}
-                                aria-label={`Use ${item.original_name}`}
-                                title={item.original_name}
-                              >
-                                <img src={thumbUrl} alt={item.original_name} className="w-full h-full object-cover" />
-                                {isSelected && (
-                                  <div className="absolute bottom-1 right-1 bg-amber-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
-                                    Using
-                                  </div>
-                                )}
-                                {isLoading && (
-                                  <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
-                                    <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
-                                  </div>
-                                )}
-                              </button>
-                            );
-                          })}
-                          <label className="h-16 rounded-lg border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-1 text-slate-400 hover:border-slate-400 hover:text-slate-600 transition-colors cursor-pointer">
-                            <span className="text-base font-medium leading-none">+</span>
-                            <span className="text-[9px] font-bold uppercase tracking-widest">Add Image</span>
-                            <input
-                              ref={colorReferenceUploadRef}
-                              type="file"
-                              accept="image/*"
-                              onChange={handleUploadColorReference}
-                              className="hidden"
-                            />
-                          </label>
-                        </div>
-                      </div>
-                      {colorRefsCanLeft && (
-                        <button
-                          type="button"
-                          onClick={() => scrollRow(colorReferencesScrollRef, 'left')}
-                          className="absolute left-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-slate-700 hover:border-slate-300 shadow-sm"
-                          aria-label="Scroll left"
-                        >
-                          鈥?
-                        </button>
-                      )}
-                      {colorRefsCanRight && (
-                        <button
-                          type="button"
-                          onClick={() => scrollRow(colorReferencesScrollRef, 'right')}
-                          className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-slate-700 hover:border-slate-300 shadow-sm"
-                          aria-label="Scroll right"
-                        >
-                          鈥?
-                        </button>
-                      )}
-                    </div>
-                  </>
-                ) : (
-                  <div className="text-[11px] text-slate-400">
-                    No color references found. Upload some in Personal Space.
-                  </div>
                 )}
               </motion.div>
               <motion.div layout className="space-y-2">

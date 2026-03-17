@@ -26,15 +26,6 @@ type FontReferenceItem = {
   created_at: string;
 };
 
-type ColorReferenceItem = {
-  id: string;
-  original_name: string;
-  file_path: string;
-  thumbnail_path?: string | null;
-  mime_type?: string | null;
-  created_at: string;
-};
-
 type LogoItem = {
   png?: string;
   webp: string;
@@ -54,12 +45,6 @@ const PersonalSpacePage: React.FC = () => {
   const [fontReferenceDeleting, setFontReferenceDeleting] = useState<string | null>(null);
   const [fontReferenceUploadProgress, setFontReferenceUploadProgress] = useState<number | null>(null);
   const [isFontReferenceUploading, setIsFontReferenceUploading] = useState(false);
-  const [colorReferences, setColorReferences] = useState<ColorReferenceItem[]>([]);
-  const [colorReferenceLoading, setColorReferenceLoading] = useState(true);
-  const [colorReferenceError, setColorReferenceError] = useState('');
-  const [colorReferenceDeleting, setColorReferenceDeleting] = useState<string | null>(null);
-  const [colorReferenceUploadProgress, setColorReferenceUploadProgress] = useState<number | null>(null);
-  const [isColorReferenceUploading, setIsColorReferenceUploading] = useState(false);
   const [logos, setLogos] = useState<LogoItem[]>([]);
   const [logosLoading, setLogosLoading] = useState(false);
   const [logosError, setLogosError] = useState('');
@@ -134,31 +119,9 @@ const PersonalSpacePage: React.FC = () => {
     }
   };
 
-  const loadColorReferences = async () => {
-    setColorReferenceLoading(true);
-    setColorReferenceError('');
-    try {
-      const response = await fetchWithAuth(
-        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/color-references`
-      );
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load color references';
-        throw new Error(message);
-      }
-      setColorReferences(Array.isArray(data.items) ? data.items : []);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to load color references';
-      setColorReferenceError(message);
-    } finally {
-      setColorReferenceLoading(false);
-    }
-  };
-
   useEffect(() => {
     void loadReferenceStyles();
     void loadFontReferences();
-    void loadColorReferences();
     void loadLogos();
   }, []);
 
@@ -310,80 +273,6 @@ const PersonalSpacePage: React.FC = () => {
     }
   };
 
-  const handleColorReferenceUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setColorReferenceError('');
-    setIsColorReferenceUploading(true);
-    setColorReferenceUploadProgress(0);
-    try {
-      const url = `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/color-references/upload`;
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', url);
-        const token = getAccessToken();
-        if (token) {
-          xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-        }
-        xhr.withCredentials = true;
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable) {
-            const percent = Math.round((event.loaded / event.total) * 100);
-            setColorReferenceUploadProgress(percent);
-          }
-        };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve();
-            return;
-          }
-          try {
-            const data = JSON.parse(xhr.responseText || '{}');
-            const message = typeof data?.detail === 'string' ? data.detail : 'Failed to upload color reference';
-            reject(new Error(message));
-          } catch (parseError) {
-            reject(parseError);
-          }
-        };
-        xhr.onerror = () => reject(new Error('Failed to upload color reference'));
-        const formData = new FormData();
-        formData.append('file', file);
-        xhr.send(formData);
-      });
-      await loadColorReferences();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to upload color reference';
-      setColorReferenceError(message);
-    } finally {
-      setIsColorReferenceUploading(false);
-      setColorReferenceUploadProgress(null);
-      event.target.value = '';
-    }
-  };
-
-  const handleDeleteColorReference = async (item: ColorReferenceItem) => {
-    if (!window.confirm('Delete this color reference?')) return;
-    setColorReferenceError('');
-    setColorReferenceDeleting(item.id);
-    try {
-      const response = await fetchWithAuth(
-        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/color-references/${item.id}`,
-        { method: 'DELETE' }
-      );
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to delete color reference';
-        throw new Error(message);
-      }
-      setColorReferences((prev) => prev.filter((entry) => entry.id !== item.id));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to delete color reference';
-      setColorReferenceError(message);
-    } finally {
-      setColorReferenceDeleting(null);
-    }
-  };
-
   const handleOpenReferencePreview = (item: ReferenceStyleItem) => {
     const baseUrl = import.meta.env.VITE_BACKEND_API || 'http://localhost:8001';
     setPreviewImageUrl(`${baseUrl}/reference/${item.file_path}`);
@@ -403,14 +292,6 @@ const PersonalSpacePage: React.FC = () => {
   const handleOpenFontReferencePreview = (item: FontReferenceItem) => {
     const baseUrl = import.meta.env.VITE_BACKEND_API || 'http://localhost:8001';
     setPreviewImageUrl(`${baseUrl}/font-reference/${item.file_path}`);
-    setPreviewImageName(item.original_name);
-    setPreviewImageSize(null);
-    setIsPreviewClosing(false);
-  };
-
-  const handleOpenColorReferencePreview = (item: ColorReferenceItem) => {
-    const baseUrl = import.meta.env.VITE_BACKEND_API || 'http://localhost:8001';
-    setPreviewImageUrl(`${baseUrl}/color-reference/${item.file_path}`);
     setPreviewImageName(item.original_name);
     setPreviewImageSize(null);
     setIsPreviewClosing(false);
@@ -663,67 +544,6 @@ const PersonalSpacePage: React.FC = () => {
                   <Plus size={24} />
                   <span className="text-[10px] font-bold uppercase tracking-wider">Add Image</span>
                   <input type="file" className="hidden" accept="image/*" onChange={handleFontReferenceUpload} />
-                </label>
-              </div>
-            </div>
-          </section>
-
-          <section className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6">
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-amber-50 text-amber-600 rounded-xl">
-                  <ImageIcon size={18} />
-                </div>
-                <h3 className="font-bold text-gray-900">Main Color References</h3>
-              </div>
-
-              <label className="p-2 hover:bg-gray-100 rounded-full cursor-pointer transition-colors">
-                <Plus size={20} className="text-gray-400 hover:text-gray-900" />
-                <input type="file" className="hidden" accept="image/*" onChange={handleColorReferenceUpload} />
-              </label>
-            </div>
-
-            <div className="flex-1">
-              {colorReferenceError && (
-                <div className="text-xs text-red-600 mb-3">{colorReferenceError}</div>
-              )}
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                {colorReferenceLoading && colorReferences.length === 0 ? (
-                  <div className="col-span-full text-sm text-gray-400">Loading color references...</div>
-                ) : colorReferences.length > 0 ? (
-                  colorReferences.map((item) => (
-                    <div
-                      key={item.id}
-                      className="aspect-square bg-gray-50 rounded-2xl border border-gray-100 overflow-hidden relative group shadow-sm"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => handleOpenColorReferencePreview(item)}
-                        className="absolute inset-0"
-                        aria-label={`Preview ${item.original_name}`}
-                      >
-                        <img
-                          src={`${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/color-reference/${item.thumbnail_path || item.file_path}`}
-                          alt={item.original_name}
-                          className="w-full h-full object-cover transition-transform group-hover:scale-110"
-                        />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteColorReference(item)}
-                        disabled={colorReferenceDeleting === item.id}
-                        className="absolute top-2 right-2 w-7 h-7 rounded-full bg-white/90 text-gray-700 hover:bg-white text-xs font-bold shadow-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-60"
-                        aria-label="Delete color reference"
-                      >
-                        x
-                      </button>
-                    </div>
-                  ))
-                ) : null}
-                <label className="aspect-square border-2 border-dashed border-gray-200 rounded-2xl flex flex-col items-center justify-center gap-2 text-gray-400 hover:border-amber-400 hover:text-amber-500 hover:bg-amber-50/30 transition-all cursor-pointer">
-                  <Plus size={24} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider">Add Image</span>
-                  <input type="file" className="hidden" accept="image/*" onChange={handleColorReferenceUpload} />
                 </label>
               </div>
             </div>
