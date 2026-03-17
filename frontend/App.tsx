@@ -577,9 +577,9 @@ const App: React.FC = () => {
       if (url.startsWith('file://')) {
         // Convert file://db/files/project-id/filename.png to backend file URL
         const path = url.replace('file://db/files/', '');
-        return `${BACKEND_API}/files/${path}`;
+        return normalizeSecureImageUrl(`${BACKEND_API}/files/${path}`);
       }
-      return url;
+      return normalizeSecureImageUrl(url);
     };
     const convertUrls = (urls?: string[]) => (
       urls ? urls.map((url) => convertUrl(url) || url) : urls
@@ -871,10 +871,10 @@ const App: React.FC = () => {
       throw new Error('Invalid manifest.json payload.');
     }
     const readAsset = (value?: string) => {
-      if (!value || !value.startsWith('asset:')) return value;
+      if (!value || !value.startsWith('asset:')) return normalizeSecureImageUrl(value);
       const key = value.slice('asset:'.length);
       const bytes = unzipped[key];
-      if (!bytes) return value;
+      if (!bytes) return normalizeSecureImageUrl(value);
       const ext = key.split('.').pop() || '';
       const mime = ext === 'png'
         ? 'image/png'
@@ -1060,13 +1060,14 @@ const App: React.FC = () => {
             if (result.status === 'completed') {
               const imageUrl = extractImageFromTaskResult(result);
               if (imageUrl) {
+                const normalizedImageUrl = normalizeSecureImageUrl(imageUrl);
                 setArtboards(prev => prev.map(a => {
                   if (a.id !== posterId) return a;
                   return {
                     ...a,
                     posterData: {
                       ...a.posterData!,
-                      imageUrl,
+                      imageUrl: normalizedImageUrl,
                       imageUrlNoText: undefined,
                       textLayout: a.posterData?.textLayout || buildDefaultTextLayout(),
                       status: 'completed',
@@ -2356,7 +2357,11 @@ const App: React.FC = () => {
       const merged = await generatePosterMergedImage(activePoster.imageUrl, layoutUrl);
       updatePosterArtboard(activePoster.id, (ab) => ({
         ...ab,
-        posterData: { ...ab.posterData!, imageUrlMerged: merged, imageUrl: merged }
+        posterData: {
+          ...ab.posterData!,
+          imageUrlMerged: normalizeSecureImageUrl(merged),
+          imageUrl: normalizeSecureImageUrl(merged)
+        }
       }));
     } catch (err) {
       console.error('Failed to combine poster images', err);
@@ -2375,7 +2380,7 @@ const App: React.FC = () => {
         ...ab,
         posterData: {
           ...ab.posterData!,
-          imageUrlNoText: noTextUrl
+          imageUrlNoText: normalizeSecureImageUrl(noTextUrl)
         }
       }));
       return noTextUrl;
@@ -3549,6 +3554,7 @@ const App: React.FC = () => {
   }, []);
 
   const addUploadedPosterArtboard = useCallback((imageUrl: string, naturalWidth: number, naturalHeight: number) => {
+    const normalizedImageUrl = normalizeSecureImageUrl(imageUrl);
     const viewCenter = getViewCenterWorld();
     const aspect = naturalWidth > 0 && naturalHeight > 0 ? naturalWidth / naturalHeight : boardWidth / boardHeight;
     let width = boardWidth;
@@ -3567,8 +3573,8 @@ const App: React.FC = () => {
       infoBlock: { orgName: '', details: '', credits: '' },
       accentColor: '#111827',
       visualPrompt: '',
-      imageUrl,
-      imageUrlMerged: imageUrl,
+      imageUrl: normalizedImageUrl,
+      imageUrlMerged: normalizedImageUrl,
       textLayout: buildDefaultTextLayout(),
       status: 'completed'
     };
@@ -4522,8 +4528,8 @@ Return ONLY valid JSON in the format:
                   ...ab,
                   posterData: {
                     ...ab.posterData!,
-                    imageUrlMerged: editedUrl,
-                    imageUrl: editedUrl,
+                    imageUrlMerged: normalizeSecureImageUrl(editedUrl),
+                    imageUrl: normalizeSecureImageUrl(editedUrl),
                     status: 'completed',
                     taskId: undefined
                   }
@@ -4602,14 +4608,15 @@ Return ONLY valid JSON in the format:
             if (result.status === 'completed') {
               const imageUrl = extractImageFromTaskResult(result);
               if (imageUrl) {
+                const normalizedImageUrl = normalizeSecureImageUrl(imageUrl);
                 updatePosterArtboard(baseDerivedId, (ab) => ({
                   ...ab,
                   posterData: {
                     ...ab.posterData!,
                     ...targetPoster,
                     logoUrl: logoForPoster ?? undefined,
-                    imageUrl,
-                    imageUrlMerged: imageUrl,
+                    imageUrl: normalizedImageUrl,
+                    imageUrlMerged: normalizedImageUrl,
                     imageUrlNoText: undefined,
                     textLayout: nextLayout,
                     textStyles: editableStyles || ab.posterData?.textStyles,
@@ -4710,14 +4717,15 @@ Return ONLY valid JSON in the format:
           posterImageUrl,
           { width: option.width, height: option.height }
         );
+        const normalizedImageUrl = normalizeSecureImageUrl(imageUrl);
         updatePosterArtboard(id, (ab) => ({
           ...ab,
           posterData: {
             ...ab.posterData!,
             ...basePoster,
             logoUrl: logoForPoster ?? undefined,
-            imageUrl,
-            imageUrlMerged: imageUrl,
+            imageUrl: normalizedImageUrl,
+            imageUrlMerged: normalizedImageUrl,
             imageUrlNoText: undefined,
             textLayout: nextLayout,
             textStyles: editableStyles || ab.posterData?.textStyles,
@@ -5055,13 +5063,14 @@ Return ONLY valid JSON in the format:
                 if (result.status === 'completed') {
                   const imageUrl = extractImageFromTaskResult(result);
                   if (imageUrl) {
+                    const normalizedImageUrl = normalizeSecureImageUrl(imageUrl);
                     setArtboards(prev => prev.map(ab => {
                       if (ab.id !== posterId) return ab;
                       return {
                         ...ab,
                         posterData: {
                           ...ab.posterData!,
-                          imageUrl,
+                          imageUrl: normalizedImageUrl,
                           imageUrlNoText: undefined,
                           textLayout: buildDefaultTextLayout(),
                           status: 'completed',
