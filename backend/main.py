@@ -1698,6 +1698,32 @@ def parse_data_url(data_url: str) -> tuple[bytes, str, str]:
   return image_bytes, mime_type, extension
 
 
+def resolve_image_input(image_value: str) -> tuple[bytes, str, str]:
+  if image_value.startswith("data:"):
+    return parse_data_url(image_value)
+
+  if image_value.startswith("http://") or image_value.startswith("https://"):
+    try:
+      response = httpx.get(
+        image_value,
+        follow_redirects=True,
+        timeout=httpx.Timeout(POLO_TIMEOUT_SECONDS),
+      )
+    except httpx.RequestError as exc:
+      raise HTTPException(status_code=502, detail=f"Failed to fetch reference image: {exc}") from exc
+
+    if response.status_code >= 400:
+      raise HTTPException(status_code=502, detail=f"Failed to fetch reference image: HTTP {response.status_code}")
+
+    mime_type = (response.headers.get("content-type") or "").split(";", 1)[0].strip() or "application/octet-stream"
+    extension = mimetypes.guess_extension(mime_type) or ".png"
+    if extension == ".jpe":
+      extension = ".jpg"
+    return response.content, mime_type, extension
+
+  raise HTTPException(status_code=400, detail="Unsupported image input; expected data URL or http(s) URL")
+
+
 def build_vod_client() -> vod_client.VodClient:
   if not VOD_SECRET_ID or not VOD_SECRET_KEY:
     raise HTTPException(status_code=500, detail="VOD secret credentials are not fully configured on server")
@@ -1719,7 +1745,7 @@ def apply_vod_sub_app_id(request: Any) -> None:
 
 
 def upload_image_to_vod(client: vod_client.VodClient, image: str, index: int) -> str:
-  image_bytes, mime_type, extension = parse_data_url(image)
+  image_bytes, mime_type, extension = resolve_image_input(image)
   media_type = extension.lstrip(".") or "png"
   if media_type == "jpeg":
     media_type = "jpg"

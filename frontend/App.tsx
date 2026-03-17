@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AppStatus, PosterDraft, PlanningStep, Artboard, Asset, Selection, AssetType, Project, TextLayout, TextStyleMap, Connection } from './types';
-import { planPosters, generatePosterImage, generatePosterNoTextImage, generatePosterMergedImage, refinePoster, chatWithModel, ChatMessage, editPosterWithMarkup, generatePosterResolutionFromImage, generatePosterImageAsync, getAITaskStatus, extractImageFromTaskResult, getPendingAITasks, AITaskStatus, generateImageFromPrompt } from './services/geminiService';
+import { planPosters, generatePosterImage, generatePosterNoTextImage, generatePosterMergedImage, refinePoster, chatWithModel, ChatMessage, editPosterWithMarkupAsync, generatePosterResolutionFromImage, generatePosterImageAsync, getAITaskStatus, extractImageFromTaskResult, getPendingAITasks, AITaskStatus, generateImageFromPrompt } from './services/geminiService';
 import { AuthUser, fetchWithAuth, getAccessToken, loginUser, logoutUser, refreshAccessToken, registerUser } from './services/authService';
 import PosterCard from './components/PosterCard';
 import LandingPage from './components/LandingPage';
@@ -4444,30 +4444,57 @@ Return ONLY valid JSON in the format:
         const derivedPosterData: PosterDraft = {
           ...currentArtboard.posterData,
           imageUrl: currentArtboard.posterData.imageUrl,
-          imageUrlMerged: currentArtboard.posterData.imageUrlMerged
+          imageUrlMerged: currentArtboard.posterData.imageUrlMerged,
+          status: 'generating'
         };
         const derivedId = createDerivedArtboard(currentArtboard, derivedPosterData);
         console.log('[refine] generating annotated image');
         const markedImageUrl = await buildAnnotatedImageDataUrl(originalImageUrl);
         console.log('[refine] marked image ready', { length: markedImageUrl?.length });
         if (!markedImageUrl) throw new Error('Failed to create annotated image.');
-        console.log('[refine] sending edit request');
-        const editedUrl = await editPosterWithMarkup(
+        console.log('[refine] submitting async edit task');
+        const taskId = await editPosterWithMarkupAsync(
           originalImageUrl,
           markedImageUrl,
           annotationPrompt,
           refineReferenceImage
         );
-        console.log('[refine] edit response', { editedUrl });
         updatePosterArtboard(derivedId, (ab) => ({
           ...ab,
           posterData: {
             ...ab.posterData!,
-            imageUrlMerged: editedUrl,
-            imageUrl: editedUrl,
-            status: 'completed'
+            taskId,
+            status: 'generating'
           }
         }));
+
+        while (true) {
+          const result = await getAITaskStatus(taskId);
+
+          if (result.status === 'completed') {
+            const editedUrl = extractImageFromTaskResult(result);
+            if (!editedUrl) {
+              throw new Error('No image in result');
+            }
+            console.log('[refine] edit response', { editedUrl });
+            updatePosterArtboard(derivedId, (ab) => ({
+              ...ab,
+              posterData: {
+                ...ab.posterData!,
+                imageUrlMerged: editedUrl,
+                imageUrl: editedUrl,
+                status: 'completed',
+                taskId: undefined
+              }
+            }));
+            break;
+          } else if (result.status === 'error') {
+            throw new Error(result.error || 'Task failed');
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+
         return;
       }
 
@@ -4475,6 +4502,7 @@ Return ONLY valid JSON in the format:
       const logoForPoster = pickLogoForModel(resolvedLogoImage, currentArtboard.posterData.logoUrl ?? null);
       const fontReferenceUrl = await resolveFontReferenceUrl(fontReferenceImage);
       const serverFontReferenceUrl = await resolveServerFontPreviewUrl(selectedServerFont);
+      const currentPosterImageUrl = currentArtboard.posterData.imageUrlMerged || currentArtboard.posterData.imageUrl || null;
       let targetPoster: PlanningStep = {
         ...editablePoster,
         logoUrl: logoForPoster ?? undefined
@@ -4502,7 +4530,12 @@ Return ONLY valid JSON in the format:
         styleImages,
         logoForPoster,
         fontReferenceUrl,
-        serverFontReferenceUrl
+        serverFontReferenceUrl,
+        undefined,
+        feedback
+          ? `Refine the current poster according to this feedback while preserving the existing composition unless the feedback explicitly asks for a larger change: ${feedback}`
+          : undefined,
+        feedback ? currentPosterImageUrl : null,
       );
 
       // Store taskId for recovery

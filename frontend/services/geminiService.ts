@@ -7,9 +7,26 @@ export type ChatMessage = {
   images?: string[];
 };
 
+const isExternalImageUrl = (value: string): boolean => {
+  if (!/^https?:\/\//i.test(value)) return false;
+  try {
+    const url = new URL(value);
+    const backendUrl = new URL(BACKEND_API);
+    if (url.origin === backendUrl.origin) return false;
+    if (typeof window !== "undefined" && url.origin === window.location.origin) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const ensureDataUrl = async (value: string): Promise<string> => {
   if (value.startsWith("data:image/")) return value;
-  const response = await fetchWithAuth(value);
+  const response = isExternalImageUrl(value)
+    ? await fetch(value, { credentials: "omit" })
+    : await fetchWithAuth(value);
   if (!response.ok) {
     throw new Error(`Failed to fetch image for chat: ${response.status}`);
   }
@@ -397,6 +414,7 @@ export const generatePosterImage = async (
   targetSize?: { width: number; height: number; label?: string },
   userPrompt?: string,
   extraPrompt?: string,
+  basePosterImageUrl?: string | null,
 ): Promise<string> => {
   if (import.meta.env.DEV) {
     console.log("[poster] generate sync: logo selection", {
@@ -414,6 +432,7 @@ export const generatePosterImage = async (
   const resolvedLogoUrl = await resolveImageDataUrl(logoUrl);
   const resolvedFontReferenceUrl = await resolveImageDataUrl(fontReferenceUrl);
   const resolvedServerFontReferenceUrl = await resolveImageDataUrl(serverFontReferenceUrl);
+  const resolvedBasePosterImageUrl = await resolveImageDataUrl(basePosterImageUrl);
   if (import.meta.env.DEV) {
     console.log("[poster] generate sync: resolved logo", {
       logoResolved: Boolean(resolvedLogoUrl),
@@ -429,6 +448,7 @@ export const generatePosterImage = async (
     targetSize,
     userPrompt,
     extraPrompt,
+    resolvedBasePosterImageUrl,
   );
   const response = await callPoloApi(payload);
 
@@ -449,8 +469,12 @@ const buildGeneratePosterPayload = (
   targetSize?: { width: number; height: number; label?: string },
   userPrompt?: string,
   extraPrompt?: string,
+  basePosterImageUrl?: string | null,
 ): Record<string, unknown> => {
   const userPrefix = userPrompt?.trim() ? `${userPrompt.trim()}; ` : "";
+  const hasBasePosterReference = Boolean(
+    basePosterImageUrl,
+  );
   const hasStyleReference = styleImages.some(
     (url) => url && url.startsWith("data:image/"),
   );
@@ -464,8 +488,11 @@ const buildGeneratePosterPayload = (
     serverFontReferenceUrl && serverFontReferenceUrl.startsWith("data:image/"),
   );
 
-  const imageOrder: Array<{ kind: "style" | "logo" | "font" | "server-font"; url: string }> =
+  const imageOrder: Array<{ kind: "base-poster" | "style" | "logo" | "font" | "server-font"; url: string }> =
     [];
+  if (hasBasePosterReference && basePosterImageUrl) {
+    imageOrder.push({ kind: "base-poster", url: basePosterImageUrl });
+  }
   styleImages.forEach((url) => {
     if (url && url.startsWith("data:image/")) {
       imageOrder.push({ kind: "style", url });
@@ -481,16 +508,20 @@ const buildGeneratePosterPayload = (
     imageOrder.push({ kind: "server-font", url: serverFontReferenceUrl });
   }
 
-  const indexOf = (kind: "style" | "logo" | "font" | "server-font") => {
+  const indexOf = (kind: "base-poster" | "style" | "logo" | "font" | "server-font") => {
     const idx = imageOrder.findIndex((entry) => entry.kind === kind);
     return idx >= 0 ? idx + 1 : null;
   };
 
+  const basePosterIndex = indexOf("base-poster");
   const styleIndex = indexOf("style");
   const logoIndex = indexOf("logo");
   const fontIndex = indexOf("font");
   const serverFontIndex = indexOf("server-font");
 
+  const refineInstruction = basePosterIndex
+    ? `Image ${basePosterIndex} is the current poster to refine. Treat this as an edit of that poster, not a brand-new concept. Preserve its existing composition, scene structure, layout logic, and overall visual identity unless the prompt explicitly asks for a change. Make the requested updates while keeping the result clearly derived from Image ${basePosterIndex}.`
+    : "";
   const styleInstruction = styleIndex
     ? `The poster style must match Image ${styleIndex} as closely as possible (composition, palette, textures, lighting, mood, and overall visual language). Do not deviate.`
     : "";
@@ -498,11 +529,11 @@ const buildGeneratePosterPayload = (
     ? `Place the logo from Image ${logoIndex} in an appropriate position on the poster. Do not alter the logo.`
     : "";
   const fontInstruction = fontIndex && serverFontIndex
-    ? `All poster copy typography, excluding any text that is part of the logo, must follow one consistent font system. Apply this rule to every editable text element, including the top banner, headline, subheadline, info block, credits, and any other non-logo visible text. Use the color treatment, decoration, and styling approach from Image ${fontIndex}, while the actual letterforms and font shape must reference Image ${serverFontIndex}. Do not apply these references to only part of the text; they must govern all non-logo poster text. Never change, redraw, restyle, or replace any text that belongs to the logo.`
+    ? `All poster copy typography, excluding any text that is part of the logo, must follow one consistent font system. Image ${fontIndex} is the PRIMARY and STRICT reference for typography art direction. The text colors must be copied exactly from Image ${fontIndex}. Image ${serverFontIndex} controls only the actual letterforms and font shape. If there is any conflict, preserve the colors and artistic treatment from Image ${fontIndex} and use Image ${serverFontIndex} only for glyph structure. Never change, redraw, restyle, or replace any text that belongs to the logo.`
     : fontIndex
-      ? `All poster copy typography, excluding any text that is part of the logo, must follow the font style shown in Image ${fontIndex}. Apply it consistently to every editable text element, including the top banner, headline, subheadline, info block, credits, and any other non-logo visible text. Do not limit this reference to only one section. Never change, redraw, restyle, or replace any text that belongs to the logo.`
+      ? `All poster copy typography, excluding any text that is part of the logo, must follow the font style shown in Image ${fontIndex}. Treat Image ${fontIndex} as a STRICT typography art-direction reference. The text colors must be copied exactly from Image ${fontIndex}. Never change, redraw, restyle, or replace any text that belongs to the logo.`
       : serverFontIndex
-        ? `All poster copy typography, excluding any text that is part of the logo, must follow the font style shown in Image ${serverFontIndex}. Apply it consistently to every editable text element, including the top banner, headline, subheadline, info block, credits, and any other non-logo visible text. Do not limit this reference to only one section. Never change, redraw, restyle, or replace any text that belongs to the logo.`
+        ? `All poster copy typography, excluding any text that is part of the logo, must follow the font style shown in Image ${serverFontIndex}. Never change, redraw, restyle, or replace any text that belongs to the logo.`
         : "";
   const extraInstruction = extraPrompt?.trim()
     ? `Additional design guidance: ${extraPrompt.trim()}`
@@ -515,6 +546,7 @@ const buildGeneratePosterPayload = (
       type: "text",
       text: [
         `${userPrefix}${fontInstruction}`.trim(),
+        refineInstruction,
         styleInstruction,
         "Create a vertical 9:16 poster.",
         buildImagePrompt(poster, logoUrl, fontReferenceUrl, serverFontReferenceUrl, targetSize),
@@ -552,6 +584,7 @@ export const generatePosterImageAsync = async (
   targetSize?: { width: number; height: number; label?: string },
   userPrompt?: string,
   extraPrompt?: string,
+  basePosterImageUrl?: string | null,
 ): Promise<string> => {
   if (import.meta.env.DEV) {
     console.log("[poster] generate async: logo selection", {
@@ -584,6 +617,7 @@ export const generatePosterImageAsync = async (
     targetSize,
     userPrompt,
     extraPrompt,
+    basePosterImageUrl,
   );
   return submitAITask(payload);
 };
@@ -716,10 +750,37 @@ export const editPosterWithMarkup = async (
   instructions: string,
   referenceImageUrl?: string | null,
 ): Promise<string> => {
-  const originalDataUrl = await ensureDataUrl(originalImageUrl);
+  const payload = await buildEditPosterWithMarkupPayload(
+    originalImageUrl,
+    markedImageUrl,
+    instructions,
+    referenceImageUrl,
+  );
+  const imageUrl = await callImageEditApi(
+    String(((payload.messages as any[])?.[0]?.content as any[])?.[0]?.text || ""),
+    ((payload.messages as any[])?.[0]?.content as any[])
+      .slice(1)
+      .map((item: { image_url?: { url?: string } }) => item?.image_url?.url)
+      .filter((url: string | undefined): url is string => Boolean(url)),
+  );
+  console.log("[edit] received edited image");
+  return imageUrl;
+};
+
+const buildEditPosterWithMarkupPayload = async (
+  originalImageUrl: string,
+  markedImageUrl: string,
+  instructions: string,
+  referenceImageUrl?: string | null,
+): Promise<Record<string, unknown>> => {
+  const originalDataUrl = originalImageUrl.startsWith("data:image/")
+    ? originalImageUrl
+    : originalImageUrl;
   const markedDataUrl = await ensureDataUrl(markedImageUrl);
   const referenceDataUrl = referenceImageUrl
-    ? await ensureDataUrl(referenceImageUrl)
+    ? (referenceImageUrl.startsWith("data:image/")
+        ? referenceImageUrl
+        : referenceImageUrl)
     : null;
   console.log("[edit] sending markup edit", {
     originalLength: originalDataUrl?.length,
@@ -730,16 +791,52 @@ export const editPosterWithMarkup = async (
   const referenceBlock = referenceDataUrl
     ? "Image 3 is an optional reference provided by the user. Use it as guidance for the requested changes, but do not copy it directly."
     : "";
-  const imageUrl = await callImageEditApi(
-    `You will receive two images: image 1 is the original poster, image 2 is the same poster with numbered boxes/arrows. ${referenceBlock} Apply the requested edits to the original while preserving overall composition and typography unless specified. The final output must NOT include any annotation boxes, arrows, or numbers. ${instructions}`,
-    [
-      originalDataUrl,
-      markedDataUrl,
-      ...(referenceDataUrl ? [referenceDataUrl] : []),
+  return {
+    model: "google/gemini-3.1-flash-image-preview",
+    stream: false,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `You will receive two images: image 1 is the original poster, image 2 is the same poster with numbered boxes/arrows. ${referenceBlock} Apply the requested edits to the original while preserving overall composition and typography unless specified. The final output must NOT include any annotation boxes, arrows, or numbers. ${instructions}`,
+          },
+          {
+            type: "image_url",
+            image_url: { url: originalDataUrl },
+          },
+          {
+            type: "image_url",
+            image_url: { url: markedDataUrl },
+          },
+          ...(referenceDataUrl
+            ? [
+                {
+                  type: "image_url",
+                  image_url: { url: referenceDataUrl },
+                },
+              ]
+            : []),
+        ],
+      },
     ],
+  };
+};
+
+export const editPosterWithMarkupAsync = async (
+  originalImageUrl: string,
+  markedImageUrl: string,
+  instructions: string,
+  referenceImageUrl?: string | null,
+): Promise<string> => {
+  const payload = await buildEditPosterWithMarkupPayload(
+    originalImageUrl,
+    markedImageUrl,
+    instructions,
+    referenceImageUrl,
   );
-  console.log("[edit] received edited image");
-  return imageUrl;
+  return submitAITask(payload);
 };
 
 export const generatePosterResolutionFromImage = async (
