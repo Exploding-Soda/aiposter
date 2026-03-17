@@ -324,6 +324,7 @@ const App: React.FC = () => {
     worldX: number;
     worldY: number;
   } | null>(null);
+  const [generatorInfoModal, setGeneratorInfoModal] = useState<null | 'reference-styles' | 'logo' | 'font'>(null);
   const [isMergingPoster, setIsMergingPoster] = useState(false);
   const [showNoTextEdit, setShowNoTextEdit] = useState(false);
   const [noTextLoadingId, setNoTextLoadingId] = useState<string | null>(null);
@@ -6331,9 +6332,20 @@ Return ONLY valid JSON in the format:
               />
               <motion.div layout className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                    Reference Styles (optional)
-                  </label>
+                  <div className="flex items-center gap-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                      Reference Styles (optional)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setGeneratorInfoModal('reference-styles')}
+                      className="w-5 h-5 rounded-full border border-blue-200 bg-blue-50 text-blue-600 text-[11px] font-bold flex items-center justify-center hover:bg-blue-100"
+                      aria-label="Reference styles info"
+                      title="Reference styles info"
+                    >
+                      i
+                    </button>
+                  </div>
                   <button
                     type="button"
                     onClick={() => handleNavigate('/personal-space')}
@@ -6454,9 +6466,20 @@ Return ONLY valid JSON in the format:
               </motion.div>
               <motion.div layout className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                    Logo (optional)
-                  </label>
+                  <div className="flex items-center gap-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                      Logo (optional)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setGeneratorInfoModal('logo')}
+                      className="w-5 h-5 rounded-full border border-blue-200 bg-blue-50 text-blue-600 text-[11px] font-bold flex items-center justify-center hover:bg-blue-100"
+                      aria-label="Logo info"
+                      title="Logo info"
+                    >
+                      i
+                    </button>
+                  </div>
                   <button
                     type="button"
                     onClick={() => handleNavigate('/personal-space')}
@@ -6585,20 +6608,15 @@ Return ONLY valid JSON in the format:
                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                       Font (optional)
                     </label>
-                    {Boolean(selectedServerFont && fontReferenceImage) && (
-                      <div className="relative group">
-                        <button
-                          type="button"
-                          className="text-slate-400 hover:text-slate-600"
-                          aria-label="Font rule info"
-                        >
-                          <Info className="w-3.5 h-3.5" />
-                        </button>
-                        <div className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 w-56 -translate-x-1/2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] font-medium normal-case tracking-normal text-slate-600 shadow-lg opacity-0 transition-opacity group-hover:opacity-100">
-                          When both are selected, the uploaded font image guides typography color and styling, while the server font preview guides the letterform and font shape.
-                        </div>
-                      </div>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => setGeneratorInfoModal('font')}
+                      className="w-5 h-5 rounded-full border border-blue-200 bg-blue-50 text-blue-600 text-[11px] font-bold flex items-center justify-center hover:bg-blue-100"
+                      aria-label="Font info"
+                      title="Font info"
+                    >
+                      i
+                    </button>
                   </div>
                   <button
                     type="button"
@@ -7431,6 +7449,42 @@ Return ONLY valid JSON in the format:
               >
                 {isGeneratingResolutions ? 'Generating' : 'Generate'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {generatorInfoModal && (
+        <div
+          className="fixed inset-0 z-[72] flex items-center justify-center bg-black/50 backdrop-blur-sm p-6"
+          onClick={() => setGeneratorInfoModal(null)}
+        >
+          <div
+            className="bg-white rounded-2xl w-full max-w-md shadow-2xl p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-slate-900">
+                {generatorInfoModal === 'reference-styles'
+                  ? 'Reference Styles'
+                  : generatorInfoModal === 'logo'
+                    ? 'Logo'
+                    : 'Font'}
+              </h3>
+              <button
+                type="button"
+                className="text-[11px] font-bold uppercase tracking-widest text-slate-500 hover:text-slate-900"
+                onClick={() => setGeneratorInfoModal(null)}
+              >
+                Close
+              </button>
+            </div>
+            <div className="text-sm leading-6 text-slate-600 whitespace-pre-line">
+              {generatorInfoModal === 'reference-styles'
+                ? `We strongly recommend uploading one reference style image. It can even be a past poster that you were very happy with.\n\nIf no reference style is selected, poster generation will be more creative, but also more unpredictable.`
+                : generatorInfoModal === 'logo'
+                  ? `You can choose a logo here. When generating the poster, we will place it in an appropriate position.`
+                  : `If your typography has its own distinctive style, you can upload a screenshot of it here for reference.\n\nIf you select both a preset font from the site and your own uploaded font reference image, we will lean more toward the preset font during generation, but the final typography style will still be influenced to some extent by your uploaded font reference image.`}
             </div>
           </div>
         </div>
