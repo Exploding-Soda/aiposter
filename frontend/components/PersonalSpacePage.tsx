@@ -44,6 +44,32 @@ type PrimaryColorItem = {
   created_at: string;
 };
 
+const hexToRgb = (hex: string) => {
+  const normalized = hex.replace('#', '');
+  const expanded = normalized.length === 3
+    ? normalized.split('').map((char) => `${char}${char}`).join('')
+    : normalized;
+
+  const value = Number.parseInt(expanded, 16);
+  return {
+    r: (value >> 16) & 255,
+    g: (value >> 8) & 255,
+    b: value & 255
+  };
+};
+
+const rgbToHex = (r: number, g: number, b: number) =>
+  `#${[r, g, b].map((value) => value.toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+
+const normalizeHexInput = (value: string) => {
+  const sanitized = value.toUpperCase().replace(/[^#0-9A-F]/g, '');
+  if (!sanitized) return '#';
+  if (sanitized.startsWith('#')) {
+    return `#${sanitized.slice(1, 7)}`;
+  }
+  return `#${sanitized.slice(0, 6)}`;
+};
+
 const PERSONAL_SPACE_ONBOARDING_STORAGE_KEY = 'poster-onboarding-personal-space-v1';
 
 const PersonalSpacePage: React.FC = () => {
@@ -65,6 +91,7 @@ const PersonalSpacePage: React.FC = () => {
   const [primaryColorDeleting, setPrimaryColorDeleting] = useState<string | null>(null);
   const [isPrimaryColorSaving, setIsPrimaryColorSaving] = useState(false);
   const [isEyeDropping, setIsEyeDropping] = useState(false);
+  const [isPrimaryColorMenuOpen, setIsPrimaryColorMenuOpen] = useState(false);
   const [pendingPrimaryColorHex, setPendingPrimaryColorHex] = useState('#2563EB');
   const [logos, setLogos] = useState<LogoItem[]>([]);
   const [logosLoading, setLogosLoading] = useState(false);
@@ -82,7 +109,7 @@ const PersonalSpacePage: React.FC = () => {
   const primaryColorSectionRef = useRef<HTMLElement | null>(null);
   const fontSectionRef = useRef<HTMLElement | null>(null);
   const logoSectionRef = useRef<HTMLElement | null>(null);
-  const primaryColorPickerRef = useRef<HTMLInputElement | null>(null);
+  const primaryColorMenuRef = useRef<HTMLDivElement | null>(null);
 
   const loadLogos = async () => {
     setLogosLoading(true);
@@ -174,6 +201,19 @@ const PersonalSpacePage: React.FC = () => {
     void loadFontReferences();
     void loadLogos();
   }, []);
+
+  useEffect(() => {
+    if (!isPrimaryColorMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!primaryColorMenuRef.current?.contains(event.target as Node)) {
+        setIsPrimaryColorMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [isPrimaryColorMenuOpen]);
 
   const handleReferenceUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -441,6 +481,10 @@ const PersonalSpacePage: React.FC = () => {
       setPrimaryColorsError('Please choose a color.');
       return;
     }
+    if (!/^#[0-9A-F]{6}$/i.test(normalizedHex)) {
+      setPrimaryColorsError('Please enter a valid 6-digit hex color.');
+      return;
+    }
 
     setPrimaryColorsError('');
     setIsPrimaryColorSaving(true);
@@ -467,24 +511,13 @@ const PersonalSpacePage: React.FC = () => {
         setPrimaryColors((prev) => [data.item, ...prev]);
       }
       setPendingPrimaryColorHex(normalizedHex.toUpperCase());
+      setIsPrimaryColorMenuOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to save primary color';
       setPrimaryColorsError(message);
     } finally {
       setIsPrimaryColorSaving(false);
     }
-  };
-
-  const handlePrimaryColorPickerChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedHex = event.target.value?.toUpperCase();
-    if (!selectedHex) return;
-    setPendingPrimaryColorHex(selectedHex);
-    await savePrimaryColor(selectedHex);
-    event.target.value = '';
-  };
-
-  const handleOpenPrimaryColorPicker = () => {
-    primaryColorPickerRef.current?.click();
   };
 
   const handlePickScreenColor = async () => {
@@ -517,7 +550,6 @@ const PersonalSpacePage: React.FC = () => {
   };
 
   const handleDeletePrimaryColor = async (item: PrimaryColorItem) => {
-    if (!window.confirm('Delete this primary color?')) return;
     setPrimaryColorsError('');
     setPrimaryColorDeleting(item.id);
     try {
@@ -536,6 +568,28 @@ const PersonalSpacePage: React.FC = () => {
       setPrimaryColorsError(message);
     } finally {
       setPrimaryColorDeleting(null);
+    }
+  };
+
+  const pendingPrimaryColorRgb = hexToRgb(pendingPrimaryColorHex);
+
+  const handlePendingPrimaryColorChannelChange = (channel: 'r' | 'g' | 'b', value: string) => {
+    const numericValue = Number.parseInt(value, 10);
+    const safeValue = Number.isNaN(numericValue) ? 0 : Math.max(0, Math.min(255, numericValue));
+    const nextRgb = {
+      ...pendingPrimaryColorRgb,
+      [channel]: safeValue
+    };
+    setPendingPrimaryColorHex(rgbToHex(nextRgb.r, nextRgb.g, nextRgb.b));
+  };
+
+  const handlePendingPrimaryColorHexChange = (value: string) => {
+    const normalized = normalizeHexInput(value);
+    setPendingPrimaryColorHex(normalized);
+
+    const hexDigits = normalized.replace('#', '');
+    if (hexDigits.length === 6) {
+      setPrimaryColorsError('');
     }
   };
 
@@ -752,27 +806,73 @@ const PersonalSpacePage: React.FC = () => {
                   className="inline-flex h-11 items-center gap-2 rounded-2xl border border-cyan-200 bg-cyan-50 px-4 text-sm font-semibold text-cyan-700 shadow-sm transition hover:border-cyan-300 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
                   title="Pick a color from the screen"
                 >
-                  <Pipette size={18} />
-                  <span>{isEyeDropping ? 'Picking...' : 'Pick from Screen'}</span>
+                  <span aria-hidden="true" className="text-base leading-none">🎨</span>
+                  <Pipette size={16} />
+                  <span>{isEyeDropping ? 'Picking...' : 'Eyedropper'}</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={handleOpenPrimaryColorPicker}
-                  disabled={isPrimaryColorSaving}
-                  className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-gray-200 bg-white text-gray-500 shadow-sm transition hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  aria-label="Add primary color"
-                  title="Add a color from the picker"
-                >
-                  <Plus size={20} />
-                </button>
-                <input
-                  ref={primaryColorPickerRef}
-                  type="color"
-                  value={pendingPrimaryColorHex}
-                  onChange={handlePrimaryColorPickerChange}
-                  className="hidden"
-                  aria-hidden="true"
-                />
+                <div ref={primaryColorMenuRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setIsPrimaryColorMenuOpen((prev) => !prev)}
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-gray-200 bg-white text-gray-500 shadow-sm transition hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    aria-label="Open primary color menu"
+                    title="Add a primary color"
+                  >
+                    <Plus size={20} />
+                  </button>
+                  {isPrimaryColorMenuOpen && (
+                    <div className="absolute right-0 top-14 z-10 w-72 rounded-3xl border border-gray-100 bg-white p-4 shadow-2xl">
+                      <div className="flex items-center gap-3">
+                        <div
+                          className="h-14 w-14 shrink-0 rounded-2xl border border-gray-200 shadow-sm"
+                          style={{ backgroundColor: pendingPrimaryColorHex }}
+                        />
+                        <div className="min-w-0">
+                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">Current</div>
+                          <div className="truncate text-base font-semibold text-gray-900">{pendingPrimaryColorHex}</div>
+                        </div>
+                      </div>
+                      <div className="mt-4 rounded-2xl border border-gray-100 bg-slate-50 p-3">
+                        <label className="block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
+                          Hex
+                        </label>
+                        <input
+                          type="text"
+                          value={pendingPrimaryColorHex}
+                          onChange={(event) => handlePendingPrimaryColorHexChange(event.target.value)}
+                          placeholder="#2563EB"
+                          className="mt-2 h-11 w-full rounded-2xl border border-gray-200 bg-white px-3 text-sm font-semibold uppercase text-gray-800 outline-none transition focus:border-cyan-400"
+                          aria-label="Primary color hex value"
+                        />
+                      </div>
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        {(['r', 'g', 'b'] as const).map((channel) => (
+                          <div key={channel}>
+                            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
+                              {channel}
+                            </div>
+                            <input
+                              type="number"
+                              min="0"
+                              max="255"
+                              value={pendingPrimaryColorRgb[channel]}
+                              onChange={(event) => handlePendingPrimaryColorChannelChange(channel, event.target.value)}
+                              className="h-11 w-full rounded-2xl border border-gray-200 bg-white px-3 text-sm text-gray-800 outline-none transition focus:border-cyan-400"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void savePrimaryColor(pendingPrimaryColorHex)}
+                        disabled={isPrimaryColorSaving}
+                        className="mt-3 inline-flex h-11 w-full items-center justify-center rounded-2xl bg-cyan-600 px-4 text-sm font-semibold text-white transition hover:bg-cyan-700 disabled:cursor-not-allowed disabled:bg-cyan-300"
+                      >
+                        {isPrimaryColorSaving ? 'Adding...' : 'Add Color'}
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -799,17 +899,6 @@ const PersonalSpacePage: React.FC = () => {
                       </div>
                     </div>
                     <div className="absolute inset-0 ring-1 ring-inset ring-black/5 rounded-2xl" />
-                    <div className="absolute top-2 left-2 rounded-full bg-white/90 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-gray-600 shadow-sm">
-                      Color
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => navigator.clipboard?.writeText(item.color_hex)}
-                      className="absolute top-2 right-11 rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-gray-600 shadow-sm opacity-0 transition-opacity group-hover:opacity-100"
-                      aria-label={`Copy ${item.color_hex}`}
-                    >
-                      Copy
-                    </button>
                     <button
                       type="button"
                       onClick={() => handleDeletePrimaryColor(item)}
@@ -822,15 +911,6 @@ const PersonalSpacePage: React.FC = () => {
                   </div>
                 ))
               ) : null}
-              <button
-                type="button"
-                onClick={handleOpenPrimaryColorPicker}
-                className="aspect-square border-2 border-dashed border-gray-200 rounded-2xl flex flex-col items-center justify-center gap-2 text-gray-400 hover:border-cyan-400 hover:text-cyan-500 hover:bg-cyan-50/30 transition-all"
-                aria-label="Add primary color"
-              >
-                <Plus size={24} />
-                <span className="text-[10px] font-bold uppercase tracking-wider">Add Color</span>
-              </button>
             </div>
           </section>
 
