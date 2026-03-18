@@ -4994,20 +4994,14 @@ Return ONLY valid JSON in the format:
     });
 
     // Create connections immediately
-    const newConnections: Connection[] = [];
-    const productionAssetIds = [noteAsset.id, ...newAssets.filter(a => a.id !== noteAsset.id).map(a => a.id)];
-    productionAssetIds.forEach(assetId => {
-      placeholderArtboards.forEach(artboard => {
-        newConnections.push({
-          id: `conn-${assetId}-${artboard.id}`,
-          fromId: assetId,
-          fromType: 'asset',
-          toId: artboard.id,
-          toType: 'artboard',
-          groupId
-        });
-      });
-    });
+    const newConnections: Connection[] = placeholderArtboards.map((artboard) => ({
+      id: `conn-${groupBgAsset.id}-${artboard.id}`,
+      fromId: groupBgAsset.id,
+      fromType: 'asset',
+      toId: artboard.id,
+      toType: 'artboard',
+      groupId
+    }));
 
     // Add everything to canvas IMMEDIATELY
     setCanvasAssets(prev => [...prev, groupBgAsset, ...newAssets]);
@@ -6155,6 +6149,30 @@ Return ONLY valid JSON in the format:
   const selectedAsset = selectedArtboard?.assets.find(a => a.id === selection.assetId);
   const canEditAssets = Boolean(selectedArtboard);
   const isGenerating = status === AppStatus.PLANNING || status === AppStatus.GENERATING;
+  const groupBackgroundByGroupId = new Map(
+    canvasAssets
+      .filter((asset) => asset.id.startsWith('group-bg-') && asset.groupId)
+      .map((asset) => [asset.groupId as string, asset.id])
+  );
+  const seenGroupTargets = new Set<string>();
+  const visibleConnections = connections.flatMap((connection) => {
+    if (!connection.groupId) {
+      return [connection];
+    }
+
+    const dedupeKey = `${connection.groupId}:${connection.toType}:${connection.toId}`;
+    if (seenGroupTargets.has(dedupeKey)) {
+      return [];
+    }
+    seenGroupTargets.add(dedupeKey);
+
+    const groupBackgroundId = groupBackgroundByGroupId.get(connection.groupId);
+    return [{
+      ...connection,
+      fromId: groupBackgroundId ?? connection.fromId
+    }];
+  });
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#f5f5f7] text-slate-900 select-none">
       <style>{`
@@ -6318,7 +6336,7 @@ Return ONLY valid JSON in the format:
               className="absolute inset-0"
               style={{ transform: `translate(${-BOARD_BOUNDS.minX}px, ${-BOARD_BOUNDS.minY}px)` }}
             >
-              {connections.map(conn => (
+              {visibleConnections.map(conn => (
                 <ConnectionLine
                   key={conn.id}
                   connection={conn}
@@ -8434,23 +8452,23 @@ const ConnectionLine: React.FC<ConnectionLineProps> = ({ connection, canvasAsset
   const toX = toRect.x;
   const toY = toRect.y + toRect.height / 2;
 
-  // Create orthogonal path with 90-degree turns
-  const midX = fromX + (toX - fromX) / 2;
-
-  // Build SVG path for orthogonal routing
-  const path = `M ${fromX} ${fromY} H ${midX} V ${toY} H ${toX - 8}`;
-
-  // Arrow head points
-  const arrowSize = 6;
-  const arrowPath = `M ${toX - 8} ${toY - arrowSize} L ${toX} ${toY} L ${toX - 8} ${toY + arrowSize}`;
+  // Build a smooth cubic curve so the connection reads more like a flow than a wire.
+  const horizontalGap = toX - fromX;
+  const curveOffset = Math.max(48, Math.min(180, Math.abs(horizontalGap) * 0.45));
+  const control1X = fromX + curveOffset;
+  const control1Y = fromY;
+  const control2X = toX - curveOffset;
+  const control2Y = toY;
+  const path = `M ${fromX} ${fromY} C ${control1X} ${control1Y}, ${control2X} ${control2Y}, ${toX} ${toY}`;
 
   // Calculate SVG viewBox bounds
-  const minX = Math.min(fromX, toX) - 20;
-  const minY = Math.min(fromY, toY) - 20;
-  const maxX = Math.max(fromX, toX) + 20;
-  const maxY = Math.max(fromY, toY) + 20;
+  const minX = Math.min(fromX, toX, control1X, control2X) - 24;
+  const minY = Math.min(fromY, toY, control1Y, control2Y) - 24;
+  const maxX = Math.max(fromX, toX, control1X, control2X) + 24;
+  const maxY = Math.max(fromY, toY, control1Y, control2Y) + 24;
   const svgWidth = maxX - minX;
   const svgHeight = maxY - minY;
+  const markerId = `connection-arrow-${connection.id}`;
 
   return (
     <svg
@@ -8465,6 +8483,26 @@ const ConnectionLine: React.FC<ConnectionLineProps> = ({ connection, canvasAsset
       }}
     >
       <g transform={`translate(${-minX}, ${-minY})`}>
+        <defs>
+          <marker
+            id={markerId}
+            markerWidth="10"
+            markerHeight="10"
+            refX="8"
+            refY="5"
+            orient="auto"
+            markerUnits="strokeWidth"
+          >
+            <path
+              d="M 0 1 L 8 5 L 0 9"
+              fill="none"
+              stroke="#94a3b8"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </marker>
+        </defs>
         <path
           d={path}
           fill="none"
@@ -8472,14 +8510,7 @@ const ConnectionLine: React.FC<ConnectionLineProps> = ({ connection, canvasAsset
           strokeWidth="2"
           strokeLinecap="round"
           strokeLinejoin="round"
-        />
-        <path
-          d={arrowPath}
-          fill="none"
-          stroke="#94a3b8"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
+          markerEnd={`url(#${markerId})`}
         />
       </g>
     </svg>
