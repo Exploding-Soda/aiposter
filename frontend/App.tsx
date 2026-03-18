@@ -3473,7 +3473,76 @@ const App: React.FC = () => {
     setArtboards(prev => [...prev, newArtboard]);
   }, [artboards.length, viewOffset, zoom, boardWidth, boardHeight]);
 
+  const expandCanvasSelectionWithGroups = useCallback((assetIds: string[], assets: Asset[]) => {
+    const expanded = new Set(assetIds);
+    assetIds.forEach((selectedId) => {
+      const selectedAsset = assets.find((asset) => asset.id === selectedId);
+      if (selectedAsset?.id.startsWith('group-bg-') && selectedAsset.groupId) {
+        assets.forEach((asset) => {
+          if (asset.groupId === selectedAsset.groupId) {
+            expanded.add(asset.id);
+          }
+        });
+      }
+    });
+    return expanded;
+  }, []);
+
+  const moveMixedSelection = useCallback((
+    requestedDx: number,
+    requestedDy: number,
+    artboardIds: string[],
+    assetIds: Set<string>
+  ) => {
+    const selectedArtboards = artboards.filter((ab) => artboardIds.includes(ab.id));
+    const selectedAssets = canvasAssets.filter((asset) => assetIds.has(asset.id));
+    const rects = [
+      ...selectedArtboards.map((ab) => ({
+        left: ab.x,
+        top: ab.y,
+        right: ab.x + ab.width,
+        bottom: ab.y + ab.height
+      })),
+      ...selectedAssets.map((asset) => ({
+        left: asset.x,
+        top: asset.y,
+        right: asset.x + asset.width,
+        bottom: asset.y + asset.height
+      }))
+    ];
+    if (rects.length === 0) return;
+
+    const minX = Math.min(...rects.map((rect) => rect.left));
+    const minY = Math.min(...rects.map((rect) => rect.top));
+    const maxX = Math.max(...rects.map((rect) => rect.right));
+    const maxY = Math.max(...rects.map((rect) => rect.bottom));
+    const dx = clampValue(requestedDx, BOARD_BOUNDS.minX - minX, BOARD_BOUNDS.maxX - maxX);
+    const dy = clampValue(requestedDy, BOARD_BOUNDS.minY - minY, BOARD_BOUNDS.maxY - maxY);
+
+    if (artboardIds.length > 0) {
+      setArtboards((prev) => prev.map((ab) =>
+        artboardIds.includes(ab.id)
+          ? { ...ab, x: ab.x + dx, y: ab.y + dy }
+          : ab
+      ));
+    }
+    if (assetIds.size > 0) {
+      setCanvasAssets((prev) => prev.map((asset) =>
+        assetIds.has(asset.id)
+          ? { ...asset, x: asset.x + dx, y: asset.y + dy }
+          : asset
+      ));
+    }
+  }, [artboards, canvasAssets]);
+
   const handleDragArtboard = useCallback((artboardId: string, dx: number, dy: number) => {
+    const selectedArtboardIds = multiSelectedArtboards.includes(artboardId) ? multiSelectedArtboards : [artboardId];
+    const selectedCanvasIds = expandCanvasSelectionWithGroups(multiSelectedCanvasAssets, canvasAssets);
+    if (selectedArtboardIds.length > 1 || selectedCanvasIds.size > 0) {
+      moveMixedSelection(dx, dy, selectedArtboardIds, selectedCanvasIds);
+      return;
+    }
+
     setArtboards(prev => prev.map(ab =>
       ab.id === artboardId
         ? {
@@ -3482,7 +3551,7 @@ const App: React.FC = () => {
         }
         : ab
     ));
-  }, []);
+  }, [multiSelectedArtboards, multiSelectedCanvasAssets, expandCanvasSelectionWithGroups, canvasAssets, moveMixedSelection]);
 
   const handleResizeArtboard = useCallback((artboardId: string, dw: number, dh: number) => {
     setArtboards(prev => prev.map(ab => {
@@ -3682,6 +3751,14 @@ const App: React.FC = () => {
   }, []);
 
   const handleDragCanvasAsset = useCallback((assetId: string, dx: number, dy: number) => {
+    const selectedCanvasIds = multiSelectedCanvasAssets.includes(assetId) ? multiSelectedCanvasAssets : [assetId];
+    const expandedCanvasIds = expandCanvasSelectionWithGroups(selectedCanvasIds, canvasAssets);
+    const selectedArtboardIds = multiSelectedArtboards;
+    if (selectedArtboardIds.length > 0 || expandedCanvasIds.size > 1) {
+      moveMixedSelection(dx, dy, selectedArtboardIds, expandedCanvasIds);
+      return;
+    }
+
     setCanvasAssets(prev => {
       const draggedAsset = prev.find(a => a.id === assetId);
       if (!draggedAsset) return prev;
@@ -3991,22 +4068,31 @@ const App: React.FC = () => {
   const handleContextDelete = () => {
     if (!assetContextMenu) return;
     if (assetContextMenu.scope === 'canvas') {
-      deleteCanvasAsset(assetContextMenu.assetId);
-      if (canvasSelectionId === assetContextMenu.assetId) {
+      const targetIds = multiSelectedCanvasAssets.includes(assetContextMenu.assetId)
+        ? multiSelectedCanvasAssets
+        : [assetContextMenu.assetId];
+      setCanvasAssets(prev => prev.filter(asset => !targetIds.includes(asset.id)));
+      setConnections(prev => prev.filter(c => !targetIds.includes(c.fromId) && !targetIds.includes(c.toId)));
+      if (targetIds.includes(canvasSelectionId || '')) {
         setCanvasSelectionId(null);
       }
+      setMultiSelectedCanvasAssets([]);
       setAssetContextMenu(null);
       return;
     }
     if (assetContextMenu.scope === 'poster') {
-      setArtboards(prev => prev.filter(ab => ab.id !== assetContextMenu.artboardId));
-      setConnections(prev => prev.filter(c => c.fromId !== assetContextMenu.artboardId && c.toId !== assetContextMenu.artboardId));
-      if (selection.artboardId === assetContextMenu.artboardId) {
+      const targetIds = multiSelectedArtboards.includes(assetContextMenu.artboardId || '')
+        ? multiSelectedArtboards
+        : (assetContextMenu.artboardId ? [assetContextMenu.artboardId] : []);
+      setArtboards(prev => prev.filter(ab => !targetIds.includes(ab.id)));
+      setConnections(prev => prev.filter(c => !targetIds.includes(c.fromId) && !targetIds.includes(c.toId)));
+      if (targetIds.includes(selection.artboardId || '')) {
         setSelection({ artboardId: null, assetId: null });
       }
-      if (activePosterId === assetContextMenu.artboardId) {
+      if (targetIds.includes(activePosterId || '')) {
         setActivePosterId(null);
       }
+      setMultiSelectedArtboards([]);
       setAssetContextMenu(null);
       return;
     }
@@ -4022,6 +4108,13 @@ const App: React.FC = () => {
   };
 
   const deleteSelected = useCallback(() => {
+    if (multiSelectedCanvasAssets.length > 0) {
+      setCanvasAssets(prev => prev.filter(asset => !multiSelectedCanvasAssets.includes(asset.id)));
+      setConnections(prev => prev.filter(conn => !multiSelectedCanvasAssets.includes(conn.fromId) && !multiSelectedCanvasAssets.includes(conn.toId)));
+      setMultiSelectedCanvasAssets([]);
+      setCanvasSelectionId(null);
+      return;
+    }
     if (canvasSelectionId) {
       const targetAsset = canvasAssets.find(asset => asset.id === canvasSelectionId);
       if (!targetAsset) return;
@@ -4034,6 +4127,13 @@ const App: React.FC = () => {
       setCanvasSelectionId(null);
       return;
     }
+    if (multiSelectedArtboards.length > 0) {
+      setArtboards(prev => prev.filter(ab => !multiSelectedArtboards.includes(ab.id)));
+      setConnections(prev => prev.filter(conn => !multiSelectedArtboards.includes(conn.fromId) && !multiSelectedArtboards.includes(conn.toId)));
+      setMultiSelectedArtboards([]);
+      setSelection({ artboardId: null, assetId: null });
+      return;
+    }
     if (!selection.artboardId) return;
     if (selection.assetId) {
       setArtboards(prev => prev.map(ab =>
@@ -4044,7 +4144,7 @@ const App: React.FC = () => {
       setArtboards(prev => prev.filter(ab => ab.id !== selection.artboardId));
       setSelection({ artboardId: null, assetId: null });
     }
-  }, [canvasSelectionId, canvasAssets, selection, deleteCanvasAsset]);
+  }, [multiSelectedCanvasAssets, canvasSelectionId, canvasAssets, multiSelectedArtboards, selection, deleteCanvasAsset]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -6368,6 +6468,11 @@ Return ONLY valid JSON in the format:
                     setSelection({ artboardId: null, assetId: null });
                     return;
                   }
+                  if (multiSelectedCanvasAssets.includes(asset.id)) {
+                    setCanvasSelectionId(asset.id);
+                    setSelection({ artboardId: null, assetId: null });
+                    return;
+                  }
                   setMultiSelectedCanvasAssets([]);
                   setMultiSelectedArtboards([]);
                   setCanvasSelectionId(asset.id);
@@ -6393,6 +6498,11 @@ Return ONLY valid JSON in the format:
                     setMultiSelectedArtboards((prev) => (
                       prev.includes(ab.id) ? prev.filter(id => id !== ab.id) : [...prev, ab.id]
                     ));
+                    setSelection({ artboardId: ab.id, assetId });
+                    setCanvasSelectionId(null);
+                    return;
+                  }
+                  if (multiSelectedArtboards.includes(ab.id)) {
                     setSelection({ artboardId: ab.id, assetId });
                     setCanvasSelectionId(null);
                     return;
