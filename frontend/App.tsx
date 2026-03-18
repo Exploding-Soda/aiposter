@@ -3304,6 +3304,10 @@ const App: React.FC = () => {
 
   const handleGlobalMouseMove = useCallback((e: MouseEvent) => {
     if (isPanning) {
+      if ((e.buttons & 1) === 0 && (e.buttons & 4) === 0) {
+        setIsPanning(false);
+        return;
+      }
       setViewOffset({
         x: e.clientX - panStart.current.x,
         y: e.clientY - panStart.current.y
@@ -3316,17 +3320,33 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    const handleCancel = () => setIsPanning(false);
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        setIsPanning(false);
+      }
+    };
     window.addEventListener('mousemove', handleGlobalMouseMove);
     window.addEventListener('mouseup', handleGlobalMouseUp);
+    window.addEventListener('blur', handleCancel);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       window.removeEventListener('mousemove', handleGlobalMouseMove);
       window.removeEventListener('mouseup', handleGlobalMouseUp);
+      window.removeEventListener('blur', handleCancel);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [handleGlobalMouseMove, handleGlobalMouseUp]);
 
   useEffect(() => {
     if (!isMarqueeSelecting) return;
     const handleMove = (event: MouseEvent) => {
+      if ((event.buttons & 1) === 0) {
+        setIsMarqueeSelecting(false);
+        setMarqueeRect(null);
+        marqueeStart.current = null;
+        return;
+      }
       const rect = canvasRef.current?.getBoundingClientRect();
       const start = marqueeStart.current;
       if (!rect || !start) return;
@@ -3370,11 +3390,23 @@ const App: React.FC = () => {
       setMarqueeRect(null);
       marqueeStart.current = null;
     };
+    const handleCancel = () => {
+      setIsMarqueeSelecting(false);
+      setMarqueeRect(null);
+      marqueeStart.current = null;
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) handleCancel();
+    };
     window.addEventListener('mousemove', handleMove);
     window.addEventListener('mouseup', handleUp);
+    window.addEventListener('blur', handleCancel);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       window.removeEventListener('mousemove', handleMove);
       window.removeEventListener('mouseup', handleUp);
+      window.removeEventListener('blur', handleCancel);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [isMarqueeSelecting, artboards, canvasAssets, viewOffset, zoom, marqueeRect]);
 
@@ -7782,7 +7814,15 @@ const ArtboardComponent: React.FC<ArtboardProps> = ({ artboard, isSelected, isFa
   };
 
   useEffect(() => {
+    const resetInteractionState = () => {
+      isDraggingArtboard.current = false;
+      isResizingArtboard.current = false;
+    };
     const handleMouseMove = (e: MouseEvent) => {
+      if ((e.buttons & 1) === 0) {
+        resetInteractionState();
+        return;
+      }
       if (isDraggingArtboard.current) {
         const dx = e.clientX - lastPos.current.x;
         const dy = e.clientY - lastPos.current.y;
@@ -7796,12 +7836,19 @@ const ArtboardComponent: React.FC<ArtboardProps> = ({ artboard, isSelected, isFa
         lastPos.current = { x: e.clientX, y: e.clientY };
       }
     };
-    const handleMouseUp = () => { isDraggingArtboard.current = false; isResizingArtboard.current = false; };
+    const handleMouseUp = () => { resetInteractionState(); };
+    const handleVisibilityChange = () => {
+      if (document.hidden) resetInteractionState();
+    };
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('blur', handleMouseUp);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('blur', handleMouseUp);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [onDragArtboard, onResizeArtboard]);
 
@@ -7929,7 +7976,15 @@ const AssetComponent: React.FC<AssetProps> = ({ asset, isSelected, onSelect, onD
   };
 
   useEffect(() => {
+    const resetInteractionState = () => {
+      isDragging.current = false;
+      isResizing.current = false;
+    };
     const handleMouseMove = (e: MouseEvent) => {
+      if ((e.buttons & 1) === 0) {
+        resetInteractionState();
+        return;
+      }
       if (isDragging.current) {
         const dx = (e.clientX - lastPos.current.x);
         const dy = (e.clientY - lastPos.current.y);
@@ -7943,12 +7998,19 @@ const AssetComponent: React.FC<AssetProps> = ({ asset, isSelected, onSelect, onD
         lastPos.current = { x: e.clientX, y: e.clientY };
       }
     };
-    const handleMouseUp = () => { isDragging.current = false; isResizing.current = false; };
+    const handleMouseUp = () => { resetInteractionState(); };
+    const handleVisibilityChange = () => {
+      if (document.hidden) resetInteractionState();
+    };
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('blur', handleMouseUp);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('blur', handleMouseUp);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [onDrag, onResize]);
 
@@ -8116,7 +8178,15 @@ const CanvasAssetComponent: React.FC<CanvasAssetProps> = ({ asset, isSelected, i
   };
 
   useEffect(() => {
+    const resetInteractionState = () => {
+      isDragging.current = false;
+      isResizing.current = false;
+    };
     const handleMouseMove = (e: MouseEvent) => {
+      if ((e.buttons & 1) === 0) {
+        resetInteractionState();
+        return;
+      }
       if (isDragging.current) {
         const dx = e.clientX - lastPos.current.x;
         const dy = e.clientY - lastPos.current.y;
@@ -8130,12 +8200,19 @@ const CanvasAssetComponent: React.FC<CanvasAssetProps> = ({ asset, isSelected, i
         lastPos.current = { x: e.clientX, y: e.clientY };
       }
     };
-    const handleMouseUp = () => { isDragging.current = false; isResizing.current = false; };
+    const handleMouseUp = () => { resetInteractionState(); };
+    const handleVisibilityChange = () => {
+      if (document.hidden) resetInteractionState();
+    };
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('blur', handleMouseUp);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('blur', handleMouseUp);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [onDrag, onResize]);
 
