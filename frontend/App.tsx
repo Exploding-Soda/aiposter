@@ -3881,6 +3881,12 @@ const App: React.FC = () => {
     return imageUrl ? { id: artboard.id, imageUrl } : null;
   }, [assetContextMenu, artboards]);
 
+  const contextDeleteLabel = assetContextMenu?.scope === 'canvas' && multiSelectedCanvasAssets.includes(assetContextMenu.assetId)
+    ? `Delete ${multiSelectedCanvasAssets.length} Items`
+    : assetContextMenu?.scope === 'poster' && multiSelectedArtboards.includes(assetContextMenu.artboardId || '')
+      ? `Delete ${multiSelectedArtboards.length} Posters`
+      : 'Delete';
+
   const handleContextDownload = async () => {
     try {
       const poster = getContextPoster();
@@ -7861,14 +7867,14 @@ Return ONLY valid JSON in the format:
               <Download className="w-3.5 h-3.5" />
               Download
             </button>
-            <button
-              type="button"
-              className="w-full flex items-center gap-2 px-3 py-2 text-xs text-rose-600 hover:bg-rose-50"
-              onClick={handleContextDelete}
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Delete
-            </button>
+              <button
+                type="button"
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-rose-600 hover:bg-rose-50"
+                onClick={handleContextDelete}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                {contextDeleteLabel}
+              </button>
           </div>
         </div>
       )}
@@ -8046,10 +8052,20 @@ const ArtboardComponent: React.FC<ArtboardProps> = ({ artboard, canvasScale, isS
         height: artboard.height
       }}
       onClick={(e) => { e.stopPropagation(); onSelect(null, e); }}
+      onContextMenu={(e) => {
+        if (isPosterArtboard) {
+          onOpenPosterContextMenu(e);
+        }
+      }}
     >
       <div
         className={`h-8 flex items-center justify-between px-3 rounded-t-lg cursor-grab active:cursor-grabbing border border-slate-200 border-b-0 ${isSelected ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-500'}`}
         onMouseDown={handleHeaderMouseDown}
+        onContextMenu={(e) => {
+          if (isPosterArtboard) {
+            onOpenPosterContextMenu(e);
+          }
+        }}
       >
         <span className="text-[9px] font-bold uppercase tracking-wider truncate">{artboard.name}</span>
         <GripHorizontal className="w-3.5 h-3.5 opacity-40" />
