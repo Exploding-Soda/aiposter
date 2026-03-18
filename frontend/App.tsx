@@ -6330,6 +6330,7 @@ Return ONLY valid JSON in the format:
               <CanvasAssetComponent
                 key={asset.id}
                 asset={asset}
+                canvasScale={zoom}
                 isSelected={canvasSelectionId === asset.id || multiSelectedCanvasAssets.includes(asset.id)}
                 isFading={fadeInCanvasAssetIds.has(asset.id)}
                 onSelect={(event) => {
@@ -6357,6 +6358,7 @@ Return ONLY valid JSON in the format:
               <ArtboardComponent
                 key={ab.id}
                 artboard={ab}
+                canvasScale={zoom}
                 isSelected={selection.artboardId === ab.id || multiSelectedArtboards.includes(ab.id)}
                 isFadingIn={fadeInArtboardIds.has(ab.id)}
                 selectedAssetId={selection.assetId}
@@ -7800,7 +7802,7 @@ const ToolButton: React.FC<{ icon: React.ReactNode; onClick: () => void; disable
   </button>
 );
 
-const ArtboardComponent: React.FC<ArtboardProps> = ({ artboard, isSelected, isFadingIn, selectedAssetId, onSelect, onDragArtboard, onResizeArtboard, onDragAsset, onResizeAsset, onUpdateAssetContent, onOpenPoster, onOpenAssetContextMenu, onOpenPosterContextMenu }) => {
+const ArtboardComponent: React.FC<ArtboardProps> = ({ artboard, canvasScale, isSelected, isFadingIn, selectedAssetId, onSelect, onDragArtboard, onResizeArtboard, onDragAsset, onResizeAsset, onUpdateAssetContent, onOpenPoster, onOpenAssetContextMenu, onOpenPosterContextMenu }) => {
   const isDraggingArtboard = useRef(false);
   const isResizingArtboard = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
@@ -7824,14 +7826,14 @@ const ArtboardComponent: React.FC<ArtboardProps> = ({ artboard, isSelected, isFa
         return;
       }
       if (isDraggingArtboard.current) {
-        const dx = e.clientX - lastPos.current.x;
-        const dy = e.clientY - lastPos.current.y;
+        const dx = (e.clientX - lastPos.current.x) / canvasScale;
+        const dy = (e.clientY - lastPos.current.y) / canvasScale;
         onDragArtboard(dx, dy);
         lastPos.current = { x: e.clientX, y: e.clientY };
       }
       if (isResizingArtboard.current) {
-        const dx = e.clientX - lastPos.current.x;
-        const dy = e.clientY - lastPos.current.y;
+        const dx = (e.clientX - lastPos.current.x) / canvasScale;
+        const dy = (e.clientY - lastPos.current.y) / canvasScale;
         onResizeArtboard(dx, dy);
         lastPos.current = { x: e.clientX, y: e.clientY };
       }
@@ -7893,6 +7895,7 @@ const ArtboardComponent: React.FC<ArtboardProps> = ({ artboard, isSelected, isFa
             <AssetComponent
               key={asset.id}
               asset={asset}
+              canvasScale={canvasScale}
               isSelected={selectedAssetId === asset.id}
               onSelect={(event) => onSelect(asset.id, event)}
               onDrag={(dx, dy) => onDragAsset(asset.id, dx, dy)}
@@ -7918,6 +7921,7 @@ const ArtboardComponent: React.FC<ArtboardProps> = ({ artboard, isSelected, isFa
 
 interface ArtboardProps {
   artboard: Artboard;
+  canvasScale: number;
   isSelected: boolean;
   isFadingIn: boolean;
   selectedAssetId: string | null;
@@ -7932,7 +7936,7 @@ interface ArtboardProps {
   onOpenPosterContextMenu: (event: React.MouseEvent) => void;
 }
 
-const AssetComponent: React.FC<AssetProps> = ({ asset, isSelected, onSelect, onDrag, onResize, onContextMenu, onUpdateContent }) => {
+const AssetComponent: React.FC<AssetProps> = ({ asset, canvasScale, isSelected, onSelect, onDrag, onResize, onContextMenu, onUpdateContent }) => {
   const isDragging = useRef(false);
   const isResizing = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
@@ -7986,14 +7990,14 @@ const AssetComponent: React.FC<AssetProps> = ({ asset, isSelected, onSelect, onD
         return;
       }
       if (isDragging.current) {
-        const dx = (e.clientX - lastPos.current.x);
-        const dy = (e.clientY - lastPos.current.y);
+        const dx = (e.clientX - lastPos.current.x) / canvasScale;
+        const dy = (e.clientY - lastPos.current.y) / canvasScale;
         onDrag(dx, dy);
         lastPos.current = { x: e.clientX, y: e.clientY };
       }
       if (isResizing.current) {
-        const dx = (e.clientX - lastPos.current.x);
-        const dy = (e.clientY - lastPos.current.y);
+        const dx = (e.clientX - lastPos.current.x) / canvasScale;
+        const dy = (e.clientY - lastPos.current.y) / canvasScale;
         onResize(dx, dy);
         lastPos.current = { x: e.clientX, y: e.clientY };
       }
@@ -8135,6 +8139,7 @@ const AssetComponent: React.FC<AssetProps> = ({ asset, isSelected, onSelect, onD
 
 interface AssetProps {
   asset: Asset;
+  canvasScale: number;
   isSelected: boolean;
   onSelect: (event: React.MouseEvent) => void;
   onDrag: (dx: number, dy: number) => void;
@@ -8145,6 +8150,7 @@ interface AssetProps {
 
 interface CanvasAssetProps {
   asset: Asset;
+  canvasScale: number;
   isSelected: boolean;
   isFading: boolean;
   onSelect: (event: React.MouseEvent) => void;
@@ -8155,7 +8161,7 @@ interface CanvasAssetProps {
   onUpdateContent: (content: string) => void;
 }
 
-const CanvasAssetComponent: React.FC<CanvasAssetProps> = ({ asset, isSelected, isFading, onSelect, onDrag, onResize, onDelete, onContextMenu, onUpdateContent }) => {
+const CanvasAssetComponent: React.FC<CanvasAssetProps> = ({ asset, canvasScale, isSelected, isFading, onSelect, onDrag, onResize, onDelete, onContextMenu, onUpdateContent }) => {
   const isDragging = useRef(false);
   const isResizing = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
@@ -8188,14 +8194,14 @@ const CanvasAssetComponent: React.FC<CanvasAssetProps> = ({ asset, isSelected, i
         return;
       }
       if (isDragging.current) {
-        const dx = e.clientX - lastPos.current.x;
-        const dy = e.clientY - lastPos.current.y;
+        const dx = (e.clientX - lastPos.current.x) / canvasScale;
+        const dy = (e.clientY - lastPos.current.y) / canvasScale;
         onDrag(dx, dy);
         lastPos.current = { x: e.clientX, y: e.clientY };
       }
       if (isResizing.current) {
-        const dx = e.clientX - lastPos.current.x;
-        const dy = e.clientY - lastPos.current.y;
+        const dx = (e.clientX - lastPos.current.x) / canvasScale;
+        const dy = (e.clientY - lastPos.current.y) / canvasScale;
         onResize(dx, dy);
         lastPos.current = { x: e.clientX, y: e.clientY };
       }
