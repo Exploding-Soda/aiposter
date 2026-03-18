@@ -178,6 +178,11 @@ class DesignGuidanceUpdateRequest(BaseModel):
   description: str
 
 
+class PrimaryColorCreateRequest(BaseModel):
+  name: Optional[str] = None
+  color_hex: str
+
+
 class AITaskSubmitRequest(BaseModel):
   taskType: str  # 'chat' for AI chat requests
   payload: Dict[str, Any]
@@ -405,6 +410,26 @@ def init_database():
   font_reference_columns = [row[1] for row in cursor.fetchall()]
   if "thumbnail_path" not in font_reference_columns:
     cursor.execute("ALTER TABLE font_references ADD COLUMN thumbnail_path TEXT")
+
+  # Create primary_colors table for user color assets
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS primary_colors (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT,
+      color_hex TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    )
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_primary_colors_user_id
+    ON primary_colors(user_id)
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_primary_colors_created_at
+    ON primary_colors(created_at DESC)
+  """)
 
   conn.commit()
   conn.close()
@@ -2501,6 +2526,70 @@ def delete_font_reference(reference_id: str, user: sqlite3.Row = Depends(require
         except OSError:
           pass
 
+  return JSONResponse({"ok": True})
+
+
+@app.get("/primary-colors")
+def list_primary_colors(user: sqlite3.Row = Depends(require_current_user)):
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT id, name, color_hex, created_at
+    FROM primary_colors
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+  """, (user["id"],))
+  rows = cursor.fetchall()
+  conn.close()
+  return JSONResponse({"items": [dict(row) for row in rows]})
+
+
+@app.post("/primary-colors")
+def create_primary_color(payload: PrimaryColorCreateRequest, user: sqlite3.Row = Depends(require_current_user)):
+  normalized = (payload.color_hex or "").strip().upper()
+  if not normalized.startswith("#"):
+    normalized = f"#{normalized}"
+  if len(normalized) not in {4, 7}:
+    raise HTTPException(status_code=400, detail="Invalid color hex")
+  if any(ch not in "#0123456789ABCDEF" for ch in normalized):
+    raise HTTPException(status_code=400, detail="Invalid color hex")
+
+  color_id = str(uuid.uuid4())
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    INSERT INTO primary_colors (id, user_id, name, color_hex)
+    VALUES (?, ?, ?, ?)
+  """, (
+    color_id,
+    user["id"],
+    (payload.name or "").strip() or None,
+    normalized
+  ))
+  conn.commit()
+  cursor.execute("""
+    SELECT id, name, color_hex, created_at
+    FROM primary_colors
+    WHERE id = ?
+  """, (color_id,))
+  row = cursor.fetchone()
+  conn.close()
+  return JSONResponse({"item": dict(row)})
+
+
+@app.delete("/primary-colors/{color_id}")
+def delete_primary_color(color_id: str, user: sqlite3.Row = Depends(require_current_user)):
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    DELETE FROM primary_colors
+    WHERE id = ? AND user_id = ?
+  """, (color_id, user["id"]))
+  deleted = cursor.rowcount
+  conn.commit()
+  conn.close()
+  if deleted == 0:
+    raise HTTPException(status_code=404, detail="Primary color not found")
   return JSONResponse({"ok": True})
 
 

@@ -4,6 +4,8 @@ import {
   HardDrive,
   FileText,
   Image as ImageIcon,
+  Droplets,
+  Pipette,
   Plus,
   Info
 } from 'lucide-react';
@@ -35,6 +37,13 @@ type LogoItem = {
   filename: string;
 };
 
+type PrimaryColorItem = {
+  id: string;
+  name?: string | null;
+  color_hex: string;
+  created_at: string;
+};
+
 const PERSONAL_SPACE_ONBOARDING_STORAGE_KEY = 'poster-onboarding-personal-space-v1';
 
 const PersonalSpacePage: React.FC = () => {
@@ -50,6 +59,13 @@ const PersonalSpacePage: React.FC = () => {
   const [fontReferenceDeleting, setFontReferenceDeleting] = useState<string | null>(null);
   const [fontReferenceUploadProgress, setFontReferenceUploadProgress] = useState<number | null>(null);
   const [isFontReferenceUploading, setIsFontReferenceUploading] = useState(false);
+  const [primaryColors, setPrimaryColors] = useState<PrimaryColorItem[]>([]);
+  const [primaryColorsLoading, setPrimaryColorsLoading] = useState(true);
+  const [primaryColorsError, setPrimaryColorsError] = useState('');
+  const [primaryColorDeleting, setPrimaryColorDeleting] = useState<string | null>(null);
+  const [isPrimaryColorSaving, setIsPrimaryColorSaving] = useState(false);
+  const [isEyeDropping, setIsEyeDropping] = useState(false);
+  const [pendingPrimaryColorHex, setPendingPrimaryColorHex] = useState('#2563EB');
   const [logos, setLogos] = useState<LogoItem[]>([]);
   const [logosLoading, setLogosLoading] = useState(false);
   const [logosError, setLogosError] = useState('');
@@ -63,8 +79,10 @@ const PersonalSpacePage: React.FC = () => {
   const [isGuideOpen, setIsGuideOpen] = useState(false);
   const [guideStep, setGuideStep] = useState(0);
   const referenceSectionRef = useRef<HTMLElement | null>(null);
+  const primaryColorSectionRef = useRef<HTMLElement | null>(null);
   const fontSectionRef = useRef<HTMLElement | null>(null);
   const logoSectionRef = useRef<HTMLElement | null>(null);
+  const primaryColorPickerRef = useRef<HTMLInputElement | null>(null);
 
   const loadLogos = async () => {
     setLogosLoading(true);
@@ -129,8 +147,30 @@ const PersonalSpacePage: React.FC = () => {
     }
   };
 
+  const loadPrimaryColors = async () => {
+    setPrimaryColorsLoading(true);
+    setPrimaryColorsError('');
+    try {
+      const response = await fetchWithAuth(
+        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/primary-colors`
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load primary colors';
+        throw new Error(message);
+      }
+      setPrimaryColors(Array.isArray(data.items) ? data.items : []);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load primary colors';
+      setPrimaryColorsError(message);
+    } finally {
+      setPrimaryColorsLoading(false);
+    }
+  };
+
   useEffect(() => {
     void loadReferenceStyles();
+    void loadPrimaryColors();
     void loadFontReferences();
     void loadLogos();
   }, []);
@@ -395,6 +435,110 @@ const PersonalSpacePage: React.FC = () => {
     }
   };
 
+  const savePrimaryColor = async (colorHex: string, name = '') => {
+    const normalizedHex = colorHex.trim();
+    if (!normalizedHex) {
+      setPrimaryColorsError('Please choose a color.');
+      return;
+    }
+
+    setPrimaryColorsError('');
+    setIsPrimaryColorSaving(true);
+    try {
+      const response = await fetchWithAuth(
+        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/primary-colors`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            name: name.trim(),
+            color_hex: normalizedHex
+          })
+        }
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to save primary color';
+        throw new Error(message);
+      }
+      if (data.item) {
+        setPrimaryColors((prev) => [data.item, ...prev]);
+      }
+      setPendingPrimaryColorHex(normalizedHex.toUpperCase());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save primary color';
+      setPrimaryColorsError(message);
+    } finally {
+      setIsPrimaryColorSaving(false);
+    }
+  };
+
+  const handlePrimaryColorPickerChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedHex = event.target.value?.toUpperCase();
+    if (!selectedHex) return;
+    setPendingPrimaryColorHex(selectedHex);
+    await savePrimaryColor(selectedHex);
+    event.target.value = '';
+  };
+
+  const handleOpenPrimaryColorPicker = () => {
+    primaryColorPickerRef.current?.click();
+  };
+
+  const handlePickScreenColor = async () => {
+    const eyeDropperWindow = window as Window & {
+      EyeDropper?: new () => { open: () => Promise<{ sRGBHex: string }> };
+    };
+
+    if (!eyeDropperWindow.EyeDropper) {
+      setPrimaryColorsError('Screen color picking is not supported in this browser.');
+      return;
+    }
+
+    setPrimaryColorsError('');
+    setIsEyeDropping(true);
+    try {
+      const eyeDropper = new eyeDropperWindow.EyeDropper();
+      const result = await eyeDropper.open();
+      const pickedHex = result.sRGBHex.toUpperCase();
+      setPendingPrimaryColorHex(pickedHex);
+      await savePrimaryColor(pickedHex);
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        return;
+      }
+      const message = error instanceof Error ? error.message : 'Failed to pick screen color';
+      setPrimaryColorsError(message);
+    } finally {
+      setIsEyeDropping(false);
+    }
+  };
+
+  const handleDeletePrimaryColor = async (item: PrimaryColorItem) => {
+    if (!window.confirm('Delete this primary color?')) return;
+    setPrimaryColorsError('');
+    setPrimaryColorDeleting(item.id);
+    try {
+      const response = await fetchWithAuth(
+        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/primary-colors/${item.id}`,
+        { method: 'DELETE' }
+      );
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to delete primary color';
+        throw new Error(message);
+      }
+      setPrimaryColors((prev) => prev.filter((entry) => entry.id !== item.id));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete primary color';
+      setPrimaryColorsError(message);
+    } finally {
+      setPrimaryColorDeleting(null);
+    }
+  };
+
   const guideSteps = [
     {
       title: 'Reference Styles',
@@ -407,6 +551,23 @@ const PersonalSpacePage: React.FC = () => {
             alt="Reference style example poster"
             className="h-56 w-full rounded-2xl border border-gray-200 bg-slate-50 object-contain p-3"
           />
+        </div>
+      )
+    },
+    {
+      title: 'Primary Colors',
+      target: primaryColorSectionRef,
+      content: (
+        <div className="space-y-3">
+          <p>Save the colors that should keep showing up in your posters. This helps you build a recognizable visual system even when the layouts change.</p>
+          <div className="grid grid-cols-3 gap-3">
+            {['#2563EB', '#F97316', '#111827'].map((color) => (
+              <div key={color} className="rounded-2xl border border-gray-200 bg-white p-3">
+                <div className="h-14 rounded-xl border border-black/5" style={{ backgroundColor: color }} />
+                <div className="mt-2 text-[11px] font-semibold text-gray-600">{color}</div>
+              </div>
+            ))}
+          </div>
         </div>
       )
     },
@@ -572,6 +733,104 @@ const PersonalSpacePage: React.FC = () => {
                   <input type="file" className="hidden" accept="image/*" onChange={handleReferenceUpload} />
                 </label>
               </div>
+            </div>
+          </section>
+
+          <section ref={primaryColorSectionRef} className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6">
+            <div className="flex items-center justify-between mb-6 gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-cyan-50 text-cyan-600 rounded-xl">
+                  <Droplets size={18} />
+                </div>
+                <h3 className="font-bold text-gray-900">Primary Colors</h3>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handlePickScreenColor}
+                  disabled={isEyeDropping || isPrimaryColorSaving}
+                  className="inline-flex h-11 items-center gap-2 rounded-2xl border border-cyan-200 bg-cyan-50 px-4 text-sm font-semibold text-cyan-700 shadow-sm transition hover:border-cyan-300 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  title="Pick a color from the screen"
+                >
+                  <Pipette size={18} />
+                  <span>{isEyeDropping ? 'Picking...' : 'Pick from Screen'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOpenPrimaryColorPicker}
+                  disabled={isPrimaryColorSaving}
+                  className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-gray-200 bg-white text-gray-500 shadow-sm transition hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  aria-label="Add primary color"
+                  title="Add a color from the picker"
+                >
+                  <Plus size={20} />
+                </button>
+                <input
+                  ref={primaryColorPickerRef}
+                  type="color"
+                  value={pendingPrimaryColorHex}
+                  onChange={handlePrimaryColorPickerChange}
+                  className="hidden"
+                  aria-hidden="true"
+                />
+              </div>
+            </div>
+
+            {primaryColorsError && (
+              <div className="text-xs text-red-600 mb-3">{primaryColorsError}</div>
+            )}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+              {primaryColorsLoading && primaryColors.length === 0 ? (
+                <div className="col-span-full text-sm text-gray-400">Loading primary colors...</div>
+              ) : primaryColors.length > 0 ? (
+                primaryColors.map((item) => (
+                  <div
+                    key={item.id}
+                    className="aspect-square rounded-2xl border border-gray-100 overflow-hidden relative group shadow-sm"
+                    style={{ backgroundColor: item.color_hex }}
+                    title={item.name?.trim() ? `${item.name} · ${item.color_hex}` : item.color_hex}
+                  >
+                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/30 to-transparent p-3 text-white">
+                      <div className="truncate text-sm font-semibold">
+                        {item.name?.trim() || 'Primary Color'}
+                      </div>
+                      <div className="mt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-white/80">
+                        {item.color_hex}
+                      </div>
+                    </div>
+                    <div className="absolute inset-0 ring-1 ring-inset ring-black/5 rounded-2xl" />
+                    <div className="absolute top-2 left-2 rounded-full bg-white/90 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-gray-600 shadow-sm">
+                      Color
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => navigator.clipboard?.writeText(item.color_hex)}
+                      className="absolute top-2 right-11 rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-gray-600 shadow-sm opacity-0 transition-opacity group-hover:opacity-100"
+                      aria-label={`Copy ${item.color_hex}`}
+                    >
+                      Copy
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeletePrimaryColor(item)}
+                      disabled={primaryColorDeleting === item.id}
+                      className="absolute top-2 right-2 w-7 h-7 rounded-full bg-white/90 text-gray-700 hover:bg-white text-xs font-bold shadow-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-60"
+                      aria-label="Delete primary color"
+                    >
+                      x
+                    </button>
+                  </div>
+                ))
+              ) : null}
+              <button
+                type="button"
+                onClick={handleOpenPrimaryColorPicker}
+                className="aspect-square border-2 border-dashed border-gray-200 rounded-2xl flex flex-col items-center justify-center gap-2 text-gray-400 hover:border-cyan-400 hover:text-cyan-500 hover:bg-cyan-50/30 transition-all"
+                aria-label="Add primary color"
+              >
+                <Plus size={24} />
+                <span className="text-[10px] font-bold uppercase tracking-wider">Add Color</span>
+              </button>
             </div>
           </section>
 
