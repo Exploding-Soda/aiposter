@@ -1,4 +1,4 @@
-import { PlanningStep } from "../types";
+import { PlanningStep, ReferenceStyleStrength } from "../types";
 import { fetchWithAuth } from "./authService";
 
 export type ChatMessage = {
@@ -329,7 +329,14 @@ export const planPosters = async (
   count: number,
   styleImages: string[] = [],
   logoUrl?: string | null,
+  styleReferenceStrength: ReferenceStyleStrength = "high",
 ): Promise<PlanningStep[]> => {
+  const planningStyleInstruction =
+    styleReferenceStrength === "low"
+      ? "The user may provide style reference images. Treat them as loose inspiration only; borrow broad mood cues if helpful, but prioritize the brief over the reference."
+      : styleReferenceStrength === "medium"
+        ? "The user may provide style reference images. Use them as clear stylistic guidance for palette, mood, and texture, but allow moderate deviation when it improves the design."
+        : "The user may provide style reference images. Use them only as style guidance and do NOT copy the exact image content.";
   const messageContent: Array<
     | { type: "text"; text: string }
     | { type: "image_url"; image_url: { url: string } }
@@ -347,7 +354,7 @@ Parse and extract all specific details, including:
 - Required copy/text.
 - Mood/emotional tone.
 
-The user may provide style reference images. Use them only as style guidance and do NOT copy the exact image content.
+${planningStyleInstruction}
 The user may also provide a brand logo reference image. If provided, account for tasteful logo placement but do not describe or alter the logo content.
 
 Create ${count} distinct, professional poster concepts that strictly follow every requirement.
@@ -408,6 +415,7 @@ const buildImagePrompt = (
 export const generatePosterImage = async (
   poster: PlanningStep,
   styleImages: string[] = [],
+  styleReferenceStrength: ReferenceStyleStrength = "high",
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
   serverFontReferenceUrl?: string | null,
@@ -442,6 +450,7 @@ export const generatePosterImage = async (
   const payload = buildGeneratePosterPayload(
     poster,
     resolvedStyleImages,
+    styleReferenceStrength,
     resolvedLogoUrl,
     resolvedFontReferenceUrl,
     resolvedServerFontReferenceUrl,
@@ -463,6 +472,7 @@ export const generatePosterImage = async (
 const buildGeneratePosterPayload = (
   poster: PlanningStep,
   styleImages: string[] = [],
+  styleReferenceStrength: ReferenceStyleStrength = "high",
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
   serverFontReferenceUrl?: string | null,
@@ -523,7 +533,11 @@ const buildGeneratePosterPayload = (
     ? `Image ${basePosterIndex} is the current poster to refine. Treat this as an edit of that poster, not a brand-new concept. Preserve its existing composition, scene structure, layout logic, and overall visual identity unless the prompt explicitly asks for a change. Make the requested updates while keeping the result clearly derived from Image ${basePosterIndex}.`
     : "";
   const styleInstruction = styleIndex
-    ? `The poster style must match Image ${styleIndex} as closely as possible (composition, palette, textures, lighting, mood, and overall visual language). Do not deviate.`
+    ? styleReferenceStrength === "low"
+      ? `Use Image ${styleIndex} as a loose style cue only. You may borrow high-level mood, palette, or atmosphere, but do not closely match its composition, textures, or visual details.`
+      : styleReferenceStrength === "medium"
+        ? `Use Image ${styleIndex} as a clear style reference. Align with its palette, mood, lighting, and overall visual language, but keep room for moderate deviation in composition and surface detail when it improves the poster.`
+        : `The poster style must match Image ${styleIndex} as closely as possible (composition, palette, textures, lighting, mood, and overall visual language). Do not deviate.`
     : "";
   const logoInstruction = logoIndex
     ? `Place the logo from Image ${logoIndex} in an appropriate position on the poster. Do not alter the logo.`
@@ -578,6 +592,7 @@ const buildGeneratePosterPayload = (
 export const generatePosterImageAsync = async (
   poster: PlanningStep,
   styleImages: string[] = [],
+  styleReferenceStrength: ReferenceStyleStrength = "high",
   logoUrl?: string | null,
   fontReferenceUrl?: string | null,
   serverFontReferenceUrl?: string | null,
@@ -611,6 +626,7 @@ export const generatePosterImageAsync = async (
   const payload = buildGeneratePosterPayload(
     poster,
     resolvedStyleImages,
+    styleReferenceStrength,
     resolvedLogoUrl,
     resolvedFontReferenceUrl,
     resolvedServerFontReferenceUrl,

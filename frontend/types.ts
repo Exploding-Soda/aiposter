@@ -85,6 +85,7 @@ export interface Project {
   logoImage?: string | null;
   fontReferenceImage?: string | null;
   selectedReferenceStyleId?: string | null;
+  selectedReferenceStyleStrength?: ReferenceStyleStrength;
   selectedLogoAssetId?: string | null;
   selectedFontReferenceId?: string | null;
   canvasAssets?: Asset[];
@@ -95,6 +96,8 @@ export interface Project {
     zoom: number;
   };
 }
+
+export type ReferenceStyleStrength = 'low' | 'medium' | 'high';
 
 export type AssetType = 'text' | 'image' | 'note';
 

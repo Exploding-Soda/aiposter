@@ -4,7 +4,7 @@ import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, Mo
 import { AnimatePresence, motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { AppStatus, PosterDraft, PlanningStep, Artboard, Asset, Selection, AssetType, Project, TextLayout, TextStyleMap, Connection } from './types';
+import { AppStatus, PosterDraft, PlanningStep, Artboard, Asset, Selection, AssetType, Project, TextLayout, TextStyleMap, Connection, ReferenceStyleStrength } from './types';
 import { planPosters, generatePosterImage, generatePosterNoTextImage, generatePosterMergedImage, refinePoster, chatWithModel, ChatMessage, editPosterWithMarkupAsync, generatePosterResolutionFromImage, generatePosterImageAsync, getAITaskStatus, extractImageFromTaskResult, getPendingAITasks, AITaskStatus, generateImageFromPrompt } from './services/geminiService';
 import { AuthUser, fetchWithAuth, getAccessToken, loginUser, logoutUser, refreshAccessToken, registerUser } from './services/authService';
 import PosterCard from './components/PosterCard';
@@ -263,6 +263,7 @@ const App: React.FC = () => {
   const [referenceStylesLoading, setReferenceStylesLoading] = useState(false);
   const [referenceStylesError, setReferenceStylesError] = useState('');
   const [selectedReferenceStyleId, setSelectedReferenceStyleId] = useState<string | null>(null);
+  const [selectedReferenceStyleStrength, setSelectedReferenceStyleStrength] = useState<ReferenceStyleStrength>('high');
   const [referenceSelectLoadingId, setReferenceSelectLoadingId] = useState<string | null>(null);
   const [referenceUploadProgress, setReferenceUploadProgress] = useState<number | null>(null);
   const [isReferenceUploading, setIsReferenceUploading] = useState(false);
@@ -641,6 +642,7 @@ const App: React.FC = () => {
     logoImage: null,
     fontReferenceImage: null,
     selectedReferenceStyleId: project.selectedReferenceStyleId ?? null,
+    selectedReferenceStyleStrength: project.selectedReferenceStyleStrength ?? 'high',
     selectedLogoAssetId: project.selectedLogoAssetId ?? null,
     selectedFontReferenceId: project.selectedFontReferenceId ?? null,
     view: project.view
@@ -930,7 +932,8 @@ const App: React.FC = () => {
       title: importedProject.title || 'Imported Project',
       createdAt: importedProject.createdAt || Date.now(),
       updatedAt: Date.now(),
-      artboards: importedProject.artboards || []
+      artboards: importedProject.artboards || [],
+      selectedReferenceStyleStrength: importedProject.selectedReferenceStyleStrength || 'high'
     };
     const updatedProjects = [normalized, ...projects];
     saveProjectsToDisk(updatedProjects);
@@ -998,6 +1001,7 @@ const App: React.FC = () => {
     setLogoImage(activeProject.logoImage || null);
     setFontReferenceImage(activeProject.fontReferenceImage || null);
     setSelectedReferenceStyleId(activeProject.selectedReferenceStyleId || null);
+    setSelectedReferenceStyleStrength(activeProject.selectedReferenceStyleStrength || 'high');
     setSelectedLogoAssetId(activeProject.selectedLogoAssetId || null);
     setSelectedFontReferenceId(activeProject.selectedFontReferenceId || null);
     setActivePosterId(null);
@@ -1672,6 +1676,7 @@ const App: React.FC = () => {
       width: DEFAULT_BOARD_WIDTH,
       height: DEFAULT_BOARD_HEIGHT,
       artboards: [],
+      selectedReferenceStyleStrength: 'high',
       view: { x: 0, y: 0, zoom: 1 }
     };
     const updated = [newProject, ...projects];
@@ -4622,6 +4627,7 @@ Return ONLY valid JSON in the format:
           const taskId = await generatePosterImageAsync(
             targetPoster,
             styleImages,
+            selectedReferenceStyleStrength,
             logoForPoster,
             fontReferenceUrl,
             serverFontReferenceUrl,
@@ -5024,7 +5030,7 @@ Return ONLY valid JSON in the format:
     // Run the generation in background (don't await, allow parallel submissions)
     void (async () => {
       try {
-        const plans = await planPosters(currentTheme, currentCount, currentStyleImages, currentLogoImage);
+        const plans = await planPosters(currentTheme, currentCount, currentStyleImages, currentLogoImage, selectedReferenceStyleStrength);
         const fontReferenceUrl = await resolveFontReferenceUrl(currentFontReferenceImage);
         const serverFontReferenceUrl = await resolveServerFontPreviewUrl(currentFont);
 
@@ -5055,6 +5061,7 @@ Return ONLY valid JSON in the format:
               const taskId = await generatePosterImageAsync(
                 { ...plan, logoUrl: logoForPoster ?? undefined },
                 currentStyleImages,
+                selectedReferenceStyleStrength,
                 logoForPoster,
                 fontReferenceUrl,
                 serverFontReferenceUrl,
@@ -5184,6 +5191,7 @@ Return ONLY valid JSON in the format:
       logoImage: sanitizeUploadUrl(logoImage),
       fontReferenceImage: sanitizeUploadUrl(fontReferenceImage),
       selectedReferenceStyleId,
+      selectedReferenceStyleStrength,
       selectedLogoAssetId,
       selectedFontReferenceId,
       view: {
@@ -6539,6 +6547,45 @@ Return ONLY valid JSON in the format:
                         </motion.div>
                       )}
                     </AnimatePresence>
+                    {styleImages.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          Reference Strength
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          {([
+                            {
+                              value: 'low',
+                              label: 'Low',
+                              hint: 'Loose inspiration'
+                            },
+                            {
+                              value: 'medium',
+                              label: 'Medium',
+                              hint: 'Balanced guidance'
+                            },
+                            {
+                              value: 'high',
+                              label: 'High',
+                              hint: 'Strict match'
+                            }
+                          ] as Array<{ value: ReferenceStyleStrength; label: string; hint: string }>).map((option) => {
+                            const isActive = selectedReferenceStyleStrength === option.value;
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => setSelectedReferenceStyleStrength(option.value)}
+                                className={`rounded-lg border px-2 py-2 text-left transition-colors ${isActive ? 'border-blue-500 bg-blue-50 text-blue-700 ring-1 ring-blue-200' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'}`}
+                              >
+                                <div className="text-[11px] font-semibold">{option.label}</div>
+                                <div className="mt-0.5 text-[9px] leading-tight text-inherit/80">{option.hint}</div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                     <div className="relative">
                       <div
                         ref={referenceStylesScrollRef}
