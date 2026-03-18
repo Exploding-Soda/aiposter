@@ -333,9 +333,9 @@ export const planPosters = async (
 ): Promise<PlanningStep[]> => {
   const planningStyleInstruction =
     styleReferenceStrength === "low"
-      ? "The user may provide style reference images. Treat them as loose inspiration only; borrow broad mood cues if helpful, but prioritize the brief over the reference."
+      ? "The user may provide style reference images. Treat them as very loose inspiration only. Do not follow their composition, subject arrangement, or distinctive visual motifs. At most, borrow a small amount of overall mood or color feeling if it helps."
       : styleReferenceStrength === "medium"
-        ? "The user may provide style reference images. Use them as clear stylistic guidance for palette, mood, and texture, but allow moderate deviation when it improves the design."
+        ? "The user may provide style reference images. Use them as moderate style guidance only. You may loosely echo some palette, mood, or material feeling, but do not closely follow composition, subject placement, or signature textures from the reference."
         : "The user may provide style reference images. Use them only as style guidance and do NOT copy the exact image content.";
   const messageContent: Array<
     | { type: "text"; text: string }
@@ -534,9 +534,9 @@ const buildGeneratePosterPayload = (
     : "";
   const styleInstruction = styleIndex
     ? styleReferenceStrength === "low"
-      ? `Use Image ${styleIndex} as a loose style cue only. You may borrow high-level mood, palette, or atmosphere, but do not closely match its composition, textures, or visual details.`
+      ? `Use Image ${styleIndex} only as a very weak inspiration cue. Do not match its composition, framing, subject arrangement, textures, or recognizable visual motifs. Keep the result clearly original; at most, borrow a subtle sense of mood or broad color tendency.`
       : styleReferenceStrength === "medium"
-        ? `Use Image ${styleIndex} as a clear style reference. Align with its palette, mood, lighting, and overall visual language, but keep room for moderate deviation in composition and surface detail when it improves the poster.`
+        ? `Use Image ${styleIndex} as a moderate style reference only. You may loosely align with some palette, mood, or lighting direction, but avoid close similarity in composition, framing, subject placement, texture treatment, or distinctive reference-specific details. The poster should feel newly designed, not derived from Image ${styleIndex}.`
         : `The poster style must match Image ${styleIndex} as closely as possible (composition, palette, textures, lighting, mood, and overall visual language). Do not deviate.`
     : "";
   const logoInstruction = logoIndex
