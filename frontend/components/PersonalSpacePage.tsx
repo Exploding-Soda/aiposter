@@ -1,12 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Globe,
   HardDrive,
   FileText,
   Image as ImageIcon,
-  Plus
+  Plus,
+  Info
 } from 'lucide-react';
 import { fetchWithAuth, getAccessToken } from '../services/authService';
+import SpotlightTour from './SpotlightTour';
+import { fontExampleImage, logoExampleImage, refPosterOne } from '../onboardingAssets';
 
 type ReferenceStyleItem = {
   id: string;
@@ -32,6 +35,8 @@ type LogoItem = {
   filename: string;
 };
 
+const PERSONAL_SPACE_ONBOARDING_STORAGE_KEY = 'poster-onboarding-personal-space-v1';
+
 const PersonalSpacePage: React.FC = () => {
   const [referenceStyles, setReferenceStyles] = useState<ReferenceStyleItem[]>([]);
   const [referenceLoading, setReferenceLoading] = useState(true);
@@ -55,6 +60,11 @@ const PersonalSpacePage: React.FC = () => {
   const [previewImageName, setPreviewImageName] = useState<string | null>(null);
   const [previewImageSize, setPreviewImageSize] = useState<{ width: number; height: number } | null>(null);
   const [isPreviewClosing, setIsPreviewClosing] = useState(false);
+  const [isGuideOpen, setIsGuideOpen] = useState(false);
+  const [guideStep, setGuideStep] = useState(0);
+  const referenceSectionRef = useRef<HTMLElement | null>(null);
+  const fontSectionRef = useRef<HTMLElement | null>(null);
+  const logoSectionRef = useRef<HTMLElement | null>(null);
 
   const loadLogos = async () => {
     setLogosLoading(true);
@@ -385,8 +395,85 @@ const PersonalSpacePage: React.FC = () => {
     }
   };
 
+  const guideSteps = [
+    {
+      title: 'Reference Styles',
+      target: referenceSectionRef,
+      content: (
+        <div className="space-y-3">
+          <p>Upload a poster you already love here. It can be a past event poster from your school, club, or student organization. That gives the generator a much clearer style target. 📌</p>
+          <img
+            src={refPosterOne}
+            alt="Reference style example poster"
+            className="h-56 w-full rounded-2xl border border-gray-200 bg-slate-50 object-contain p-3"
+          />
+        </div>
+      )
+    },
+    {
+      title: 'Font References',
+      target: fontSectionRef,
+      content: (
+        <div className="space-y-3">
+          <p>If your school, club, or campaign uses a distinctive type style, upload a screenshot like this so the poster text feels more on-brand. ✍️</p>
+          <img
+            src={fontExampleImage}
+            alt="Font reference example"
+            className="h-56 w-full rounded-2xl border border-gray-200 bg-slate-50 object-contain p-3"
+          />
+        </div>
+      )
+    },
+    {
+      title: 'Logo Assets',
+      target: logoSectionRef,
+      content: (
+        <div className="space-y-3">
+          <p>Upload your school logo, club mark, or event badge here. We can place it in a clean, appropriate spot when generating the poster. 🏫</p>
+          <img
+            src={logoExampleImage}
+            alt="Logo example"
+            className="h-48 w-full rounded-2xl border border-gray-200 object-contain bg-slate-50 p-4"
+          />
+        </div>
+      )
+    }
+  ];
+
+  const closeGuide = () => {
+    localStorage.setItem(PERSONAL_SPACE_ONBOARDING_STORAGE_KEY, '1');
+    setIsGuideOpen(false);
+  };
+
+  useEffect(() => {
+    if (localStorage.getItem(PERSONAL_SPACE_ONBOARDING_STORAGE_KEY) === '1') return;
+    const timer = window.setTimeout(() => {
+      setGuideStep(0);
+      setIsGuideOpen(true);
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   return (
     <div className="max-w-6xl mx-auto space-y-8">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Personal Space</h1>
+          <p className="mt-2 text-sm text-gray-500">Manage the references and logo assets that shape your poster system.</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setGuideStep(0);
+            setIsGuideOpen(true);
+          }}
+          className="flex h-11 w-11 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:border-slate-300 hover:text-slate-900"
+          aria-label="Show personal space guide"
+          title="Show personal space guide"
+        >
+          <Info className="h-4 w-4" />
+        </button>
+      </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="space-y-6">
           <section className="bg-white rounded-3xl border border-gray-100 p-6 shadow-sm">
@@ -427,7 +514,7 @@ const PersonalSpacePage: React.FC = () => {
         </div>
 
         <div className="lg:col-span-2 space-y-6">
-          <section className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 flex flex-col">
+          <section ref={referenceSectionRef} className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 flex flex-col">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-orange-50 text-orange-600 rounded-xl">
@@ -488,7 +575,7 @@ const PersonalSpacePage: React.FC = () => {
             </div>
           </section>
 
-          <section className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 flex flex-col">
+          <section ref={fontSectionRef} className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 flex flex-col">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
@@ -549,7 +636,7 @@ const PersonalSpacePage: React.FC = () => {
             </div>
           </section>
 
-          <section className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6">
+          <section ref={logoSectionRef} className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl">
@@ -606,6 +693,19 @@ const PersonalSpacePage: React.FC = () => {
       <div className="pt-8 text-center text-[10px] text-gray-300 font-medium tracking-widest uppercase">
         Personal Space Console • 2026 Release
       </div>
+
+      <SpotlightTour
+        open={isGuideOpen}
+        targetRect={guideSteps[guideStep]?.target.current?.getBoundingClientRect() ?? null}
+        title={guideSteps[guideStep]?.title || 'Personal Space'}
+        content={guideSteps[guideStep]?.content || null}
+        stepLabel={`${guideStep + 1} / ${guideSteps.length}`}
+        onClose={closeGuide}
+        onSkip={closeGuide}
+        onBack={guideStep > 0 ? () => setGuideStep((prev) => prev - 1) : undefined}
+        onNext={guideStep < guideSteps.length - 1 ? () => setGuideStep((prev) => prev + 1) : closeGuide}
+        nextLabel={guideStep < guideSteps.length - 1 ? 'Next' : 'Done'}
+      />
 
       {isReferenceUploading && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">

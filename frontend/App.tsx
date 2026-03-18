@@ -10,6 +10,8 @@ import { AuthUser, fetchWithAuth, getAccessToken, loginUser, logoutUser, refresh
 import PosterCard from './components/PosterCard';
 import LandingPage from './components/LandingPage';
 import PersonalSpacePage from './components/PersonalSpacePage';
+import SpotlightTour from './components/SpotlightTour';
+import { norefPoster, refPosterOne, refPosterTwo } from './onboardingAssets';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 
 const STORAGE_KEY = 'poster_canvas_projects';
@@ -30,6 +32,8 @@ const BOARD_WIDTH = BOARD_BOUNDS.maxX - BOARD_BOUNDS.minX;
 const BOARD_HEIGHT = BOARD_BOUNDS.maxY - BOARD_BOUNDS.minY;
 const BOARD_PADDING = 24;
 const ADMIN_DB_LIMIT = 50;
+const DASHBOARD_ONBOARDING_STORAGE_KEY = 'poster-onboarding-dashboard-v1';
+const BOARD_GENERATOR_ONBOARDING_STORAGE_KEY = 'poster-onboarding-board-generator-v1';
 const BACKEND_API = import.meta.env.VITE_BACKEND_API || 'http://localhost:8001';
 const FONT_PREVIEW_API = import.meta.env.VITE_FONT_PREVIEW_API || BACKEND_API;
 const FONT_ALPHABET_PREVIEW_TEXT = [
@@ -283,6 +287,8 @@ const App: React.FC = () => {
   const logoAssetsLoadedOnceRef = useRef(false);
   const fontReferencesLoadedOnceRef = useRef(false);
   const lastBoardAssetsRefreshRef = useRef<{ projectId: string | null; at: number }>({ projectId: null, at: 0 });
+  const createCanvasButtonRef = useRef<HTMLButtonElement | null>(null);
+  const boardReferenceSectionRef = useRef<HTMLDivElement | null>(null);
   const [fontReferenceSelectLoadingId, setFontReferenceSelectLoadingId] = useState<string | null>(null);
   const [fontReferenceUploadProgress, setFontReferenceUploadProgress] = useState<number | null>(null);
   const [isFontReferenceUploading, setIsFontReferenceUploading] = useState(false);
@@ -318,6 +324,8 @@ const App: React.FC = () => {
   const [isRefiningPoster, setIsRefiningPoster] = useState(false);
   const [isResolutionModalOpen, setIsResolutionModalOpen] = useState(false);
   const [isGeneratingResolutions, setIsGeneratingResolutions] = useState(false);
+  const [isDashboardOnboardingOpen, setIsDashboardOnboardingOpen] = useState(false);
+  const [isBoardGuideOpen, setIsBoardGuideOpen] = useState(false);
   const [isAutoSaving, setIsAutoSaving] = useState(false);
   const [assetContextMenu, setAssetContextMenu] = useState<{
     x: number;
@@ -5173,6 +5181,7 @@ Return ONLY valid JSON in the format:
   const isLandingRoute = route === '/landing';
   const isLoginRoute = route === '/login';
   const isPersonalSpaceRoute = route === '/personal-space';
+  const isDashboardRoute = !isOnBoardRoute && !isAdminRoute && !isLandingRoute && !isLoginRoute && !isPersonalSpaceRoute;
 
   useEffect(() => {
     if (!isOnBoardRoute) return;
@@ -5194,6 +5203,49 @@ Return ONLY valid JSON in the format:
     loadLogoAssets,
     loadFontReferences
   ]);
+
+  const dismissDashboardOnboarding = useCallback(() => {
+    localStorage.setItem(DASHBOARD_ONBOARDING_STORAGE_KEY, '1');
+    setIsDashboardOnboardingOpen(false);
+  }, []);
+
+  const dismissBoardGuide = useCallback(() => {
+    localStorage.setItem(BOARD_GENERATOR_ONBOARDING_STORAGE_KEY, '1');
+    setIsBoardGuideOpen(false);
+  }, []);
+
+  const reopenBoardGuide = useCallback(() => {
+    setRightPanelMode('generator');
+    setIsBoardGuideOpen(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isDashboardRoute) {
+      setIsDashboardOnboardingOpen(false);
+      return;
+    }
+    if (localStorage.getItem(DASHBOARD_ONBOARDING_STORAGE_KEY) === '1') return;
+    const timer = window.setTimeout(() => {
+      if (createCanvasButtonRef.current) {
+        setIsDashboardOnboardingOpen(true);
+      }
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [isDashboardRoute, projects.length]);
+
+  useEffect(() => {
+    if (!isOnBoardRoute || rightPanelMode !== 'generator') {
+      setIsBoardGuideOpen(false);
+      return;
+    }
+    if (localStorage.getItem(BOARD_GENERATOR_ONBOARDING_STORAGE_KEY) === '1') return;
+    const timer = window.setTimeout(() => {
+      if (boardReferenceSectionRef.current) {
+        setIsBoardGuideOpen(true);
+      }
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [isOnBoardRoute, rightPanelMode, activeProjectId]);
 
   useEffect(() => {
     if (!authReady || authUser) return;
@@ -5957,13 +6009,25 @@ Return ONLY valid JSON in the format:
               </div>
 
               <div>
-                <button
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsDashboardOnboardingOpen(true)}
+                    className="flex h-11 w-11 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:border-slate-300 hover:text-slate-900"
+                    aria-label="Show dashboard guide"
+                    title="Show dashboard guide"
+                  >
+                    <Info className="h-4 w-4" />
+                  </button>
+                  <button
+                    ref={createCanvasButtonRef}
                   onClick={() => setIsNewProjectModalOpen(true)}
                   className="flex items-center justify-center gap-2 bg-black text-white px-6 py-3 rounded-xl font-semibold shadow-lg shadow-gray-200 transition-all active:scale-95"
-                >
-                  <Plus size={20} />
-                  Create New Canvas
-                </button>
+                  >
+                    <Plus size={20} />
+                    Create New Canvas
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -5999,6 +6063,19 @@ Return ONLY valid JSON in the format:
             )}
           </div>
         </main>
+
+        <SpotlightTour
+          open={isDashboardOnboardingOpen}
+          targetRect={createCanvasButtonRef.current?.getBoundingClientRect() ?? null}
+          title="Start your first canvas"
+          content={(
+            <div className="space-y-3">
+              <p>It looks like you do not have a canvas of your own yet. Try creating one and start exploring. ✨</p>
+              <p className="text-xs text-slate-500">Once you are inside, you can generate posters, refine ideas, and organize assets for your school event or student project.</p>
+            </div>
+          )}
+          onClose={dismissDashboardOnboarding}
+        />
 
         {isNewProjectModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
@@ -6149,6 +6226,15 @@ Return ONLY valid JSON in the format:
               </div>
             )}
             <div className="w-px h-6 bg-slate-200" />
+            <button
+              type="button"
+              className="flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
+              onClick={reopenBoardGuide}
+              aria-label="Show board guide"
+              title="Show board guide"
+            >
+              <Info className="w-4 h-4" />
+            </button>
           </div>
         </div>
         {isAutoSaving && (
@@ -6347,7 +6433,7 @@ Return ONLY valid JSON in the format:
                 value={theme}
                 onChange={(e) => setTheme(e.target.value)}
               />
-              <motion.div layout className="space-y-2">
+              <motion.div ref={boardReferenceSectionRef} layout className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
@@ -7401,6 +7487,43 @@ Return ONLY valid JSON in the format:
           </div>
         </div>
       )}
+
+      <SpotlightTour
+        open={isBoardGuideOpen}
+        targetRect={boardReferenceSectionRef.current?.getBoundingClientRect() ?? null}
+        title="Reference styles make results much more predictable"
+        content={(
+          <div className="space-y-4">
+            <p>
+              Reference images matter a lot. If you already have a poster style you love, upload it here and your next result will be much easier to control. 🎯
+            </p>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-2">
+                <img src={norefPoster} alt="Poster without a reference style" className="h-32 w-full rounded-2xl border border-slate-200 bg-slate-50 object-contain p-2" />
+                <div className="text-[11px] leading-5 text-slate-500">
+                  <div className="font-semibold text-slate-700">noref</div>
+                  <div>This poster was generated without any reference image.</div>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <img src={refPosterOne} alt="Reference poster example" className="h-32 w-full rounded-2xl border border-slate-200 bg-slate-50 object-contain p-2" />
+                <div className="text-[11px] leading-5 text-slate-500">
+                  <div className="font-semibold text-slate-700">ref1</div>
+                  <div>This is the reference poster you want the model to learn from.</div>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <img src={refPosterTwo} alt="Poster generated using the reference" className="h-32 w-full rounded-2xl border border-slate-200 bg-slate-50 object-contain p-2" />
+                <div className="text-[11px] leading-5 text-slate-500">
+                  <div className="font-semibold text-slate-700">ref2</div>
+                  <div>This poster was generated with ref1 as the reference, so the style is much more controlled.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        onClose={dismissBoardGuide}
+      />
 
       {isResolutionModalOpen && activePoster && (
         <div
