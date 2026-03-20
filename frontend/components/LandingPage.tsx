@@ -157,6 +157,34 @@ const Hero: React.FC<LandingPageProps> = ({ onStartCreating }) => (
 );
 
 const Features: React.FC = () => {
+  const advantageRows = [
+    {
+      label: '创作方式',
+      generic: '单轮 prompt 出图，依赖反复重试',
+      posterize: '先策划再生成，用流程化步骤推进成品'
+    },
+    {
+      label: '风格控制',
+      generic: '风格容易漂移，每次结果不稳定',
+      posterize: '可参考历史海报、品牌素材，稳定延续视觉风格'
+    },
+    {
+      label: '修改效率',
+      generic: '改动依赖重抽，局部调整成本高',
+      posterize: '支持标注精修与自然语言反馈，保留好的部分继续改'
+    },
+    {
+      label: '资产沉淀',
+      generic: 'Logo、字体、参考图难复用',
+      posterize: '品牌资产、风格图、字体统一管理，越用越懂你'
+    },
+    {
+      label: '多端适配',
+      generic: '不同尺寸往往需要重新生成',
+      posterize: '主视觉可一键延展到多尺寸，保持构图一致'
+    }
+  ];
+
   const features = [
     {
       icon: <Sparkles className={brandTextClass} />,
@@ -198,6 +226,30 @@ const Features: React.FC = () => {
           <p className="mx-auto max-w-2xl text-slate-500">
             Posterize 重新定义了 AI 辅助设计的边界，从资产管理到多端延展，覆盖海报生产的全链路。
           </p>
+        </div>
+
+        <div className="mb-12 overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm">
+          <div className="grid grid-cols-[1.1fr_1fr_1fr] border-b border-slate-200 bg-slate-50/80">
+            <div className="px-6 py-5 text-sm font-semibold text-slate-500">能力维度</div>
+            <div className="px-6 py-5 text-sm font-semibold text-slate-500">普通 AI 出图工具</div>
+            <div className={`px-6 py-5 text-sm font-semibold ${brandTextClass}`}>Posterize</div>
+          </div>
+
+          {advantageRows.map((row, index) => (
+            <div
+              key={row.label}
+              className={`grid grid-cols-[1.1fr_1fr_1fr] ${index !== advantageRows.length - 1 ? 'border-b border-slate-200' : ''}`}
+            >
+              <div className="px-6 py-5 text-sm font-semibold text-slate-900">{row.label}</div>
+              <div className="px-6 py-5 text-sm leading-7 text-slate-500">{row.generic}</div>
+              <div className="px-6 py-5 text-sm leading-7 text-slate-700">
+                <span className="inline-flex items-start gap-2">
+                  <CheckCircle2 size={16} className={`mt-1 shrink-0 ${brandTextClass}`} />
+                  <span>{row.posterize}</span>
+                </span>
+              </div>
+            </div>
+          ))}
         </div>
 
         <div className="grid gap-8 md:grid-cols-3">
