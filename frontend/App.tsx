@@ -3019,6 +3019,57 @@ const App: React.FC = () => {
     event.target.value = '';
   };
 
+  const confirmArtboardDeletion = useCallback((artboardIds: string[]) => {
+    const targets = artboards.filter((artboard) => artboardIds.includes(artboard.id));
+    if (!targets.length) return false;
+
+    for (const artboard of targets) {
+      const expectedName = artboard.name.trim();
+      const typedName = window.prompt(`请输入画板名 “${expectedName}” 以确认删除`);
+      if (typedName === null) {
+        return false;
+      }
+      if (typedName.trim() !== expectedName) {
+        window.alert(`画板名不匹配，已取消删除：${expectedName}`);
+        return false;
+      }
+    }
+
+    return true;
+  }, [artboards]);
+
+  const renderSidebarAccountSection = () => (
+    <div className="mt-auto border-t border-gray-100 px-6 py-4">
+      <div className="flex items-center justify-between bg-transparent px-1 py-1">
+        <button
+          type="button"
+          onClick={() => handleNavigate('/option')}
+          className="flex min-w-0 items-center gap-3 text-left transition-opacity hover:opacity-80"
+        >
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-600">
+            <span className="text-sm font-semibold">{authUser?.username.slice(0, 1).toUpperCase()}</span>
+          </div>
+          <div className="min-w-0">
+            <div className="max-w-[120px] truncate text-sm font-semibold leading-tight text-gray-900">{authUser?.username}</div>
+            <div className="flex items-center gap-1 text-xs text-slate-500">
+              <span className="inline-block h-2.5 w-2.5 rounded-[4px] border border-emerald-400"></span>
+              已登录
+            </div>
+          </div>
+        </button>
+        <button
+          onClick={handleLogout}
+          className="text-xs font-semibold text-slate-400 hover:text-slate-600"
+          aria-label="Log out"
+          title="Log out"
+          type="button"
+        >
+          退出登录
+        </button>
+      </div>
+    </div>
+  );
+
   const handleRemoveFontReferenceImage = () => {
     setFontReferenceImage(null);
   };
@@ -4089,6 +4140,10 @@ const App: React.FC = () => {
       const targetIds = multiSelectedArtboards.includes(assetContextMenu.artboardId || '')
         ? multiSelectedArtboards
         : (assetContextMenu.artboardId ? [assetContextMenu.artboardId] : []);
+      if (!confirmArtboardDeletion(targetIds)) {
+        setAssetContextMenu(null);
+        return;
+      }
       setArtboards(prev => prev.filter(ab => !targetIds.includes(ab.id)));
       setConnections(prev => prev.filter(c => !targetIds.includes(c.fromId) && !targetIds.includes(c.toId)));
       if (targetIds.includes(selection.artboardId || '')) {
@@ -4133,6 +4188,9 @@ const App: React.FC = () => {
       return;
     }
     if (multiSelectedArtboards.length > 0) {
+      if (!confirmArtboardDeletion(multiSelectedArtboards)) {
+        return;
+      }
       setArtboards(prev => prev.filter(ab => !multiSelectedArtboards.includes(ab.id)));
       setConnections(prev => prev.filter(conn => !multiSelectedArtboards.includes(conn.fromId) && !multiSelectedArtboards.includes(conn.toId)));
       setMultiSelectedArtboards([]);
@@ -4146,10 +4204,13 @@ const App: React.FC = () => {
       ));
       setSelection({ ...selection, assetId: null });
     } else {
+      if (!confirmArtboardDeletion([selection.artboardId])) {
+        return;
+      }
       setArtboards(prev => prev.filter(ab => ab.id !== selection.artboardId));
       setSelection({ artboardId: null, assetId: null });
     }
-  }, [multiSelectedCanvasAssets, canvasSelectionId, canvasAssets, multiSelectedArtboards, selection, deleteCanvasAsset]);
+  }, [multiSelectedCanvasAssets, canvasSelectionId, canvasAssets, multiSelectedArtboards, selection, deleteCanvasAsset, confirmArtboardDeletion]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -5320,7 +5381,8 @@ Return ONLY valid JSON in the format:
   const isLandingRoute = route === '/landing';
   const isLoginRoute = route === '/login';
   const isPersonalSpaceRoute = route === '/personal-space';
-  const isDashboardRoute = !isOnBoardRoute && !isAdminRoute && !isLandingRoute && !isLoginRoute && !isPersonalSpaceRoute;
+  const isOptionRoute = route === '/option';
+  const isDashboardRoute = !isOnBoardRoute && !isAdminRoute && !isLandingRoute && !isLoginRoute && !isPersonalSpaceRoute && !isOptionRoute;
 
   useEffect(() => {
     if (!isOnBoardRoute) return;
@@ -5596,31 +5658,7 @@ Return ONLY valid JSON in the format:
               </button>
             </nav>
           </div>
-          <div className="mt-auto px-6 py-4 border-t border-gray-100">
-            <div className="flex items-center justify-between bg-transparent px-1 py-1">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600">
-                  <span className="text-sm font-semibold">{authUser.username.slice(0, 1).toUpperCase()}</span>
-                </div>
-                <div>
-                  <div className="text-sm font-semibold text-gray-900 leading-tight max-w-[120px] truncate">{authUser.username}</div>
-                  <div className="flex items-center gap-1 text-xs text-slate-500">
-                    <span className="inline-block w-2.5 h-2.5 rounded-[4px] border border-emerald-400"></span>
-                    已登录
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={handleLogout}
-                className="text-xs font-semibold text-slate-400 hover:text-slate-600"
-                aria-label="Log out"
-                title="Log out"
-                type="button"
-              >
-                退出登录
-              </button>
-            </div>
-          </div>
+          {renderSidebarAccountSection()}
         </aside>
 
         <main className="flex-1 overflow-y-auto px-6 py-8 lg:px-12 lg:py-12">
@@ -6012,35 +6050,105 @@ Return ONLY valid JSON in the format:
                 )}
               </nav>
             </div>
-            <div className="mt-auto px-6 py-4 border-t border-gray-100">
-              <div className="flex items-center justify-between bg-transparent px-1 py-1">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600">
-                    <span className="text-sm font-semibold">{authUser.username.slice(0, 1).toUpperCase()}</span>
-                  </div>
-                  <div>
-                    <div className="text-sm font-semibold text-gray-900 leading-tight max-w-[120px] truncate">{authUser.username}</div>
-                    <div className="flex items-center gap-1 text-xs text-slate-500">
-                      <span className="inline-block w-2.5 h-2.5 rounded-[4px] border border-emerald-400"></span>
-                      已登录
-                    </div>
-                  </div>
-                </div>
-                <button
-                  onClick={handleLogout}
-                  className="text-xs font-semibold text-slate-400 hover:text-slate-600"
-                  aria-label="Log out"
-                  title="Log out"
-                  type="button"
-                >
-                  退出登录
-                </button>
-              </div>
-            </div>
+            {renderSidebarAccountSection()}
           </aside>
 
           <main className="flex-1 overflow-y-auto px-6 py-8 lg:px-12 lg:py-12">
             <PersonalSpacePage />
+          </main>
+        </div>
+      );
+    }
+
+    if (isOptionRoute) {
+      return (
+        <div className="min-h-screen flex bg-[#fbfbfc]">
+          <aside className="hidden h-screen w-64 flex-col border-r border-gray-100 bg-white lg:sticky lg:top-0 lg:flex">
+            <div className="p-8">
+              <nav className="space-y-1">
+                <button
+                  className="w-full flex items-center gap-3 px-4 py-3 text-gray-500 hover:bg-gray-50 rounded-xl font-medium transition-colors"
+                  onClick={() => handleNavigate('/')}
+                >
+                  Dashboard
+                </button>
+                <button
+                  className="w-full flex items-center gap-3 px-4 py-3 text-gray-500 hover:bg-gray-50 rounded-xl font-medium transition-colors"
+                  onClick={() => handleNavigate('/personal-space')}
+                >
+                  Personal Space
+                </button>
+                {authUser.is_admin && (
+                  <button
+                    className="w-full flex items-center gap-3 px-4 py-3 text-gray-500 hover:bg-gray-50 rounded-xl font-medium transition-colors"
+                    onClick={() => handleNavigate('/admin')}
+                  >
+                    Admin
+                  </button>
+                )}
+                <button
+                  className="w-full flex items-center gap-3 px-4 py-3 bg-gray-900 text-white rounded-xl font-medium transition-colors"
+                  onClick={() => handleNavigate('/option')}
+                >
+                  Option
+                </button>
+              </nav>
+            </div>
+            {renderSidebarAccountSection()}
+          </aside>
+
+          <main className="flex-1 overflow-y-auto px-6 py-8 lg:px-12 lg:py-12">
+            <div className="max-w-3xl mx-auto space-y-8">
+              <div>
+                <h1 className="text-3xl font-bold text-gray-900 mb-2">Option</h1>
+                <p className="text-gray-500 font-medium">Manage your account settings and security.</p>
+              </div>
+
+              <div className="rounded-3xl border border-gray-100 bg-white p-8 shadow-sm">
+                <div className="mb-6">
+                  <h2 className="text-xl font-bold text-gray-900">Change Password</h2>
+                  <p className="mt-2 text-sm text-gray-500">Update your current password to keep your account secure.</p>
+                </div>
+
+                <div className="space-y-4">
+                  <input
+                    type="password"
+                    autoComplete="current-password"
+                    placeholder="Current password"
+                    value={passwordChangeForm.current}
+                    onChange={(event) => setPasswordChangeForm((prev) => ({ ...prev, current: event.target.value }))}
+                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                  />
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder="New password"
+                    value={passwordChangeForm.next}
+                    onChange={(event) => setPasswordChangeForm((prev) => ({ ...prev, next: event.target.value }))}
+                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                  />
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder="Confirm new password"
+                    value={passwordChangeForm.confirm}
+                    onChange={(event) => setPasswordChangeForm((prev) => ({ ...prev, confirm: event.target.value }))}
+                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                  />
+                  {passwordChangeError && (
+                    <p className="text-sm text-red-600">{passwordChangeError}</p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handlePasswordChange}
+                    disabled={passwordChangeLoading}
+                    className="rounded-xl bg-black px-5 py-3 font-semibold text-white shadow-lg shadow-gray-200 transition-all disabled:opacity-60"
+                  >
+                    {passwordChangeLoading ? 'Updating...' : 'Update password'}
+                  </button>
+                </div>
+              </div>
+            </div>
           </main>
         </div>
       );
@@ -6071,31 +6179,7 @@ Return ONLY valid JSON in the format:
               )}
             </nav>
           </div>
-          <div className="mt-auto px-6 py-4 border-t border-gray-100">
-            <div className="flex items-center justify-between bg-transparent px-1 py-1">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600">
-                  <span className="text-sm font-semibold">{authUser.username.slice(0, 1).toUpperCase()}</span>
-                </div>
-                <div>
-                  <div className="text-sm font-semibold text-gray-900 leading-tight max-w-[120px] truncate">{authUser.username}</div>
-                  <div className="flex items-center gap-1 text-xs text-slate-500">
-                    <span className="inline-block w-2.5 h-2.5 rounded-[4px] border border-emerald-400"></span>
-                    已登录
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={handleLogout}
-                className="text-xs font-semibold text-slate-400 hover:text-slate-600"
-                aria-label="Log out"
-                title="Log out"
-                type="button"
-              >
-                退出登录
-              </button>
-            </div>
-          </div>
+          {renderSidebarAccountSection()}
         </aside>
 
         <main className="flex-1 overflow-y-auto px-6 py-8 lg:px-12 lg:py-12">
