@@ -180,7 +180,7 @@ class DesignGuidanceUpdateRequest(BaseModel):
 
 class PrimaryColorCreateRequest(BaseModel):
   name: Optional[str] = None
-  color_hex: str
+  colors: List[str]
 
 
 class AITaskSubmitRequest(BaseModel):
@@ -418,10 +418,15 @@ def init_database():
       user_id TEXT NOT NULL,
       name TEXT,
       color_hex TEXT NOT NULL,
+      colors_json TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(user_id) REFERENCES users(id)
     )
   """)
+  cursor.execute("PRAGMA table_info(primary_colors)")
+  primary_color_columns = {row[1] for row in cursor.fetchall()}
+  if "colors_json" not in primary_color_columns:
+    cursor.execute("ALTER TABLE primary_colors ADD COLUMN colors_json TEXT")
   cursor.execute("""
     CREATE INDEX IF NOT EXISTS idx_primary_colors_user_id
     ON primary_colors(user_id)
@@ -2534,47 +2539,135 @@ def list_primary_colors(user: sqlite3.Row = Depends(require_current_user)):
   conn = get_db_connection()
   cursor = conn.cursor()
   cursor.execute("""
-    SELECT id, name, color_hex, created_at
+    SELECT id, name, color_hex, colors_json, created_at
     FROM primary_colors
     WHERE user_id = ?
     ORDER BY created_at DESC
   """, (user["id"],))
   rows = cursor.fetchall()
   conn.close()
-  return JSONResponse({"items": [dict(row) for row in rows]})
+  items = []
+  for row in rows:
+    item = dict(row)
+    colors = []
+    if item.get("colors_json"):
+      try:
+        parsed = json.loads(item["colors_json"])
+        if isinstance(parsed, list):
+          colors = [str(entry).upper() for entry in parsed if isinstance(entry, str)]
+      except json.JSONDecodeError:
+        colors = []
+    if not colors and item.get("color_hex"):
+      colors = [str(item["color_hex"]).upper()]
+    items.append({
+      "id": item["id"],
+      "name": item.get("name"),
+      "colors": colors[:6],
+      "created_at": item["created_at"]
+    })
+  return JSONResponse({"items": items})
 
 
 @app.post("/primary-colors")
 def create_primary_color(payload: PrimaryColorCreateRequest, user: sqlite3.Row = Depends(require_current_user)):
-  normalized = (payload.color_hex or "").strip().upper()
-  if not normalized.startswith("#"):
-    normalized = f"#{normalized}"
-  if len(normalized) not in {4, 7}:
-    raise HTTPException(status_code=400, detail="Invalid color hex")
-  if any(ch not in "#0123456789ABCDEF" for ch in normalized):
-    raise HTTPException(status_code=400, detail="Invalid color hex")
+  normalized_colors: List[str] = []
+  for raw_color in payload.colors[:6]:
+    normalized = (raw_color or "").strip().upper()
+    if not normalized.startswith("#"):
+      normalized = f"#{normalized}"
+    if len(normalized) != 7:
+      raise HTTPException(status_code=400, detail="Invalid color hex")
+    if any(ch not in "#0123456789ABCDEF" for ch in normalized):
+      raise HTTPException(status_code=400, detail="Invalid color hex")
+    if normalized not in normalized_colors:
+      normalized_colors.append(normalized)
+
+  if len(normalized_colors) > 6:
+    raise HTTPException(status_code=400, detail="A color group can contain at most 6 colors")
 
   color_id = str(uuid.uuid4())
   conn = get_db_connection()
   cursor = conn.cursor()
   cursor.execute("""
-    INSERT INTO primary_colors (id, user_id, name, color_hex)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO primary_colors (id, user_id, name, color_hex, colors_json)
+    VALUES (?, ?, ?, ?, ?)
   """, (
     color_id,
     user["id"],
     (payload.name or "").strip() or None,
-    normalized
+    normalized_colors[0],
+    json.dumps(normalized_colors)
   ))
   conn.commit()
   cursor.execute("""
-    SELECT id, name, color_hex, created_at
+    SELECT id, name, color_hex, colors_json, created_at
     FROM primary_colors
     WHERE id = ?
   """, (color_id,))
   row = cursor.fetchone()
   conn.close()
-  return JSONResponse({"item": dict(row)})
+  item = dict(row)
+  return JSONResponse({
+    "item": {
+      "id": item["id"],
+      "name": item.get("name"),
+      "colors": normalized_colors,
+      "created_at": item["created_at"]
+    }
+  })
+
+
+@app.put("/primary-colors/{color_id}")
+def update_primary_color(color_id: str, payload: PrimaryColorCreateRequest, user: sqlite3.Row = Depends(require_current_user)):
+  normalized_colors: List[str] = []
+  for raw_color in payload.colors[:6]:
+    normalized = (raw_color or "").strip().upper()
+    if not normalized.startswith("#"):
+      normalized = f"#{normalized}"
+    if len(normalized) != 7:
+      raise HTTPException(status_code=400, detail="Invalid color hex")
+    if any(ch not in "#0123456789ABCDEF" for ch in normalized):
+      raise HTTPException(status_code=400, detail="Invalid color hex")
+    if normalized not in normalized_colors:
+      normalized_colors.append(normalized)
+
+  if len(normalized_colors) > 6:
+    raise HTTPException(status_code=400, detail="A color group can contain at most 6 colors")
+
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    UPDATE primary_colors
+    SET name = ?, color_hex = ?, colors_json = ?
+    WHERE id = ? AND user_id = ?
+  """, (
+    (payload.name or "").strip() or None,
+    normalized_colors[0] if normalized_colors else "#000000",
+    json.dumps(normalized_colors),
+    color_id,
+    user["id"]
+  ))
+  updated = cursor.rowcount
+  conn.commit()
+  if updated == 0:
+    conn.close()
+    raise HTTPException(status_code=404, detail="Primary color not found")
+  cursor.execute("""
+    SELECT id, name, created_at
+    FROM primary_colors
+    WHERE id = ?
+  """, (color_id,))
+  row = cursor.fetchone()
+  conn.close()
+  item = dict(row)
+  return JSONResponse({
+    "item": {
+      "id": item["id"],
+      "name": item.get("name"),
+      "colors": normalized_colors,
+      "created_at": item["created_at"]
+    }
+  })
 
 
 @app.delete("/primary-colors/{color_id}")
