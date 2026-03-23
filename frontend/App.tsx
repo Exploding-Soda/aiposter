@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, MousePointer2, GripHorizontal, Hand, Sparkles, Loader2, ArrowLeft, Search, Bold, Italic, Underline, Download, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, MessageCircle, Pencil, Square, ArrowUpRight, ImagePlus, Home, Info, Lock, PaintBucket } from 'lucide-react';
+import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, MousePointer2, GripHorizontal, Hand, Sparkles, Loader2, ArrowLeft, Search, Bold, Italic, Underline, Download, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, MessageCircle, Pencil, Square, ArrowUpRight, ImagePlus, Home, Info, Lock, PaintBucket, ChevronDown } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -603,6 +603,183 @@ const recolorRectRegionByDominantColor = async (
   return canvas.toDataURL('image/png');
 };
 
+const recolorConnectedRegionBySeedColor = async (
+  sourceUrl: string,
+  point: { x: number; y: number },
+  targetHex: string,
+  threshold = 40,
+  iterations = 4
+) => {
+  const targetColor = hexToRgbColor(targetHex);
+  if (!targetColor) {
+    throw new Error('Invalid target color.');
+  }
+
+  const image = await loadImageFromUrl(sourceUrl);
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw new Error('Canvas is not available.');
+  }
+
+  context.drawImage(image, 0, 0, width, height);
+  const imageData = context.getImageData(0, 0, width, height);
+  const { data } = imageData;
+  const getIndex = (x: number, y: number) => (y * width + x) * 4;
+  const px = Math.max(0, Math.min(width - 1, Math.round(point.x)));
+  const py = Math.max(0, Math.min(height - 1, Math.round(point.y)));
+  const seedIndex = getIndex(px, py);
+  if (data[seedIndex + 3] < 24) {
+    return canvas.toDataURL('image/png');
+  }
+
+  const seedColor: RgbColor = {
+    r: data[seedIndex],
+    g: data[seedIndex + 1],
+    b: data[seedIndex + 2]
+  };
+  const isSeedAlreadyTarget =
+    seedColor.r === targetColor.r &&
+    seedColor.g === targetColor.g &&
+    seedColor.b === targetColor.b;
+  if (isSeedAlreadyTarget) {
+    return canvas.toDataURL('image/png');
+  }
+
+  const totalIterations = Math.max(1, Math.floor(iterations));
+  const baseThresholdSq = threshold * threshold;
+  const visited = new Uint8Array(width * height);
+  const replacedMask = new Uint8Array(width * height);
+  const queue: Array<[number, number]> = [[px, py]];
+  visited[py * width + px] = 1;
+  let minX = px;
+  let maxX = px;
+  let minY = py;
+  let maxY = py;
+
+  while (queue.length > 0) {
+    const [x, y] = queue.shift()!;
+    const index = getIndex(x, y);
+    if (data[index + 3] < 24) continue;
+    const current: RgbColor = { r: data[index], g: data[index + 1], b: data[index + 2] };
+    if (colorDistanceSq(current, seedColor) > baseThresholdSq) continue;
+
+    data[index] = targetColor.r;
+    data[index + 1] = targetColor.g;
+    data[index + 2] = targetColor.b;
+    replacedMask[y * width + x] = 1;
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+
+    const neighbors = [
+      [x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]
+    ] as const;
+    for (const [nx, ny] of neighbors) {
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+      const visitIndex = ny * width + nx;
+      if (visited[visitIndex]) continue;
+      visited[visitIndex] = 1;
+      queue.push([nx, ny]);
+    }
+  }
+
+  if (maxX < minX || maxY < minY) {
+    return canvas.toDataURL('image/png');
+  }
+
+  for (let iteration = 1; iteration < totalIterations; iteration += 1) {
+    const nextMask = new Uint8Array(replacedMask);
+    const expandedThresholdSq = (threshold + Math.min(12, iteration * 3)) ** 2;
+    for (let y = Math.max(0, minY - 1); y <= Math.min(height - 1, maxY + 1); y += 1) {
+      for (let x = Math.max(0, minX - 1); x <= Math.min(width - 1, maxX + 1); x += 1) {
+        const maskIndex = y * width + x;
+        if (replacedMask[maskIndex]) continue;
+        const pixelIndex = getIndex(x, y);
+        if (data[pixelIndex + 3] < 24) continue;
+
+        let replacedNeighbors = 0;
+        let availableNeighbors = 0;
+        const neighbors = [
+          [x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1],
+          [x - 1, y - 1], [x + 1, y - 1], [x - 1, y + 1], [x + 1, y + 1]
+        ] as const;
+        for (const [nx, ny] of neighbors) {
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+          availableNeighbors += 1;
+          if (replacedMask[ny * width + nx]) {
+            replacedNeighbors += 1;
+          }
+        }
+        if (availableNeighbors === 0 || replacedNeighbors / availableNeighbors < 0.45) continue;
+
+        const current: RgbColor = {
+          r: data[pixelIndex],
+          g: data[pixelIndex + 1],
+          b: data[pixelIndex + 2]
+        };
+        if (colorDistanceSq(current, seedColor) > expandedThresholdSq) continue;
+
+        data[pixelIndex] = targetColor.r;
+        data[pixelIndex + 1] = targetColor.g;
+        data[pixelIndex + 2] = targetColor.b;
+        nextMask[maskIndex] = 1;
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    replacedMask.set(nextMask);
+  }
+
+  context.putImageData(imageData, 0, 0);
+  return canvas.toDataURL('image/png');
+};
+
+const findBestRectangleForPoint = (
+  rectangles: DetectedRectRegion[],
+  point: { x: number; y: number }
+) => {
+  if (rectangles.length === 0) {
+    return null;
+  }
+
+  const containing = rectangles
+    .filter((rectangle) => (
+      point.x >= rectangle.left &&
+      point.x <= rectangle.right &&
+      point.y >= rectangle.top &&
+      point.y <= rectangle.bottom
+    ))
+    .sort((a, b) => a.area - b.area);
+  if (containing.length > 0) {
+    return containing[0];
+  }
+
+  return rectangles.reduce((best, rectangle) => {
+    const centerX = (rectangle.left + rectangle.right) / 2;
+    const centerY = (rectangle.top + rectangle.bottom) / 2;
+    const dx = point.x - centerX;
+    const dy = point.y - centerY;
+    const distanceScore = dx * dx + dy * dy;
+    const edgeDx = point.x < rectangle.left ? rectangle.left - point.x : point.x > rectangle.right ? point.x - rectangle.right : 0;
+    const edgeDy = point.y < rectangle.top ? rectangle.top - point.y : point.y > rectangle.bottom ? point.y - rectangle.bottom : 0;
+    const edgeScore = edgeDx * edgeDx + edgeDy * edgeDy;
+    const score = edgeScore * 4 + distanceScore;
+
+    if (!best || score < best.score || (score === best.score && rectangle.area < best.rectangle.area)) {
+      return { rectangle, score };
+    }
+    return best;
+  }, null as { rectangle: DetectedRectRegion; score: number } | null)?.rectangle ?? null;
+};
+
 type Rect = { left: number; top: number; right: number; bottom: number };
 type AnnotationColor = 'red' | 'green' | 'purple';
 type AnnotationTool = 'rect' | 'arrow' | 'pan';
@@ -800,6 +977,7 @@ const App: React.FC = () => {
   const [refineColorThreshold, setRefineColorThreshold] = useState(40);
   const [refineColorIterations, setRefineColorIterations] = useState(4);
   const [refineRectDetectionThreshold, setRefineRectDetectionThreshold] = useState(15);
+  const [isRefineColorSettingsOpen, setIsRefineColorSettingsOpen] = useState(false);
   const [refinePreviewImageUrl, setRefinePreviewImageUrl] = useState<string | null>(null);
   const [selectedRefinePaintColor, setSelectedRefinePaintColor] = useState<string | null>(null);
   const [isRefineBucketMode, setIsRefineBucketMode] = useState(false);
@@ -5053,17 +5231,7 @@ const App: React.FC = () => {
     if (isRefineBucketMode) {
       const point = getImagePointFromEvent(event);
       if (!point) return;
-      annotationStartRef.current = point;
-      setIsAnnotating(true);
-      setAnnotationDraft({
-        id: -1,
-        type: 'rect',
-        color: 'purple',
-        x: point.x,
-        y: point.y,
-        width: 0,
-        height: 0
-      });
+      void handleBucketFillPoint(point);
       return;
     }
     if (annotationTool === 'pan') {
@@ -5095,18 +5263,6 @@ const App: React.FC = () => {
     if (!isAnnotatorReady) return;
     if (!isAnnotating) return;
     console.log('[annotator] mouse move', { tool: annotationTool });
-    if (isRefineBucketMode) {
-      if (!annotationStartRef.current || !annotationDraft) return;
-      const point = getImagePointFromEvent(event);
-      if (!point) return;
-      const start = annotationStartRef.current;
-      const x = Math.min(start.x, point.x);
-      const y = Math.min(start.y, point.y);
-      const width = Math.abs(point.x - start.x);
-      const height = Math.abs(point.y - start.y);
-      setAnnotationDraft({ ...annotationDraft, x, y, width, height });
-      return;
-    }
     if (annotationTool === 'pan' && annotationPanStartRef.current) {
       const dx = event.clientX - annotationPanStartRef.current.x;
       const dy = event.clientY - annotationPanStartRef.current.y;
@@ -5132,19 +5288,9 @@ const App: React.FC = () => {
   const handleAnnotatorMouseUp = () => {
     console.log('[annotator] mouse up', { tool: annotationTool, hasDraft: Boolean(annotationDraft), ready: isAnnotatorReady });
     if (isRefineBucketMode) {
-      const rectDraft = annotationDraft;
       setAnnotationDraft(null);
       setIsAnnotating(false);
       annotationStartRef.current = null;
-      if (!rectDraft || rectDraft.width <= 6 || rectDraft.height <= 6) {
-        return;
-      }
-      void handleBucketFillRect({
-        x: rectDraft.x,
-        y: rectDraft.y,
-        width: rectDraft.width,
-        height: rectDraft.height
-      });
       return;
     }
     if (annotationTool === 'pan') {
@@ -5368,7 +5514,7 @@ Return ONLY valid JSON in the format:
     updatePosterArtboard
   ]);
 
-  const handleBucketFillRect = useCallback(async (rect: { x: number; y: number; width: number; height: number }) => {
+  const handleBucketFillPoint = useCallback(async (point: { x: number; y: number }) => {
     if (!selectedRefinePaintColor || !currentRefinePosterImageUrl) {
       setRefineColorSetError('Choose a color from the color set first.');
       return;
@@ -5377,9 +5523,38 @@ Return ONLY valid JSON in the format:
     setRefineColorSetError('');
     setIsApplyingBucketFill(true);
     try {
+      const image = await loadImageFromUrl(currentRefinePosterImageUrl);
+      const width = image.naturalWidth || image.width;
+      const height = image.naturalHeight || image.height;
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) {
+        throw new Error('Canvas is not available.');
+      }
+      context.drawImage(image, 0, 0, width, height);
+      const imageData = context.getImageData(0, 0, width, height);
+      const rectangles = detectObviousRectangularRegions(
+        imageData.data,
+        width,
+        height,
+        refineRectDetectionThreshold
+      );
+      setDetectedRefineRectangles(rectangles);
+      const selectedRectangle = findBestRectangleForPoint(rectangles, point);
+      if (!selectedRectangle) {
+        throw new Error('No obvious rectangular region found near this click.');
+      }
+
       const nextPreview = await recolorRectRegionByDominantColor(
         currentRefinePosterImageUrl,
-        rect,
+        {
+          x: selectedRectangle.left,
+          y: selectedRectangle.top,
+          width: selectedRectangle.right - selectedRectangle.left,
+          height: selectedRectangle.bottom - selectedRectangle.top
+        },
         selectedRefinePaintColor,
         refineColorThreshold,
         refineColorIterations
@@ -5391,7 +5566,13 @@ Return ONLY valid JSON in the format:
     } finally {
       setIsApplyingBucketFill(false);
     }
-  }, [currentRefinePosterImageUrl, refineColorIterations, refineColorThreshold, selectedRefinePaintColor]);
+  }, [
+    currentRefinePosterImageUrl,
+    refineColorIterations,
+    refineColorThreshold,
+    refineRectDetectionThreshold,
+    selectedRefinePaintColor
+  ]);
 
   const handleAnalyzeRefineRectangles = useCallback(async () => {
     if (!currentRefinePosterImageUrl) {
@@ -8523,7 +8704,7 @@ Return ONLY valid JSON in the format:
                         disabled={isAnalyzingRefineRectangles || !currentRefinePosterImageUrl}
                         className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        {isAnalyzingRefineRectangles ? 'Analyzing...' : 'Rect Test'}
+                        {isAnalyzingRefineRectangles ? 'Analyzing...' : 'Rect Preview'}
                       </button>
                       {detectedRefineRectangles.length > 0 && (
                         <button
@@ -8590,7 +8771,7 @@ Return ONLY valid JSON in the format:
                   {selectedRefineColorGroup?.colors.length ? (
                     <div className="flex items-center justify-between text-[11px] text-slate-500">
                       <span>
-                        {selectedRefinePaintColor ? `Selected: ${selectedRefinePaintColor}` : 'Pick a swatch, then drag a rectangle on the poster'}
+                        {selectedRefinePaintColor ? `Selected: ${selectedRefinePaintColor}` : 'Pick a swatch, then click the poster to target a rectangle'}
                       </span>
                       <button
                         type="button"
@@ -8602,59 +8783,78 @@ Return ONLY valid JSON in the format:
                       </button>
                     </div>
                   ) : null}
-                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                    <div className="flex items-center justify-between text-[11px] text-slate-500">
-                      <span>Rect Detect</span>
-                      <span className="font-semibold text-slate-700">{refineRectDetectionThreshold}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="5"
-                      max="20"
-                      step="1"
-                      value={refineRectDetectionThreshold}
-                      onChange={(event) => setRefineRectDetectionThreshold(Number(event.target.value))}
-                      className="mt-2 w-full accent-slate-700"
-                    />
-                    <div className="mt-1 text-[10px] text-slate-400">
-                      Higher values detect looser, less uniform rectangles.
-                    </div>
-                  </div>
-                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                    <div className="flex items-center justify-between text-[11px] text-slate-500">
-                      <span>Threshold</span>
-                      <span className="font-semibold text-slate-700">{refineColorThreshold}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="24"
-                      max="72"
-                      step="2"
-                      value={refineColorThreshold}
-                      onChange={(event) => setRefineColorThreshold(Number(event.target.value))}
-                      className="mt-2 w-full accent-slate-700"
-                    />
-                    <div className="mt-1 text-[10px] text-slate-400">
-                      Higher values replace a broader range of nearby colors.
-                    </div>
-                  </div>
-                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                    <div className="flex items-center justify-between text-[11px] text-slate-500">
-                      <span>Iterations</span>
-                      <span className="font-semibold text-slate-700">{refineColorIterations}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="2"
-                      max="8"
-                      step="1"
-                      value={refineColorIterations}
-                      onChange={(event) => setRefineColorIterations(Number(event.target.value))}
-                      className="mt-2 w-full accent-slate-700"
-                    />
-                    <div className="mt-1 text-[10px] text-slate-400">
-                      Detect rectangles once, then recolor those same regions repeatedly.
-                    </div>
+                  <div className="rounded-xl border border-slate-200 bg-white">
+                    <button
+                      type="button"
+                      onClick={() => setIsRefineColorSettingsOpen((prev) => !prev)}
+                      className="flex w-full items-center justify-between px-3 py-2 text-[11px] font-semibold text-slate-600"
+                    >
+                      <span>
+                        Settings
+                        <span className="ml-2 font-normal text-slate-400">
+                          D {refineRectDetectionThreshold} / T {refineColorThreshold} / I {refineColorIterations}
+                        </span>
+                      </span>
+                      <ChevronDown className={`h-4 w-4 transition-transform ${isRefineColorSettingsOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {isRefineColorSettingsOpen && (
+                      <div className="space-y-2 border-t border-slate-200 px-3 py-2">
+                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                          <div className="flex items-center justify-between text-[11px] text-slate-500">
+                            <span>Rect Detect</span>
+                            <span className="font-semibold text-slate-700">{refineRectDetectionThreshold}</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="5"
+                            max="20"
+                            step="1"
+                            value={refineRectDetectionThreshold}
+                            onChange={(event) => setRefineRectDetectionThreshold(Number(event.target.value))}
+                            className="mt-2 w-full accent-slate-700"
+                          />
+                          <div className="mt-1 text-[10px] text-slate-400">
+                            Higher values detect looser, less uniform rectangles.
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                          <div className="flex items-center justify-between text-[11px] text-slate-500">
+                            <span>Threshold</span>
+                            <span className="font-semibold text-slate-700">{refineColorThreshold}</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="24"
+                            max="72"
+                            step="2"
+                            value={refineColorThreshold}
+                            onChange={(event) => setRefineColorThreshold(Number(event.target.value))}
+                            className="mt-2 w-full accent-slate-700"
+                          />
+                          <div className="mt-1 text-[10px] text-slate-400">
+                            Higher values replace a broader range of nearby colors.
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                          <div className="flex items-center justify-between text-[11px] text-slate-500">
+                            <span>Iterations</span>
+                            <span className="font-semibold text-slate-700">{refineColorIterations}</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="2"
+                            max="8"
+                            step="1"
+                            value={refineColorIterations}
+                            onChange={(event) => setRefineColorIterations(Number(event.target.value))}
+                            className="mt-2 w-full accent-slate-700"
+                          />
+                          <div className="mt-1 text-[10px] text-slate-400">
+                            Detect rectangles once, then recolor those same regions repeatedly.
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   {refineColorSetError && (
                     <div className="text-[11px] text-rose-600">{refineColorSetError}</div>
@@ -8665,7 +8865,7 @@ Return ONLY valid JSON in the format:
                     </div>
                   )}
                   {isApplyingBucketFill && (
-                    <div className="text-[11px] text-slate-500">Recoloring selected rectangle...</div>
+                    <div className="text-[11px] text-slate-500">Detecting rectangle and recoloring...</div>
                   )}
                   <button
                     type="button"
