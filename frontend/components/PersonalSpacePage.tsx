@@ -98,9 +98,10 @@ const PersonalSpacePage: React.FC = () => {
   const [isEyeDropping, setIsEyeDropping] = useState(false);
   const [selectedPrimaryColorGroup, setSelectedPrimaryColorGroup] = useState<PrimaryColorGroupItem | null>(null);
   const [isPrimaryColorEditorOpen, setIsPrimaryColorEditorOpen] = useState(false);
-  const [selectedPrimaryColorSlotIndex, setSelectedPrimaryColorSlotIndex] = useState(0);
+  const [selectedPrimaryColorSlotIndex, setSelectedPrimaryColorSlotIndex] = useState<number | null>(null);
   const [pendingPrimaryColorHex, setPendingPrimaryColorHex] = useState(DEFAULT_PRIMARY_COLOR_HEX);
-  const [pendingPrimaryColorGroupColors, setPendingPrimaryColorGroupColors] = useState<string[]>([DEFAULT_PRIMARY_COLOR_HEX]);
+  const [pendingPrimaryColorGroupColors, setPendingPrimaryColorGroupColors] = useState<string[]>([]);
+  const [primaryColorEditorMode, setPrimaryColorEditorMode] = useState<'eyedropper' | 'manual'>('eyedropper');
   const [logos, setLogos] = useState<LogoItem[]>([]);
   const [logosLoading, setLogosLoading] = useState(false);
   const [logosError, setLogosError] = useState('');
@@ -489,11 +490,6 @@ const PersonalSpacePage: React.FC = () => {
       .map((color) => color.trim().toUpperCase())
       .filter((color) => color.length > 0);
 
-    if (normalizedColors.length < 1) {
-      setPrimaryColorsError('A color group needs at least 1 color.');
-      return;
-    }
-
     if (normalizedColors.length > PRIMARY_COLOR_SLOT_COUNT) {
       setPrimaryColorsError('A color group can contain at most 6 colors.');
       return;
@@ -529,8 +525,8 @@ const PersonalSpacePage: React.FC = () => {
         });
         setSelectedPrimaryColorGroup(data.item);
       }
-      setPendingPrimaryColorGroupColors([DEFAULT_PRIMARY_COLOR_HEX]);
-      setSelectedPrimaryColorSlotIndex(0);
+      setPendingPrimaryColorGroupColors([]);
+      setSelectedPrimaryColorSlotIndex(null);
       setPendingPrimaryColorHex(DEFAULT_PRIMARY_COLOR_HEX);
       setIsPrimaryColorEditorOpen(false);
     } catch (error) {
@@ -558,9 +554,7 @@ const PersonalSpacePage: React.FC = () => {
       const result = await eyeDropper.open();
       const pickedHex = result.sRGBHex.toUpperCase();
       setPendingPrimaryColorHex(pickedHex);
-      setPendingPrimaryColorGroupColors((prev) => prev.map((color, index) => (
-        index === selectedPrimaryColorSlotIndex ? pickedHex : color
-      )));
+      upsertSelectedPrimaryColor(pickedHex);
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         return;
@@ -588,8 +582,8 @@ const PersonalSpacePage: React.FC = () => {
       setPrimaryColors((prev) => prev.filter((entry) => entry.id !== item.id));
       if (selectedPrimaryColorGroup?.id === item.id) {
         setSelectedPrimaryColorGroup(null);
-        setPendingPrimaryColorGroupColors([DEFAULT_PRIMARY_COLOR_HEX]);
-        setSelectedPrimaryColorSlotIndex(0);
+        setPendingPrimaryColorGroupColors([]);
+        setSelectedPrimaryColorSlotIndex(null);
         setPendingPrimaryColorHex(DEFAULT_PRIMARY_COLOR_HEX);
         setIsPrimaryColorEditorOpen(false);
       }
@@ -607,6 +601,18 @@ const PersonalSpacePage: React.FC = () => {
 
   const pendingPrimaryColorRgb = hexToRgb(activePrimaryColorHex);
 
+  const upsertSelectedPrimaryColor = (nextColor: string) => {
+    setPendingPrimaryColorGroupColors((prev) => {
+      if (selectedPrimaryColorSlotIndex === null || selectedPrimaryColorSlotIndex >= prev.length) {
+        setSelectedPrimaryColorSlotIndex(prev.length);
+        return [...prev, nextColor];
+      }
+      return prev.map((color, index) => (
+        index === selectedPrimaryColorSlotIndex ? nextColor : color
+      ));
+    });
+  };
+
   const handlePendingPrimaryColorChannelChange = (channel: 'r' | 'g' | 'b', value: string) => {
     const numericValue = Number.parseInt(value, 10);
     const safeValue = Number.isNaN(numericValue) ? 0 : Math.max(0, Math.min(255, numericValue));
@@ -616,9 +622,7 @@ const PersonalSpacePage: React.FC = () => {
     };
     const nextHex = rgbToHex(nextRgb.r, nextRgb.g, nextRgb.b);
     setPendingPrimaryColorHex(nextHex);
-    setPendingPrimaryColorGroupColors((prev) => prev.map((color, index) => (
-      index === selectedPrimaryColorSlotIndex ? nextHex : color
-    )));
+    upsertSelectedPrimaryColor(nextHex);
   };
 
   const handlePendingPrimaryColorHexChange = (value: string) => {
@@ -626,9 +630,7 @@ const PersonalSpacePage: React.FC = () => {
     setPendingPrimaryColorHex(normalized);
 
     if (isValidHexColor(normalized)) {
-      setPendingPrimaryColorGroupColors((prev) => prev.map((color, index) => (
-        index === selectedPrimaryColorSlotIndex ? normalized : color
-      )));
+      upsertSelectedPrimaryColor(normalized);
       setPrimaryColorsError('');
     }
   };
@@ -655,9 +657,10 @@ const PersonalSpacePage: React.FC = () => {
       if (data.item) {
         setPrimaryColors((prev) => [data.item, ...prev]);
         setSelectedPrimaryColorGroup(data.item);
-        setPendingPrimaryColorGroupColors(data.item.colors?.length ? data.item.colors : [DEFAULT_PRIMARY_COLOR_HEX]);
-        setSelectedPrimaryColorSlotIndex(0);
+        setPendingPrimaryColorGroupColors(data.item.colors ?? []);
+        setSelectedPrimaryColorSlotIndex(data.item.colors?.length ? 0 : null);
         setPendingPrimaryColorHex(DEFAULT_PRIMARY_COLOR_HEX);
+        setPrimaryColorEditorMode('eyedropper');
         setIsPrimaryColorEditorOpen(true);
       }
     } catch (error) {
@@ -669,12 +672,13 @@ const PersonalSpacePage: React.FC = () => {
   };
 
   const handleOpenPrimaryColorGroupEditor = (item: PrimaryColorGroupItem) => {
-    const colors = item.colors?.length ? item.colors : [DEFAULT_PRIMARY_COLOR_HEX];
+    const colors = item.colors ?? [];
 
     setSelectedPrimaryColorGroup(item);
     setPendingPrimaryColorGroupColors(colors);
-    setSelectedPrimaryColorSlotIndex(0);
+    setSelectedPrimaryColorSlotIndex(colors.length ? 0 : null);
     setPendingPrimaryColorHex(colors[0] || DEFAULT_PRIMARY_COLOR_HEX);
+    setPrimaryColorEditorMode('eyedropper');
     setPrimaryColorsError('');
     setIsPrimaryColorEditorOpen(true);
   };
@@ -688,13 +692,12 @@ const PersonalSpacePage: React.FC = () => {
 
   const handleClearSelectedPrimaryColorSlot = () => {
     setPendingPrimaryColorGroupColors((prev) => {
-      if (prev.length <= 1) {
-        return prev;
-      }
       const next = prev.filter((_, index) => index !== selectedPrimaryColorSlotIndex);
-      const nextIndex = Math.max(0, Math.min(selectedPrimaryColorSlotIndex, next.length - 1));
+      const nextIndex = next.length === 0
+        ? null
+        : Math.max(0, Math.min(selectedPrimaryColorSlotIndex ?? 0, next.length - 1));
       setSelectedPrimaryColorSlotIndex(nextIndex);
-      setPendingPrimaryColorHex(next[nextIndex] || DEFAULT_PRIMARY_COLOR_HEX);
+      setPendingPrimaryColorHex(nextIndex === null ? DEFAULT_PRIMARY_COLOR_HEX : (next[nextIndex] || DEFAULT_PRIMARY_COLOR_HEX));
       return next;
     });
     setPrimaryColorsError('');
@@ -708,6 +711,21 @@ const PersonalSpacePage: React.FC = () => {
       const next = [...prev, DEFAULT_PRIMARY_COLOR_HEX];
       setSelectedPrimaryColorSlotIndex(next.length - 1);
       setPendingPrimaryColorHex(DEFAULT_PRIMARY_COLOR_HEX);
+      return next;
+    });
+    setPrimaryColorEditorMode('eyedropper');
+    setPrimaryColorsError('');
+  };
+
+  const handleDeletePrimaryColorSlot = (indexToDelete: number) => {
+    setPendingPrimaryColorGroupColors((prev) => {
+      const next = prev.filter((_, index) => index !== indexToDelete);
+      const baseIndex = selectedPrimaryColorSlotIndex === null ? 0 : (
+        indexToDelete === selectedPrimaryColorSlotIndex ? indexToDelete : selectedPrimaryColorSlotIndex
+      );
+      const nextIndex = next.length === 0 ? null : Math.max(0, Math.min(baseIndex, next.length - 1));
+      setSelectedPrimaryColorSlotIndex(nextIndex);
+      setPendingPrimaryColorHex(nextIndex === null ? DEFAULT_PRIMARY_COLOR_HEX : (next[nextIndex] || DEFAULT_PRIMARY_COLOR_HEX));
       return next;
     });
     setPrimaryColorsError('');
@@ -1036,31 +1054,43 @@ const PersonalSpacePage: React.FC = () => {
                         {pendingPrimaryColorGroupColors.map((swatch, index) => {
                           const isSelected = index === selectedPrimaryColorSlotIndex;
                           return (
-                            <button
+                            <div
                               key={`editor-slot-${index}`}
-                              type="button"
-                              onClick={() => handleSelectPrimaryColorSlot(index)}
-                              className={`rounded-3xl border p-3 text-left transition ${
+                              className={`relative rounded-3xl border p-3 text-left transition ${
                                 isSelected
                                   ? 'border-cyan-400 ring-2 ring-cyan-100 shadow-md'
                                   : 'border-gray-200 hover:border-cyan-200'
                               }`}
                             >
-                              <div
-                                className="h-24 rounded-2xl border border-black/5"
-                                style={{ backgroundColor: swatch }}
-                              />
-                              <div className="mt-3 flex items-center justify-between gap-3">
-                                <div className="truncate text-sm font-semibold text-gray-900">
-                                  {swatch}
+                              <button
+                                type="button"
+                                onClick={() => handleSelectPrimaryColorSlot(index)}
+                                className="block w-full text-left"
+                              >
+                                <div
+                                  className="h-24 rounded-2xl border border-black/5"
+                                  style={{ backgroundColor: swatch }}
+                                />
+                                <div className="mt-3 flex items-center justify-between gap-3">
+                                  <div className="truncate text-sm font-semibold text-gray-900">
+                                    {swatch}
+                                  </div>
+                                  {isSelected && (
+                                    <span className="rounded-full bg-cyan-50 px-2 py-1 text-[10px] font-semibold text-cyan-700">
+                                      Active
+                                    </span>
+                                  )}
                                 </div>
-                                {isSelected && (
-                                  <span className="rounded-full bg-cyan-50 px-2 py-1 text-[10px] font-semibold text-cyan-700">
-                                    Active
-                                  </span>
-                                )}
-                              </div>
-                            </button>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeletePrimaryColorSlot(index)}
+                                className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/90 text-xs font-bold text-gray-600 shadow-sm transition hover:bg-white hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-35"
+                                aria-label={`Delete color ${swatch}`}
+                              >
+                                x
+                              </button>
+                            </div>
                           );
                         })}
                         {pendingPrimaryColorGroupColors.length < PRIMARY_COLOR_SLOT_COUNT && (
@@ -1079,19 +1109,46 @@ const PersonalSpacePage: React.FC = () => {
                     </div>
 
                     <div className="rounded-3xl border border-gray-100 bg-slate-50/80 p-4">
+                      <div className="mb-4 grid grid-cols-2 gap-2 rounded-2xl bg-white p-1 shadow-sm">
+                        <button
+                          type="button"
+                          onClick={() => setPrimaryColorEditorMode('eyedropper')}
+                          className={`h-10 rounded-xl text-sm font-semibold transition ${
+                            primaryColorEditorMode === 'eyedropper'
+                              ? 'bg-cyan-600 text-white'
+                              : 'text-gray-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          Eyedropper
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPrimaryColorEditorMode('manual')}
+                          className={`h-10 rounded-xl text-sm font-semibold transition ${
+                            primaryColorEditorMode === 'manual'
+                              ? 'bg-cyan-600 text-white'
+                              : 'text-gray-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          RGB / Hex
+                        </button>
+                      </div>
+
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <div className="text-lg font-semibold text-gray-900">
-                            Slot {selectedPrimaryColorSlotIndex + 1}
+                            {selectedPrimaryColorSlotIndex === null ? 'No color selected' : `Slot ${selectedPrimaryColorSlotIndex + 1}`}
                           </div>
                           <div className="mt-1 text-sm text-gray-500">
-                            {pendingPrimaryColorGroupColors[selectedPrimaryColorSlotIndex] || 'Empty'}
+                            {selectedPrimaryColorSlotIndex === null
+                              ? 'Add a color or start picking'
+                              : (pendingPrimaryColorGroupColors[selectedPrimaryColorSlotIndex] || 'Empty')}
                           </div>
                         </div>
                         <button
                           type="button"
                           onClick={handleClearSelectedPrimaryColorSlot}
-                          disabled={pendingPrimaryColorGroupColors.length <= 1}
+                          disabled={selectedPrimaryColorSlotIndex === null}
                           className="inline-flex h-10 items-center rounded-2xl border border-gray-200 bg-white px-3 text-sm font-semibold text-gray-600 transition hover:border-rose-200 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Clear
@@ -1108,49 +1165,67 @@ const PersonalSpacePage: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="mt-4 flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={handlePickScreenColor}
-                          disabled={isEyeDropping}
-                          className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-2xl border border-cyan-200 bg-cyan-50 px-4 text-sm font-semibold text-cyan-700 shadow-sm transition hover:border-cyan-300 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
-                          title="Pick a color from the screen"
+                      <div className="relative mt-4 min-h-[188px]">
+                        <div
+                          className={`absolute inset-0 transition-all duration-200 ${
+                            primaryColorEditorMode === 'eyedropper'
+                              ? 'translate-y-0 opacity-100'
+                              : 'pointer-events-none translate-y-2 opacity-0'
+                          }`}
                         >
-                          <Pipette size={16} />
-                          <span>{isEyeDropping ? 'Picking...' : 'Use Eyedropper'}</span>
-                        </button>
-                      </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={handlePickScreenColor}
+                              disabled={isEyeDropping}
+                              className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-2xl border border-cyan-200 bg-cyan-50 px-4 text-sm font-semibold text-cyan-700 shadow-sm transition hover:border-cyan-300 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              title="Pick a color from the screen"
+                            >
+                              <Pipette size={16} />
+                              <span>{isEyeDropping ? 'Picking...' : 'Use Eyedropper'}</span>
+                            </button>
+                          </div>
+                        </div>
 
-                      <div className="mt-4 rounded-3xl border border-white bg-white p-3 shadow-sm">
-                        <label className="block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
-                          Hex
-                        </label>
-                        <input
-                          type="text"
-                          value={pendingPrimaryColorHex}
-                          onChange={(event) => handlePendingPrimaryColorHexChange(event.target.value)}
-                          placeholder={DEFAULT_PRIMARY_COLOR_HEX}
-                          className="mt-2 h-11 w-full rounded-2xl border border-gray-200 bg-white px-3 text-sm font-semibold uppercase text-gray-800 outline-none transition focus:border-cyan-400"
-                          aria-label="Primary color hex value"
-                        />
-                      </div>
-
-                      <div className="mt-3 grid grid-cols-3 gap-2">
-                        {(['r', 'g', 'b'] as const).map((channel) => (
-                          <div key={channel}>
-                            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
-                              {channel}
-                            </div>
+                        <div
+                          className={`absolute inset-0 transition-all duration-200 ${
+                            primaryColorEditorMode === 'manual'
+                              ? 'translate-y-0 opacity-100'
+                              : 'pointer-events-none translate-y-2 opacity-0'
+                          }`}
+                        >
+                          <div className="rounded-3xl border border-white bg-white p-3 shadow-sm">
+                            <label className="block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
+                              Hex
+                            </label>
                             <input
-                              type="number"
-                              min="0"
-                              max="255"
-                              value={pendingPrimaryColorRgb[channel]}
-                              onChange={(event) => handlePendingPrimaryColorChannelChange(channel, event.target.value)}
-                              className="h-11 w-full rounded-2xl border border-gray-200 bg-white px-3 text-sm text-gray-800 outline-none transition focus:border-cyan-400"
+                              type="text"
+                              value={pendingPrimaryColorHex}
+                              onChange={(event) => handlePendingPrimaryColorHexChange(event.target.value)}
+                              placeholder={DEFAULT_PRIMARY_COLOR_HEX}
+                              className="mt-2 h-11 w-full rounded-2xl border border-gray-200 bg-white px-3 text-sm font-semibold uppercase text-gray-800 outline-none transition focus:border-cyan-400"
+                              aria-label="Primary color hex value"
                             />
                           </div>
-                        ))}
+
+                          <div className="mt-3 grid grid-cols-3 gap-2">
+                            {(['r', 'g', 'b'] as const).map((channel) => (
+                              <div key={channel}>
+                                <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
+                                  {channel}
+                                </div>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="255"
+                                  value={pendingPrimaryColorRgb[channel]}
+                                  onChange={(event) => handlePendingPrimaryColorChannelChange(channel, event.target.value)}
+                                  className="h-11 w-full rounded-2xl border border-gray-200 bg-white px-3 text-sm text-gray-800 outline-none transition focus:border-cyan-400"
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
