@@ -148,6 +148,34 @@ const measureFlatnessInsideRect = (
   return neighbors.reduce((sum, neighbor) => sum + Math.sqrt(colorDistanceSq(center, neighbor)), 0) / neighbors.length;
 };
 
+const getMostFrequentRectColors = (
+  data: Uint8ClampedArray,
+  width: number,
+  rectangle: { left: number; top: number; right: number; bottom: number },
+  count = 2
+): RgbColor[] => {
+  const frequencies = new Map<string, { color: RgbColor; count: number }>();
+  for (let y = rectangle.top; y < rectangle.bottom; y += 1) {
+    for (let x = rectangle.left; x < rectangle.right; x += 1) {
+      const index = (y * width + x) * 4;
+      if (data[index + 3] < 220) continue;
+      const color: RgbColor = { r: data[index], g: data[index + 1], b: data[index + 2] };
+      const key = `${color.r},${color.g},${color.b}`;
+      const existing = frequencies.get(key);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        frequencies.set(key, { color, count: 1 });
+      }
+    }
+  }
+
+  return Array.from(frequencies.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, count)
+    .map((entry) => entry.color);
+};
+
 const detectObviousRectangularRegions = (
   data: Uint8ClampedArray,
   width: number,
@@ -356,6 +384,7 @@ const recolorPosterBlocksWithPalette = async (
   const meaningfulRectangles = detectObviousRectangularRegions(data, width, height, detectionThreshold)
     .map((rectangle) => ({
       ...rectangle,
+      dominantColors: getMostFrequentRectColors(data, width, rectangle, 2),
       target: palette.reduce((best, paletteColor) => (
         colorDistanceSq(rectangle.dominant, paletteColor) < colorDistanceSq(rectangle.dominant, best)
           ? paletteColor
@@ -375,6 +404,7 @@ const recolorPosterBlocksWithPalette = async (
       const rectangleHeight = rectangle.bottom - rectangle.top;
       const replacedMask = new Uint8Array(rectangleWidth * rectangleHeight);
       const maskIndex = (x: number, y: number) => (y - rectangle.top) * rectangleWidth + (x - rectangle.left);
+      const dominantColors = rectangle.dominantColors.length > 0 ? rectangle.dominantColors : [rectangle.dominant];
       for (let y = rectangle.top; y < rectangle.bottom; y += 1) {
         for (let x = rectangle.left; x < rectangle.right; x += 1) {
           const index = getIndex(x, y);
@@ -388,7 +418,10 @@ const recolorPosterBlocksWithPalette = async (
             replacedMask[maskIndex(x, y)] = 1;
             continue;
           }
-          if (colorDistanceSq(current, rectangle.dominant) > colorThresholdSq) continue;
+          const normalizedDominant = dominantColors.reduce((best, candidate) => (
+            colorDistanceSq(current, candidate) < colorDistanceSq(current, best) ? candidate : best
+          ), dominantColors[0]);
+          if (colorDistanceSq(current, normalizedDominant) > colorThresholdSq) continue;
           const isEdgePixel =
             x === rectangle.left ||
             x === rectangle.right - 1 ||
@@ -652,78 +685,26 @@ const recolorRectRegionByPalette = async (
   }
 
   const thresholdSq = threshold * threshold;
-  const colorCounts = new Map<string, { color: RgbColor; count: number }>();
-
-  for (let y = top; y < bottom; y += 1) {
-    for (let x = left; x < right; x += 1) {
-      const index = getIndex(x, y);
-      if (data[index + 3] < 24) continue;
-      const color: RgbColor = { r: data[index], g: data[index + 1], b: data[index + 2] };
-      const key = `${color.r},${color.g},${color.b}`;
-      const existing = colorCounts.get(key);
-      if (existing) {
-        existing.count += 1;
-      } else {
-        colorCounts.set(key, { color, count: 1 });
-      }
-    }
-  }
-
-  const dominantColors = Array.from(colorCounts.values())
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 2)
-    .map((entry) => entry.color);
-
-  if (dominantColors.length === 0) {
-    return canvas.toDataURL('image/png');
-  }
-  if (dominantColors.length === 1) {
-    dominantColors.push(dominantColors[0]);
-  }
-
-  for (let y = top; y < bottom; y += 1) {
-    for (let x = left; x < right; x += 1) {
-      const index = getIndex(x, y);
-      if (data[index + 3] < 24) continue;
-      const color = { r: data[index], g: data[index + 1], b: data[index + 2] };
-
-      const firstDistance = colorDistanceSq(color, dominantColors[0]);
-      const secondDistance = colorDistanceSq(color, dominantColors[1]);
-      const normalized = firstDistance <= secondDistance ? dominantColors[0] : dominantColors[1];
-      data[index] = normalized.r;
-      data[index + 1] = normalized.g;
-      data[index + 2] = normalized.b;
-    }
-  }
-
-  const normalizedTargets = dominantColors.map((dominantColor) => {
-    const target = palette.reduce((best, paletteColor) => (
-      colorDistanceSq(dominantColor, paletteColor) < colorDistanceSq(dominantColor, best)
-        ? paletteColor
-        : best
-    ), palette[0]);
-    return {
-      source: dominantColor,
-      target,
-      allowed: colorDistanceSq(dominantColor, target) <= thresholdSq
-    };
-  });
 
   for (let y = top; y < bottom; y += 1) {
     for (let x = left; x < right; x += 1) {
       const index = getIndex(x, y);
       if (data[index + 3] < 24) continue;
       const current: RgbColor = { r: data[index], g: data[index + 1], b: data[index + 2] };
-      const match = normalizedTargets.find((entry) => (
-        current.r === entry.source.r &&
-        current.g === entry.source.g &&
-        current.b === entry.source.b
-      ));
-      if (!match?.allowed) continue;
+      let bestPalette = palette[0];
+      let bestDistance = colorDistanceSq(current, palette[0]);
+      for (let i = 1; i < palette.length; i += 1) {
+        const distance = colorDistanceSq(current, palette[i]);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestPalette = palette[i];
+        }
+      }
+      if (bestDistance > thresholdSq) continue;
 
-      data[index] = match.target.r;
-      data[index + 1] = match.target.g;
-      data[index + 2] = match.target.b;
+      data[index] = bestPalette.r;
+      data[index + 1] = bestPalette.g;
+      data[index + 2] = bestPalette.b;
     }
   }
 
