@@ -1072,6 +1072,7 @@ const App: React.FC = () => {
   const [refinePreviewImageUrl, setRefinePreviewImageUrl] = useState<string | null>(null);
   const [isRefineBucketMode, setIsRefineBucketMode] = useState(false);
   const [isApplyingBucketFill, setIsApplyingBucketFill] = useState(false);
+  const [isSavingRefinePreview, setIsSavingRefinePreview] = useState(false);
   const [detectedRefineRectangles, setDetectedRefineRectangles] = useState<DetectedRectRegion[]>([]);
   const [isAnalyzingRefineRectangles, setIsAnalyzingRefineRectangles] = useState(false);
   const missingReferenceStyleIdsRef = useRef<Set<string>>(new Set());
@@ -5692,9 +5693,6 @@ Return ONLY valid JSON in the format:
       const imageData = context.getImageData(0, 0, width, height);
       const rectangles = detectObviousRectangularRegions(imageData.data, width, height, refineRectDetectionThreshold);
       setDetectedRefineRectangles(rectangles);
-      if (rectangles.length === 0) {
-        setRefineColorSetError('No obvious rectangles detected.');
-      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to analyze rectangular regions.';
       setRefineColorSetError(message);
@@ -5702,6 +5700,69 @@ Return ONLY valid JSON in the format:
       setIsAnalyzingRefineRectangles(false);
     }
   }, [currentRefinePosterImageUrl, refineRectDetectionThreshold]);
+
+  useEffect(() => {
+    if (!isPosterModalOpen) return;
+    if (!currentRefinePosterImageUrl) {
+      setDetectedRefineRectangles([]);
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void handleAnalyzeRefineRectangles();
+    }, 120);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [currentRefinePosterImageUrl, handleAnalyzeRefineRectangles, isPosterModalOpen]);
+
+  const handleSaveRefinePreview = useCallback(() => {
+    if (!activePosterId || !refinePreviewImageUrl) {
+      setRefineColorSetError('No filled preview to save yet.');
+      return;
+    }
+
+    const currentArtboard = artboards.find((ab) => ab.id === activePosterId);
+    const currentPoster = currentArtboard?.posterData;
+    if (!currentArtboard || !currentPoster) {
+      setRefineColorSetError('Poster image is missing.');
+      return;
+    }
+
+    setRefineColorSetError('');
+    setIsSavingRefinePreview(true);
+    try {
+      const derivedId = createDerivedArtboard(currentArtboard, {
+        ...currentPoster,
+        status: 'completed'
+      }, {
+        x: currentArtboard.x + currentArtboard.width + ARTBOARD_GAP,
+        nameSuffix: 'Fill Result'
+      });
+
+      updatePosterArtboard(derivedId, (ab) => ({
+        ...ab,
+        posterData: {
+          ...ab.posterData!,
+          accentColor: selectedRefineColorGroup?.colors[0] || ab.posterData!.accentColor,
+          imageUrl: refinePreviewImageUrl,
+          imageUrlMerged: refinePreviewImageUrl,
+          imageUrlNoText: undefined,
+          status: 'completed',
+          taskId: undefined
+        }
+      }));
+      handleClosePosterModal();
+    } finally {
+      setIsSavingRefinePreview(false);
+    }
+  }, [
+    activePosterId,
+    artboards,
+    createDerivedArtboard,
+    refinePreviewImageUrl,
+    selectedRefineColorGroup,
+    updatePosterArtboard
+  ]);
 
   const handleRefinePoster = async () => {
     if (!activePosterId) return;
@@ -8792,14 +8853,6 @@ Return ONLY valid JSON in the format:
                   <div className="flex items-center justify-between gap-3">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Color Set</label>
                     <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void handleAnalyzeRefineRectangles()}
-                        disabled={isAnalyzingRefineRectangles || !currentRefinePosterImageUrl}
-                        className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {isAnalyzingRefineRectangles ? 'Analyzing...' : 'Rect Preview'}
-                      </button>
                       {detectedRefineRectangles.length > 0 && (
                         <button
                           type="button"
@@ -8886,8 +8939,8 @@ Return ONLY valid JSON in the format:
                           </div>
                           <input
                             type="range"
-                            min="1"
-                            max="5"
+                            min="2"
+                            max="10"
                             step="1"
                             value={refineRectDetectionThreshold}
                             onChange={(event) => setRefineRectDetectionThreshold(Number(event.target.value))}
@@ -8947,6 +9000,14 @@ Return ONLY valid JSON in the format:
                   {isApplyingBucketFill && (
                     <div className="text-[11px] text-slate-500">Detecting region and recoloring...</div>
                   )}
+                  <button
+                    type="button"
+                    onClick={handleSaveRefinePreview}
+                    disabled={!refinePreviewImageUrl || isSavingRefinePreview}
+                    className="w-full rounded-xl border border-slate-200 bg-white py-2 text-[11px] font-bold uppercase tracking-widest text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isSavingRefinePreview ? 'Saving Fill Result...' : 'Save Fill Result'}
+                  </button>
                   <button
                     type="button"
                     onClick={handleApplyRefineColorSet}
