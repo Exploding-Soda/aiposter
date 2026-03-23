@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, MousePointer2, GripHorizontal, Hand, Sparkles, Loader2, ArrowLeft, Search, Bold, Italic, Underline, Download, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, MessageCircle, Pencil, Square, ArrowUpRight, ImagePlus, Home, Info, Lock } from 'lucide-react';
+import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, MousePointer2, GripHorizontal, Hand, Sparkles, Loader2, ArrowLeft, Search, Bold, Italic, Underline, Download, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, MessageCircle, Pencil, Square, ArrowUpRight, ImagePlus, Home, Info, Lock, PaintBucket } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -96,6 +96,15 @@ const pickLogoForModel = (preferred: string | null, fallback: string | null) => 
 };
 
 type RgbColor = { r: number; g: number; b: number };
+type DetectedRectRegion = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  dominant: RgbColor;
+  area: number;
+  coverage: number;
+};
 
 const hexToRgbColor = (hex: string): RgbColor | null => {
   const normalized = hex.trim().replace('#', '');
@@ -114,6 +123,144 @@ const colorDistanceSq = (a: RgbColor, b: RgbColor) => {
   const dg = a.g - b.g;
   const db = a.b - b.b;
   return dr * dr + dg * dg + db * db;
+};
+
+const detectObviousRectangularRegions = (
+  data: Uint8ClampedArray,
+  width: number,
+  height: number
+): DetectedRectRegion[] => {
+  const getIndex = (x: number, y: number) => (y * width + x) * 4;
+  const getColorAt = (x: number, y: number): RgbColor => {
+    const index = getIndex(x, y);
+    return { r: data[index], g: data[index + 1], b: data[index + 2] };
+  };
+  const measureFlatness = (x: number, y: number) => {
+    const center = getColorAt(x, y);
+    const neighbors = [
+      getColorAt(Math.max(0, x - 1), y),
+      getColorAt(Math.min(width - 1, x + 1), y),
+      getColorAt(x, Math.max(0, y - 1)),
+      getColorAt(x, Math.min(height - 1, y + 1))
+    ];
+    return neighbors.reduce((sum, neighbor) => sum + Math.sqrt(colorDistanceSq(center, neighbor)), 0) / neighbors.length;
+  };
+
+  const sampleStep = Math.max(4, Math.floor(Math.max(width, height) / 220));
+  const gridWidth = Math.max(1, Math.floor(width / sampleStep));
+  const gridHeight = Math.max(1, Math.floor(height / sampleStep));
+  const gridColors: Array<RgbColor | null> = new Array(gridWidth * gridHeight).fill(null);
+  const flatMask = new Uint8Array(gridWidth * gridHeight);
+  const gridIndex = (gx: number, gy: number) => gy * gridWidth + gx;
+
+  for (let gy = 0; gy < gridHeight; gy += 1) {
+    for (let gx = 0; gx < gridWidth; gx += 1) {
+      const x = Math.min(width - 1, gx * sampleStep + Math.floor(sampleStep / 2));
+      const y = Math.min(height - 1, gy * sampleStep + Math.floor(sampleStep / 2));
+      const pixelIndex = getIndex(x, y);
+      if (data[pixelIndex + 3] < 220) continue;
+      const color = getColorAt(x, y);
+      gridColors[gridIndex(gx, gy)] = color;
+      if (measureFlatness(x, y) <= 18) {
+        flatMask[gridIndex(gx, gy)] = 1;
+      }
+    }
+  }
+
+  const visited = new Uint8Array(gridWidth * gridHeight);
+  const rectangleCandidates: DetectedRectRegion[] = [];
+  const componentJoinThresholdSq = 26 * 26;
+
+  for (let gy = 0; gy < gridHeight; gy += 1) {
+    for (let gx = 0; gx < gridWidth; gx += 1) {
+      const start = gridIndex(gx, gy);
+      if (visited[start] || !flatMask[start] || !gridColors[start]) continue;
+
+      const queue: Array<[number, number]> = [[gx, gy]];
+      visited[start] = 1;
+      let head = 0;
+      let count = 0;
+      let minGX = gx;
+      let maxGX = gx;
+      let minGY = gy;
+      let maxGY = gy;
+      let sumR = 0;
+      let sumG = 0;
+      let sumB = 0;
+
+      while (head < queue.length) {
+        const [currentGX, currentGY] = queue[head++];
+        const currentIndex = gridIndex(currentGX, currentGY);
+        const currentColor = gridColors[currentIndex];
+        if (!currentColor) continue;
+
+        count += 1;
+        minGX = Math.min(minGX, currentGX);
+        maxGX = Math.max(maxGX, currentGX);
+        minGY = Math.min(minGY, currentGY);
+        maxGY = Math.max(maxGY, currentGY);
+        sumR += currentColor.r;
+        sumG += currentColor.g;
+        sumB += currentColor.b;
+
+        const neighbors = [
+          [currentGX - 1, currentGY],
+          [currentGX + 1, currentGY],
+          [currentGX, currentGY - 1],
+          [currentGX, currentGY + 1]
+        ] as const;
+
+        for (const [nextGX, nextGY] of neighbors) {
+          if (nextGX < 0 || nextGY < 0 || nextGX >= gridWidth || nextGY >= gridHeight) continue;
+          const nextIndex = gridIndex(nextGX, nextGY);
+          if (visited[nextIndex] || !flatMask[nextIndex] || !gridColors[nextIndex]) continue;
+          if (colorDistanceSq(currentColor, gridColors[nextIndex]!) > componentJoinThresholdSq) continue;
+          visited[nextIndex] = 1;
+          queue.push([nextGX, nextGY]);
+        }
+      }
+
+      const boxCells = (maxGX - minGX + 1) * (maxGY - minGY + 1);
+      const coverage = count / Math.max(1, boxCells);
+      const pixelRectWidth = (maxGX - minGX + 1) * sampleStep;
+      const pixelRectHeight = (maxGY - minGY + 1) * sampleStep;
+
+      if (count < 6) continue;
+      if (coverage < 0.72) continue;
+      if (pixelRectWidth < Math.max(56, width * 0.08)) continue;
+      if (pixelRectHeight < Math.max(32, height * 0.04)) continue;
+
+      rectangleCandidates.push({
+        left: minGX * sampleStep,
+        top: minGY * sampleStep,
+        right: Math.min(width, (maxGX + 1) * sampleStep),
+        bottom: Math.min(height, (maxGY + 1) * sampleStep),
+        dominant: {
+          r: clampChannel(sumR / count),
+          g: clampChannel(sumG / count),
+          b: clampChannel(sumB / count)
+        },
+        area: pixelRectWidth * pixelRectHeight,
+        coverage
+      });
+    }
+  }
+
+  return rectangleCandidates
+    .sort((a, b) => b.area - a.area)
+    .filter((candidate, index, array) => {
+      const overlapsExisting = array.slice(0, index).some((other) => {
+        const overlapLeft = Math.max(candidate.left, other.left);
+        const overlapTop = Math.max(candidate.top, other.top);
+        const overlapRight = Math.min(candidate.right, other.right);
+        const overlapBottom = Math.min(candidate.bottom, other.bottom);
+        if (overlapRight <= overlapLeft || overlapBottom <= overlapTop) return false;
+        const overlapArea = (overlapRight - overlapLeft) * (overlapBottom - overlapTop);
+        return overlapArea / Math.max(1, Math.min(candidate.area, other.area)) > 0.75;
+      });
+      return !overlapsExisting;
+    })
+    .slice(0, 8);
 };
 
 const loadImageFromUrl = async (sourceUrl: string) => {
@@ -165,36 +312,99 @@ const recolorPosterBlocksWithPalette = async (sourceUrl: string, paletteHexes: s
     const index = getIndex(x, y);
     return { r: data[index], g: data[index + 1], b: data[index + 2] };
   };
-
   const measureFlatness = (x: number, y: number) => {
     const center = getColorAt(x, y);
     const neighbors = [
-      getColorAt(x - 1, y),
-      getColorAt(x + 1, y),
-      getColorAt(x, y - 1),
-      getColorAt(x, y + 1)
+      getColorAt(Math.max(0, x - 1), y),
+      getColorAt(Math.min(width - 1, x + 1), y),
+      getColorAt(x, Math.max(0, y - 1)),
+      getColorAt(x, Math.min(height - 1, y + 1))
     ];
-    return neighbors.reduce((sum, neighbor) => {
-      return sum + Math.sqrt(colorDistanceSq(center, neighbor));
-    }, 0) / neighbors.length;
+    return neighbors.reduce((sum, neighbor) => sum + Math.sqrt(colorDistanceSq(center, neighbor)), 0) / neighbors.length;
   };
 
-  const sampleStep = Math.max(2, Math.floor(Math.max(width, height) / 360));
-  const bucketJoinThresholdSq = 24 * 24;
+  const meaningfulRectangles = detectObviousRectangularRegions(data, width, height)
+    .map((rectangle) => ({
+      ...rectangle,
+      target: palette.reduce((best, paletteColor) => (
+        colorDistanceSq(rectangle.dominant, paletteColor) < colorDistanceSq(rectangle.dominant, best)
+          ? paletteColor
+          : best
+      ), palette[0])
+    }));
+
+  if (meaningfulRectangles.length === 0) {
+    return canvas.toDataURL('image/png');
+  }
+
+  for (const rectangle of meaningfulRectangles) {
+    const colorThresholdSq = 34 * 34;
+    const shadingRetention = 0.24;
+    for (let y = rectangle.top; y < rectangle.bottom; y += 1) {
+      for (let x = rectangle.left; x < rectangle.right; x += 1) {
+        const index = getIndex(x, y);
+        if (data[index + 3] < 220) continue;
+        const original = getColorAt(x, y);
+        if (colorDistanceSq(original, rectangle.dominant) > colorThresholdSq) continue;
+        if (measureFlatness(x, y) > 24) continue;
+
+        data[index] = clampChannel(rectangle.target.r + (original.r - rectangle.dominant.r) * shadingRetention);
+        data[index + 1] = clampChannel(rectangle.target.g + (original.g - rectangle.dominant.g) * shadingRetention);
+        data[index + 2] = clampChannel(rectangle.target.b + (original.b - rectangle.dominant.b) * shadingRetention);
+      }
+    }
+  }
+
+  context.putImageData(imageData, 0, 0);
+  return canvas.toDataURL('image/png');
+};
+
+const recolorRectRegionByDominantColor = async (
+  sourceUrl: string,
+  rect: { x: number; y: number; width: number; height: number },
+  targetHex: string
+) => {
+  const targetColor = hexToRgbColor(targetHex);
+  if (!targetColor) {
+    throw new Error('Invalid target color.');
+  }
+
+  const image = await loadImageFromUrl(sourceUrl);
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw new Error('Canvas is not available.');
+  }
+
+  context.drawImage(image, 0, 0, width, height);
+  const imageData = context.getImageData(0, 0, width, height);
+  const { data } = imageData;
+  const getIndex = (x: number, y: number) => (y * width + x) * 4;
+  const left = Math.max(0, Math.min(width - 1, Math.floor(rect.x)));
+  const top = Math.max(0, Math.min(height - 1, Math.floor(rect.y)));
+  const right = Math.max(left + 1, Math.min(width, Math.ceil(rect.x + rect.width)));
+  const bottom = Math.max(top + 1, Math.min(height, Math.ceil(rect.y + rect.height)));
+
+  if (right - left < 2 || bottom - top < 2) {
+    return canvas.toDataURL('image/png');
+  }
+
+  const sampleStep = Math.max(1, Math.floor(Math.max(right - left, bottom - top) / 48));
   const buckets: Array<{ color: RgbColor; count: number }> = [];
-  let candidateSamples = 0;
+  const bucketJoinThresholdSq = 20 * 20;
 
-  for (let y = 1; y < height - 1; y += sampleStep) {
-    for (let x = 1; x < width - 1; x += sampleStep) {
-      const alpha = data[getIndex(x, y) + 3];
-      if (alpha < 220) continue;
-      if (measureFlatness(x, y) > 20) continue;
+  for (let y = top; y < bottom; y += sampleStep) {
+    for (let x = left; x < right; x += sampleStep) {
+      const index = getIndex(x, y);
+      if (data[index + 3] < 24) continue;
+      const color = { r: data[index], g: data[index + 1], b: data[index + 2] };
 
-      candidateSamples += 1;
-      const color = getColorAt(x, y);
       let bestBucket: { color: RgbColor; count: number } | null = null;
       let bestDistance = Number.POSITIVE_INFINITY;
-
       for (const bucket of buckets) {
         const distance = colorDistanceSq(color, bucket.color);
         if (distance < bestDistance) {
@@ -217,63 +427,33 @@ const recolorPosterBlocksWithPalette = async (sourceUrl: string, paletteHexes: s
     }
   }
 
-  const meaningfulBuckets = buckets
-    .filter((bucket) => bucket.count >= Math.max(12, candidateSamples * 0.04))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, Math.max(4, palette.length * 2))
-    .map((bucket) => ({
-      source: {
-        r: clampChannel(bucket.color.r),
-        g: clampChannel(bucket.color.g),
-        b: clampChannel(bucket.color.b)
-      },
-      target: palette.reduce((best, paletteColor) => (
-        colorDistanceSq(bucket.color, paletteColor) < colorDistanceSq(bucket.color, best)
-          ? paletteColor
-          : best
-      ), palette[0]),
-      count: bucket.count
-    }));
-
-  if (meaningfulBuckets.length === 0) {
+  if (buckets.length === 0) {
     return canvas.toDataURL('image/png');
   }
 
-  for (let y = 1; y < height - 1; y += 1) {
-    for (let x = 1; x < width - 1; x += 1) {
+  const dominantBucket = buckets.sort((a, b) => b.count - a.count)[0];
+  const dominantColor: RgbColor = {
+    r: clampChannel(dominantBucket.color.r),
+    g: clampChannel(dominantBucket.color.g),
+    b: clampChannel(dominantBucket.color.b)
+  };
+  const colorThresholdSq = 32 * 32;
+  const shadingRetention = 0.22;
+
+  for (let y = top; y < bottom; y += 1) {
+    for (let x = left; x < right; x += 1) {
       const index = getIndex(x, y);
-      if (data[index + 3] < 220) continue;
-      if (measureFlatness(x, y) > 24) continue;
+      if (data[index + 3] < 24) continue;
+      const current: RgbColor = {
+        r: data[index],
+        g: data[index + 1],
+        b: data[index + 2]
+      };
+      if (colorDistanceSq(current, dominantColor) > colorThresholdSq) continue;
 
-      const original = getColorAt(x, y);
-      let bestBucket = meaningfulBuckets[0];
-      let bestDistance = colorDistanceSq(original, bestBucket.source);
-
-      for (let i = 1; i < meaningfulBuckets.length; i += 1) {
-        const candidate = meaningfulBuckets[i];
-        const distance = colorDistanceSq(original, candidate.source);
-        if (distance < bestDistance) {
-          bestBucket = candidate;
-          bestDistance = distance;
-        }
-      }
-
-      if (bestDistance > 34 * 34) continue;
-
-      let matchingNeighbors = 0;
-      const neighborOffsets = [[-1, 0], [1, 0], [0, -1], [0, 1]] as const;
-      for (const [dx, dy] of neighborOffsets) {
-        const neighbor = getColorAt(x + dx, y + dy);
-        if (colorDistanceSq(neighbor, bestBucket.source) <= 36 * 36) {
-          matchingNeighbors += 1;
-        }
-      }
-      if (matchingNeighbors < 2) continue;
-
-      const retain = 0.35;
-      data[index] = clampChannel(bestBucket.target.r + (original.r - bestBucket.source.r) * retain);
-      data[index + 1] = clampChannel(bestBucket.target.g + (original.g - bestBucket.source.g) * retain);
-      data[index + 2] = clampChannel(bestBucket.target.b + (original.b - bestBucket.source.b) * retain);
+      data[index] = clampChannel(targetColor.r + (current.r - dominantColor.r) * shadingRetention);
+      data[index + 1] = clampChannel(targetColor.g + (current.g - dominantColor.g) * shadingRetention);
+      data[index + 2] = clampChannel(targetColor.b + (current.b - dominantColor.b) * shadingRetention);
     }
   }
 
@@ -475,6 +655,12 @@ const App: React.FC = () => {
   const [selectedRefineColorGroupId, setSelectedRefineColorGroupId] = useState<string | null>(null);
   const [isApplyingRefineColorSet, setIsApplyingRefineColorSet] = useState(false);
   const [refineColorSetError, setRefineColorSetError] = useState('');
+  const [refinePreviewImageUrl, setRefinePreviewImageUrl] = useState<string | null>(null);
+  const [selectedRefinePaintColor, setSelectedRefinePaintColor] = useState<string | null>(null);
+  const [isRefineBucketMode, setIsRefineBucketMode] = useState(false);
+  const [isApplyingBucketFill, setIsApplyingBucketFill] = useState(false);
+  const [detectedRefineRectangles, setDetectedRefineRectangles] = useState<DetectedRectRegion[]>([]);
+  const [isAnalyzingRefineRectangles, setIsAnalyzingRefineRectangles] = useState(false);
   const missingReferenceStyleIdsRef = useRef<Set<string>>(new Set());
   const missingLogoAssetIdsRef = useRef<Set<string>>(new Set());
   const missingFontReferenceIdsRef = useRef<Set<string>>(new Set());
@@ -1146,6 +1332,10 @@ const App: React.FC = () => {
     setActivePosterId(artboardId);
     setPosterFeedback('');
     setRefineColorSetError('');
+    setRefinePreviewImageUrl(null);
+    setSelectedRefinePaintColor(null);
+    setIsRefineBucketMode(false);
+    setDetectedRefineRectangles([]);
     setIsPosterModalOpen(true);
   }, []);
 
@@ -1154,6 +1344,7 @@ const App: React.FC = () => {
   const boardHeight = activeProject?.height ?? DEFAULT_BOARD_HEIGHT;
   const activePosterArtboard = artboards.find(ab => ab.id === activePosterId);
   const activePoster = activePosterArtboard?.posterData;
+  const currentRefinePosterImageUrl = refinePreviewImageUrl || activePoster?.imageUrlMerged || activePoster?.imageUrl || '';
   const selectedRefineColorGroup = primaryColorGroups.find((group) => group.id === selectedRefineColorGroupId) || null;
   const annotatorAspectRatio = (() => {
     if (annotatorImage) {
@@ -1407,7 +1598,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!isPosterModalOpen) return;
-    const imageUrl = normalizeSecureImageUrl(activePoster?.imageUrlMerged || activePoster?.imageUrl);
+    const imageUrl = normalizeSecureImageUrl(currentRefinePosterImageUrl);
     console.log('[annotator] modal open', { imageUrl, posterId: activePoster?.id });
     if (!imageUrl) return;
     const img = new Image();
@@ -1423,7 +1614,7 @@ const App: React.FC = () => {
       setAnnotatorLoaded(false);
     };
     img.src = imageUrl;
-  }, [isPosterModalOpen, activePoster?.imageUrlMerged, activePoster?.imageUrl]);
+  }, [isPosterModalOpen, currentRefinePosterImageUrl, activePoster?.id]);
 
   useEffect(() => {
     if (!isPosterModalOpen) return;
@@ -2717,6 +2908,10 @@ const App: React.FC = () => {
     setTimeout(() => {
       setIsPosterModalOpen(false);
       setIsPosterModalClosing(false);
+      setRefinePreviewImageUrl(null);
+      setSelectedRefinePaintColor(null);
+      setIsRefineBucketMode(false);
+      setDetectedRefineRectangles([]);
     }, 180);
   };
 
@@ -4675,11 +4870,32 @@ const App: React.FC = () => {
       }
     };
 
+    detectedRefineRectangles.forEach((rectangle, index) => {
+      ctx.strokeStyle = '#06b6d4';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([10, 6]);
+      ctx.strokeRect(
+        rectangle.left,
+        rectangle.top,
+        rectangle.right - rectangle.left,
+        rectangle.bottom - rectangle.top
+      );
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(6, 182, 212, 0.12)';
+      ctx.fillRect(
+        rectangle.left,
+        rectangle.top,
+        rectangle.right - rectangle.left,
+        rectangle.bottom - rectangle.top
+      );
+      drawLabel(index + 1, rectangle.left, rectangle.top, '#0891b2');
+    });
+
     annotations.forEach(drawAnnotation);
     if (annotationDraft) {
       drawAnnotation(annotationDraft);
     }
-  }, [annotatorImage, annotatorSize, annotationZoom, annotations, annotationDraft, getAnnotatorTransform]);
+  }, [annotatorImage, annotatorSize, annotationZoom, annotations, annotationDraft, detectedRefineRectangles, getAnnotatorTransform]);
 
   const handleAnnotatorMouseDown = (event: React.MouseEvent) => {
     console.log('[annotator] mouse down', { tool: annotationTool, loaded: annotatorLoaded, ready: isAnnotatorReady, size: annotatorSize, tick: annotatorReadyTick });
@@ -4689,6 +4905,22 @@ const App: React.FC = () => {
       return Boolean(transform && annotatorSize.width > 0 && annotatorSize.height > 0);
     };
     if (!ensureReady()) return;
+    if (isRefineBucketMode) {
+      const point = getImagePointFromEvent(event);
+      if (!point) return;
+      annotationStartRef.current = point;
+      setIsAnnotating(true);
+      setAnnotationDraft({
+        id: -1,
+        type: 'rect',
+        color: 'purple',
+        x: point.x,
+        y: point.y,
+        width: 0,
+        height: 0
+      });
+      return;
+    }
     if (annotationTool === 'pan') {
       annotationPanStartRef.current = { x: event.clientX, y: event.clientY };
       setIsAnnotating(true);
@@ -4718,6 +4950,18 @@ const App: React.FC = () => {
     if (!isAnnotatorReady) return;
     if (!isAnnotating) return;
     console.log('[annotator] mouse move', { tool: annotationTool });
+    if (isRefineBucketMode) {
+      if (!annotationStartRef.current || !annotationDraft) return;
+      const point = getImagePointFromEvent(event);
+      if (!point) return;
+      const start = annotationStartRef.current;
+      const x = Math.min(start.x, point.x);
+      const y = Math.min(start.y, point.y);
+      const width = Math.abs(point.x - start.x);
+      const height = Math.abs(point.y - start.y);
+      setAnnotationDraft({ ...annotationDraft, x, y, width, height });
+      return;
+    }
     if (annotationTool === 'pan' && annotationPanStartRef.current) {
       const dx = event.clientX - annotationPanStartRef.current.x;
       const dy = event.clientY - annotationPanStartRef.current.y;
@@ -4742,6 +4986,22 @@ const App: React.FC = () => {
 
   const handleAnnotatorMouseUp = () => {
     console.log('[annotator] mouse up', { tool: annotationTool, hasDraft: Boolean(annotationDraft), ready: isAnnotatorReady });
+    if (isRefineBucketMode) {
+      const rectDraft = annotationDraft;
+      setAnnotationDraft(null);
+      setIsAnnotating(false);
+      annotationStartRef.current = null;
+      if (!rectDraft || rectDraft.width <= 6 || rectDraft.height <= 6) {
+        return;
+      }
+      void handleBucketFillRect({
+        x: rectDraft.x,
+        y: rectDraft.y,
+        width: rectDraft.width,
+        height: rectDraft.height
+      });
+      return;
+    }
     if (annotationTool === 'pan') {
       setIsAnnotating(false);
       annotationPanStartRef.current = null;
@@ -4896,7 +5156,7 @@ Return ONLY valid JSON in the format:
 
     const currentArtboard = artboards.find((ab) => ab.id === activePosterId);
     const currentPoster = currentArtboard?.posterData;
-    const sourceImageUrl = currentPoster?.imageUrlMerged || currentPoster?.imageUrl;
+    const sourceImageUrl = currentRefinePosterImageUrl || currentPoster?.imageUrlMerged || currentPoster?.imageUrl;
     if (!currentArtboard || !currentPoster || !sourceImageUrl) {
       setRefineColorSetError('Poster image is missing.');
       return;
@@ -4954,13 +5214,67 @@ Return ONLY valid JSON in the format:
     updatePosterArtboard
   ]);
 
+  const handleBucketFillRect = useCallback(async (rect: { x: number; y: number; width: number; height: number }) => {
+    if (!selectedRefinePaintColor || !currentRefinePosterImageUrl) {
+      setRefineColorSetError('Choose a color from the color set first.');
+      return;
+    }
+
+    setRefineColorSetError('');
+    setIsApplyingBucketFill(true);
+    try {
+      const nextPreview = await recolorRectRegionByDominantColor(currentRefinePosterImageUrl, rect, selectedRefinePaintColor);
+      setRefinePreviewImageUrl(nextPreview);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to recolor this region.';
+      setRefineColorSetError(message);
+    } finally {
+      setIsApplyingBucketFill(false);
+    }
+  }, [currentRefinePosterImageUrl, selectedRefinePaintColor]);
+
+  const handleAnalyzeRefineRectangles = useCallback(async () => {
+    if (!currentRefinePosterImageUrl) {
+      setRefineColorSetError('Poster image is missing.');
+      return;
+    }
+
+    setRefineColorSetError('');
+    setIsAnalyzingRefineRectangles(true);
+    try {
+      const image = await loadImageFromUrl(currentRefinePosterImageUrl);
+      const width = image.naturalWidth || image.width;
+      const height = image.naturalHeight || image.height;
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) {
+        throw new Error('Canvas is not available.');
+      }
+
+      context.drawImage(image, 0, 0, width, height);
+      const imageData = context.getImageData(0, 0, width, height);
+      const rectangles = detectObviousRectangularRegions(imageData.data, width, height);
+      setDetectedRefineRectangles(rectangles);
+      if (rectangles.length === 0) {
+        setRefineColorSetError('No obvious rectangles detected.');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to analyze rectangular regions.';
+      setRefineColorSetError(message);
+    } finally {
+      setIsAnalyzingRefineRectangles(false);
+    }
+  }, [currentRefinePosterImageUrl]);
+
   const handleRefinePoster = async () => {
     if (!activePosterId) return;
     if (!editablePoster) return;
     const feedback = posterFeedback.trim();
     const currentArtboard = artboards.find(ab => ab.id === activePosterId);
     if (!currentArtboard?.posterData) return;
-    const originalImageUrl = currentArtboard.posterData.imageUrlMerged || currentArtboard.posterData.imageUrl;
+    const originalImageUrl = currentRefinePosterImageUrl || currentArtboard.posterData.imageUrlMerged || currentArtboard.posterData.imageUrl;
     const annotationPrompt = buildAnnotationPrompt() || 'Apply the requested changes inside the numbered boxes/arrows.';
     const useMarkup = annotations.length > 0 && Boolean(originalImageUrl);
     console.log('[refine] submit', {
@@ -4986,8 +5300,8 @@ Return ONLY valid JSON in the format:
           Array.from({ length: runCount }).map(async (_, index) => {
             const derivedPosterData: PosterDraft = {
               ...currentArtboard.posterData,
-              imageUrl: currentArtboard.posterData.imageUrl,
-              imageUrlMerged: currentArtboard.posterData.imageUrlMerged,
+              imageUrl: originalImageUrl,
+              imageUrlMerged: originalImageUrl,
               status: 'generating'
             };
             const derivedId = createDerivedArtboard(currentArtboard, derivedPosterData, {
@@ -5046,7 +5360,7 @@ Return ONLY valid JSON in the format:
       const logoForPoster = pickLogoForModel(resolvedLogoImage, currentArtboard.posterData.logoUrl ?? null);
       const fontReferenceUrl = await resolveFontReferenceUrl(fontReferenceImage);
       const serverFontReferenceUrl = await resolveServerFontPreviewUrl(selectedServerFont);
-      const currentPosterImageUrl = currentArtboard.posterData.imageUrlMerged || currentArtboard.posterData.imageUrl || null;
+      const currentPosterImageUrl = currentRefinePosterImageUrl || currentArtboard.posterData.imageUrlMerged || currentArtboard.posterData.imageUrl || null;
       let targetPoster: PlanningStep = {
         ...editablePoster,
         logoUrl: logoForPoster ?? undefined
@@ -7626,7 +7940,7 @@ Return ONLY valid JSON in the format:
                   }}
                 >
                   <img
-                    src={normalizeSecureImageUrl(activePoster.imageUrlMerged || activePoster.imageUrl)}
+                    src={normalizeSecureImageUrl(currentRefinePosterImageUrl)}
                     alt="Poster Preview"
                     className="absolute left-0 top-0 w-full h-full pointer-events-none"
                     draggable={false}
@@ -7679,7 +7993,10 @@ Return ONLY valid JSON in the format:
                     <button
                       type="button"
                       className={`w-8 h-8 rounded-lg flex items-center justify-center ${annotationTool === 'pan' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
-                      onClick={() => setAnnotationTool('pan')}
+                      onClick={() => {
+                        setAnnotationTool('pan');
+                        setIsRefineBucketMode(false);
+                      }}
                       title="Pan"
                       aria-label="Pan"
                     >
@@ -7688,7 +8005,10 @@ Return ONLY valid JSON in the format:
                     <button
                       type="button"
                       className={`w-8 h-8 rounded-lg flex items-center justify-center ${annotationTool === 'rect' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
-                      onClick={() => setAnnotationTool('rect')}
+                      onClick={() => {
+                        setAnnotationTool('rect');
+                        setIsRefineBucketMode(false);
+                      }}
                       title="Rectangle"
                       aria-label="Rectangle"
                     >
@@ -7697,11 +8017,26 @@ Return ONLY valid JSON in the format:
                     <button
                       type="button"
                       className={`w-8 h-8 rounded-lg flex items-center justify-center ${annotationTool === 'arrow' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
-                      onClick={() => setAnnotationTool('arrow')}
+                      onClick={() => {
+                        setAnnotationTool('arrow');
+                        setIsRefineBucketMode(false);
+                      }}
                       title="Arrow"
                       aria-label="Arrow"
                     >
                       <ArrowUpRight className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      className={`h-8 rounded-lg px-2 flex items-center justify-center gap-1 text-[10px] font-bold uppercase tracking-widest ${
+                        isRefineBucketMode ? 'bg-cyan-600 text-white' : 'text-slate-500 hover:bg-slate-100'
+                      }`}
+                      onClick={() => setIsRefineBucketMode((prev) => !prev)}
+                      title="Bucket recolor"
+                      aria-label="Bucket recolor"
+                    >
+                      <PaintBucket className="w-3.5 h-3.5" />
+                      Fill
                     </button>
                     <div className="w-px h-5 bg-slate-200" />
                     {(['red', 'green', 'purple'] as AnnotationColor[]).map(color => (
@@ -7737,7 +8072,9 @@ Return ONLY valid JSON in the format:
                   </div>
                   <canvas
                     ref={annotatorCanvasRef}
-                    className={`absolute left-0 top-0 pointer-events-auto ${annotationTool === 'pan' ? 'cursor-grab' : 'cursor-crosshair'}`}
+                    className={`absolute left-0 top-0 pointer-events-auto ${
+                      isRefineBucketMode ? 'cursor-cell' : annotationTool === 'pan' ? 'cursor-grab' : 'cursor-crosshair'
+                    }`}
                     width={annotatorImage ? (annotatorImage.naturalWidth || annotatorImage.width) : 0}
                     height={annotatorImage ? (annotatorImage.naturalHeight || annotatorImage.height) : 0}
                     style={{
@@ -8019,14 +8356,37 @@ Return ONLY valid JSON in the format:
                 <div className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
                   <div className="flex items-center justify-between gap-3">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Color Set</label>
-                    {primaryColorGroupsLoading && (
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Loading</span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleAnalyzeRefineRectangles()}
+                        disabled={isAnalyzingRefineRectangles || !currentRefinePosterImageUrl}
+                        className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {isAnalyzingRefineRectangles ? 'Analyzing...' : 'Rect Test'}
+                      </button>
+                      {detectedRefineRectangles.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setDetectedRefineRectangles([])}
+                          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-slate-500 transition hover:bg-slate-100"
+                        >
+                          Clear
+                        </button>
+                      )}
+                      {primaryColorGroupsLoading && (
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Loading</span>
+                      )}
+                    </div>
                   </div>
                   <select
                     value={selectedRefineColorGroupId ?? ''}
                     onChange={(event) => {
                       setSelectedRefineColorGroupId(event.target.value || null);
+                      const nextGroup = primaryColorGroups.find((group) => group.id === event.target.value) || null;
+                      setSelectedRefinePaintColor((prev) => (
+                        prev && nextGroup?.colors.includes(prev) ? prev : null
+                      ));
                       setRefineColorSetError('');
                     }}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 outline-none focus:border-slate-400"
@@ -8045,19 +8405,53 @@ Return ONLY valid JSON in the format:
                   {selectedRefineColorGroup && (
                     <div className="flex items-center gap-2">
                       {selectedRefineColorGroup.colors.length > 0 ? selectedRefineColorGroup.colors.map((color, index) => (
-                        <div
+                        <button
                           key={`${selectedRefineColorGroup.id}-${color}-${index}`}
-                          className="h-7 flex-1 rounded-lg border border-black/5"
+                          type="button"
+                          onClick={() => {
+                            setSelectedRefinePaintColor(color);
+                            setIsRefineBucketMode(true);
+                            setRefineColorSetError('');
+                          }}
+                          className={`h-7 flex-1 rounded-lg border transition ${
+                            selectedRefinePaintColor === color
+                              ? 'border-slate-900 ring-2 ring-slate-300'
+                              : 'border-black/5 hover:border-slate-300'
+                          }`}
                           style={{ backgroundColor: color }}
                           title={color}
+                          aria-label={`Use ${color} for bucket fill`}
                         />
                       )) : (
                         <div className="text-[11px] text-slate-400">Empty color set</div>
                       )}
                     </div>
                   )}
+                  {selectedRefineColorGroup?.colors.length ? (
+                    <div className="flex items-center justify-between text-[11px] text-slate-500">
+                      <span>
+                        {selectedRefinePaintColor ? `Selected: ${selectedRefinePaintColor}` : 'Pick a swatch, then drag a rectangle on the poster'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setRefinePreviewImageUrl(null)}
+                        disabled={!refinePreviewImageUrl}
+                        className="font-semibold text-slate-600 disabled:opacity-40"
+                      >
+                        Reset Preview
+                      </button>
+                    </div>
+                  ) : null}
                   {refineColorSetError && (
                     <div className="text-[11px] text-rose-600">{refineColorSetError}</div>
+                  )}
+                  {detectedRefineRectangles.length > 0 && (
+                    <div className="text-[11px] text-slate-500">
+                      Detected {detectedRefineRectangles.length} obvious rectangular color blocks.
+                    </div>
+                  )}
+                  {isApplyingBucketFill && (
+                    <div className="text-[11px] text-slate-500">Recoloring selected rectangle...</div>
                   )}
                   <button
                     type="button"
