@@ -712,6 +712,57 @@ const recolorRectRegionByPalette = async (
   return canvas.toDataURL('image/png');
 };
 
+const recolorEntireImageByPalette = async (
+  sourceUrl: string,
+  paletteHexes: string[],
+  threshold = 40
+) => {
+  const palette = paletteHexes
+    .map(hexToRgbColor)
+    .filter((color): color is RgbColor => Boolean(color));
+  if (palette.length === 0) {
+    throw new Error('Color set is empty.');
+  }
+
+  const image = await loadImageFromUrl(sourceUrl);
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw new Error('Canvas is not available.');
+  }
+
+  context.drawImage(image, 0, 0, width, height);
+  const imageData = context.getImageData(0, 0, width, height);
+  const { data } = imageData;
+  const thresholdSq = threshold * threshold;
+
+  for (let index = 0; index < data.length; index += 4) {
+    if (data[index + 3] < 24) continue;
+    const current: RgbColor = { r: data[index], g: data[index + 1], b: data[index + 2] };
+    let bestPalette = palette[0];
+    let bestDistance = colorDistanceSq(current, palette[0]);
+    for (let i = 1; i < palette.length; i += 1) {
+      const distance = colorDistanceSq(current, palette[i]);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestPalette = palette[i];
+      }
+    }
+    if (bestDistance > thresholdSq) continue;
+
+    data[index] = bestPalette.r;
+    data[index + 1] = bestPalette.g;
+    data[index + 2] = bestPalette.b;
+  }
+
+  context.putImageData(imageData, 0, 0);
+  return canvas.toDataURL('image/png');
+};
+
 const recolorConnectedRegionByClosestPaletteColor = async (
   sourceUrl: string,
   point: { x: number; y: number },
@@ -5788,6 +5839,30 @@ Return ONLY valid JSON in the format:
     }
   }, [currentRefinePosterImageUrl, refineColorIterations, refineColorThreshold, selectedRefineColorGroup]);
 
+  const handleReplaceWholePosterWithPalette = useCallback(async () => {
+    if (!selectedRefineColorGroup || selectedRefineColorGroup.colors.length === 0 || !currentRefinePosterImageUrl) {
+      setRefineColorSetError('Choose a color set first.');
+      return;
+    }
+
+    setRefineColorSetError('');
+    setIsApplyingRefineColorSet(true);
+    try {
+      const nextPreview = await recolorEntireImageByPalette(
+        currentRefinePosterImageUrl,
+        selectedRefineColorGroup.colors,
+        refineColorThreshold
+      );
+      setDetectedRefineRectangles([]);
+      setRefinePreviewImageUrl(nextPreview);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to recolor the whole poster.';
+      setRefineColorSetError(message);
+    } finally {
+      setIsApplyingRefineColorSet(false);
+    }
+  }, [currentRefinePosterImageUrl, refineColorThreshold, selectedRefineColorGroup]);
+
   const handleAnalyzeRefineRectangles = useCallback(async () => {
     if (!currentRefinePosterImageUrl) {
       setRefineColorSetError('Poster image is missing.');
@@ -9042,6 +9117,14 @@ Return ONLY valid JSON in the format:
                       </button>
                     </div>
                   ) : null}
+                  <button
+                    type="button"
+                    onClick={handleReplaceWholePosterWithPalette}
+                    disabled={!selectedRefineColorGroup?.colors.length || !currentRefinePosterImageUrl || isApplyingRefineColorSet}
+                    className="w-full rounded-xl border border-slate-200 bg-white py-2 text-[11px] font-bold uppercase tracking-widest text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isApplyingRefineColorSet ? 'Replacing Whole Poster...' : 'Replace Whole Poster'}
+                  </button>
                   <div className="rounded-xl border border-slate-200 bg-white">
                     <button
                       type="button"
