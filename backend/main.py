@@ -2595,7 +2595,7 @@ def create_primary_color(payload: PrimaryColorCreateRequest, user: sqlite3.Row =
     color_id,
     user["id"],
     (payload.name or "").strip() or None,
-    normalized_colors[0],
+    normalized_colors[0] if normalized_colors else "#000000",
     json.dumps(normalized_colors)
   ))
   conn.commit()

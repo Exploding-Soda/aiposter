@@ -44,6 +44,11 @@ type PrimaryColorGroupItem = {
   created_at: string;
 };
 
+type PrimaryColorSlot = string | null;
+
+const PRIMARY_COLOR_SLOT_COUNT = 6;
+const DEFAULT_PRIMARY_COLOR_HEX = '#2563EB';
+
 const hexToRgb = (hex: string) => {
   const normalized = hex.replace('#', '');
   const expanded = normalized.length === 3
@@ -70,6 +75,11 @@ const normalizeHexInput = (value: string) => {
   return `#${sanitized.slice(0, 6)}`;
 };
 
+const isValidHexColor = (value: string) => /^#[0-9A-F]{6}$/i.test(value);
+
+const padPrimaryColorSlots = (colors: string[]): PrimaryColorSlot[] =>
+  Array.from({ length: PRIMARY_COLOR_SLOT_COUNT }, (_, index) => colors[index] ?? null);
+
 const PERSONAL_SPACE_ONBOARDING_STORAGE_KEY = 'poster-onboarding-personal-space-v1';
 
 const PersonalSpacePage: React.FC = () => {
@@ -93,8 +103,9 @@ const PersonalSpacePage: React.FC = () => {
   const [isEyeDropping, setIsEyeDropping] = useState(false);
   const [selectedPrimaryColorGroup, setSelectedPrimaryColorGroup] = useState<PrimaryColorGroupItem | null>(null);
   const [isPrimaryColorEditorOpen, setIsPrimaryColorEditorOpen] = useState(false);
-  const [pendingPrimaryColorHex, setPendingPrimaryColorHex] = useState('#2563EB');
-  const [pendingPrimaryColorGroupColors, setPendingPrimaryColorGroupColors] = useState<string[]>([]);
+  const [selectedPrimaryColorSlotIndex, setSelectedPrimaryColorSlotIndex] = useState(0);
+  const [pendingPrimaryColorHex, setPendingPrimaryColorHex] = useState(DEFAULT_PRIMARY_COLOR_HEX);
+  const [pendingPrimaryColorGroupColors, setPendingPrimaryColorGroupColors] = useState<PrimaryColorSlot[]>(padPrimaryColorSlots([]));
   const [logos, setLogos] = useState<LogoItem[]>([]);
   const [logosLoading, setLogosLoading] = useState(false);
   const [logosError, setLogosError] = useState('');
@@ -111,7 +122,6 @@ const PersonalSpacePage: React.FC = () => {
   const primaryColorSectionRef = useRef<HTMLElement | null>(null);
   const fontSectionRef = useRef<HTMLElement | null>(null);
   const logoSectionRef = useRef<HTMLElement | null>(null);
-  const primaryColorMenuRef = useRef<HTMLDivElement | null>(null);
 
   const loadLogos = async () => {
     setLogosLoading(true);
@@ -205,16 +215,18 @@ const PersonalSpacePage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!isPrimaryColorEditorOpen) return;
+    if (!isPrimaryColorEditorOpen) {
+      return;
+    }
 
-    const handlePointerDown = (event: MouseEvent) => {
-      if (!primaryColorMenuRef.current?.contains(event.target as Node)) {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
         setIsPrimaryColorEditorOpen(false);
       }
     };
 
-    document.addEventListener('mousedown', handlePointerDown);
-    return () => document.removeEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
   }, [isPrimaryColorEditorOpen]);
 
   const handleReferenceUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -477,8 +489,12 @@ const PersonalSpacePage: React.FC = () => {
     }
   };
 
-  const savePrimaryColorGroup = async (colors: string[], name = '', groupId?: string) => {
-    if (colors.length > 6) {
+  const savePrimaryColorGroup = async (colors: PrimaryColorSlot[], name = '', groupId?: string) => {
+    const normalizedColors = colors
+      .map((color) => color?.trim().toUpperCase() ?? '')
+      .filter((color) => color.length > 0);
+
+    if (normalizedColors.length > PRIMARY_COLOR_SLOT_COUNT) {
       setPrimaryColorsError('A color group can contain at most 6 colors.');
       return;
     }
@@ -486,7 +502,6 @@ const PersonalSpacePage: React.FC = () => {
     setPrimaryColorsError('');
     setIsPrimaryColorSaving(true);
     try {
-      const normalizedColors = colors.map((color) => color.trim().toUpperCase());
       const response = await fetchWithAuth(
         `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/primary-colors${groupId ? `/${groupId}` : ''}`,
         {
@@ -514,7 +529,7 @@ const PersonalSpacePage: React.FC = () => {
         });
         setSelectedPrimaryColorGroup(data.item);
       }
-      setPendingPrimaryColorGroupColors([]);
+      setPendingPrimaryColorGroupColors(padPrimaryColorSlots([]));
       setIsPrimaryColorEditorOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to save primary color';
@@ -541,6 +556,9 @@ const PersonalSpacePage: React.FC = () => {
       const result = await eyeDropper.open();
       const pickedHex = result.sRGBHex.toUpperCase();
       setPendingPrimaryColorHex(pickedHex);
+      setPendingPrimaryColorGroupColors((prev) => prev.map((color, index) => (
+        index === selectedPrimaryColorSlotIndex ? pickedHex : color
+      )));
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         return;
@@ -568,7 +586,7 @@ const PersonalSpacePage: React.FC = () => {
       setPrimaryColors((prev) => prev.filter((entry) => entry.id !== item.id));
       if (selectedPrimaryColorGroup?.id === item.id) {
         setSelectedPrimaryColorGroup(null);
-        setPendingPrimaryColorGroupColors([]);
+        setPendingPrimaryColorGroupColors(padPrimaryColorSlots([]));
         setIsPrimaryColorEditorOpen(false);
       }
     } catch (error) {
@@ -579,7 +597,11 @@ const PersonalSpacePage: React.FC = () => {
     }
   };
 
-  const pendingPrimaryColorRgb = hexToRgb(pendingPrimaryColorHex);
+  const activePrimaryColorHex = isValidHexColor(pendingPrimaryColorHex)
+    ? pendingPrimaryColorHex
+    : DEFAULT_PRIMARY_COLOR_HEX;
+
+  const pendingPrimaryColorRgb = hexToRgb(activePrimaryColorHex);
 
   const handlePendingPrimaryColorChannelChange = (channel: 'r' | 'g' | 'b', value: string) => {
     const numericValue = Number.parseInt(value, 10);
@@ -588,15 +610,21 @@ const PersonalSpacePage: React.FC = () => {
       ...pendingPrimaryColorRgb,
       [channel]: safeValue
     };
-    setPendingPrimaryColorHex(rgbToHex(nextRgb.r, nextRgb.g, nextRgb.b));
+    const nextHex = rgbToHex(nextRgb.r, nextRgb.g, nextRgb.b);
+    setPendingPrimaryColorHex(nextHex);
+    setPendingPrimaryColorGroupColors((prev) => prev.map((color, index) => (
+      index === selectedPrimaryColorSlotIndex ? nextHex : color
+    )));
   };
 
   const handlePendingPrimaryColorHexChange = (value: string) => {
     const normalized = normalizeHexInput(value);
     setPendingPrimaryColorHex(normalized);
 
-    const hexDigits = normalized.replace('#', '');
-    if (hexDigits.length === 6) {
+    if (isValidHexColor(normalized)) {
+      setPendingPrimaryColorGroupColors((prev) => prev.map((color, index) => (
+        index === selectedPrimaryColorSlotIndex ? normalized : color
+      )));
       setPrimaryColorsError('');
     }
   };
@@ -623,8 +651,9 @@ const PersonalSpacePage: React.FC = () => {
       if (data.item) {
         setPrimaryColors((prev) => [data.item, ...prev]);
         setSelectedPrimaryColorGroup(data.item);
-        setPendingPrimaryColorGroupColors(data.item.colors ?? []);
-        setPendingPrimaryColorHex('#2563EB');
+        setPendingPrimaryColorGroupColors(padPrimaryColorSlots(data.item.colors ?? []));
+        setSelectedPrimaryColorSlotIndex(0);
+        setPendingPrimaryColorHex(DEFAULT_PRIMARY_COLOR_HEX);
         setIsPrimaryColorEditorOpen(true);
       }
     } catch (error) {
@@ -636,33 +665,31 @@ const PersonalSpacePage: React.FC = () => {
   };
 
   const handleOpenPrimaryColorGroupEditor = (item: PrimaryColorGroupItem) => {
+    const paddedColors = padPrimaryColorSlots(item.colors ?? []);
+    const firstFilledIndex = paddedColors.findIndex((color) => Boolean(color));
+    const nextSelectedIndex = firstFilledIndex >= 0 ? firstFilledIndex : 0;
+
     setSelectedPrimaryColorGroup(item);
-    setPendingPrimaryColorGroupColors(item.colors ?? []);
-    setPendingPrimaryColorHex(item.colors?.[0] || '#2563EB');
+    setPendingPrimaryColorGroupColors(paddedColors);
+    setSelectedPrimaryColorSlotIndex(nextSelectedIndex);
+    setPendingPrimaryColorHex(paddedColors[nextSelectedIndex] || DEFAULT_PRIMARY_COLOR_HEX);
     setPrimaryColorsError('');
     setIsPrimaryColorEditorOpen(true);
   };
 
-  const handleAddPendingColorToGroup = () => {
-    if (!/^#[0-9A-F]{6}$/i.test(pendingPrimaryColorHex)) {
-      setPrimaryColorsError('Please enter a valid 6-digit hex color.');
-      return;
-    }
+  const handleSelectPrimaryColorSlot = (index: number) => {
+    const selectedColor = pendingPrimaryColorGroupColors[index];
+    setSelectedPrimaryColorSlotIndex(index);
+    setPendingPrimaryColorHex(selectedColor || activePrimaryColorHex);
     setPrimaryColorsError('');
-    setPendingPrimaryColorGroupColors((prev) => {
-      if (prev.includes(pendingPrimaryColorHex)) {
-        return prev;
-      }
-      if (prev.length >= 6) {
-        setPrimaryColorsError('A color group can contain at most 6 colors.');
-        return prev;
-      }
-      return [...prev, pendingPrimaryColorHex];
-    });
   };
 
-  const handleRemovePendingColorFromGroup = (color: string) => {
-    setPendingPrimaryColorGroupColors((prev) => prev.filter((entry) => entry !== color));
+  const handleClearSelectedPrimaryColorSlot = () => {
+    setPendingPrimaryColorGroupColors((prev) => prev.map((color, index) => (
+      index === selectedPrimaryColorSlotIndex ? null : color
+    )));
+    setPendingPrimaryColorHex(DEFAULT_PRIMARY_COLOR_HEX);
+    setPrimaryColorsError('');
   };
 
   const guideSteps = [
@@ -954,13 +981,22 @@ const PersonalSpacePage: React.FC = () => {
             </div>
 
             {isPrimaryColorEditorOpen && selectedPrimaryColorGroup && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
-                <div ref={primaryColorMenuRef} className="w-full max-w-md rounded-3xl border border-gray-100 bg-white p-5 shadow-2xl">
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
+                onClick={() => setIsPrimaryColorEditorOpen(false)}
+              >
+                <div
+                  className="w-full max-w-2xl rounded-[28px] border border-white/60 bg-white p-6 shadow-2xl"
+                  onClick={(event) => event.stopPropagation()}
+                >
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">Color Group</div>
-                      <div className="text-lg font-semibold text-gray-900">
+                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-500">Color Group Editor</div>
+                      <div className="text-xl font-semibold text-gray-900">
                         {selectedPrimaryColorGroup.name?.trim() || 'Color Set'}
+                      </div>
+                      <div className="mt-1 text-sm text-gray-500">
+                        Click any swatch to edit it with the eyedropper, RGB sliders, or hex input.
                       </div>
                     </div>
                     <button
@@ -972,102 +1008,157 @@ const PersonalSpacePage: React.FC = () => {
                       x
                     </button>
                   </div>
-                  <div className="mt-4">
-                    <div className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
-                      <span>Group Colors</span>
-                      <span>{pendingPrimaryColorGroupColors.length}/6</span>
-                    </div>
-                    <div className="grid grid-cols-6 gap-2">
-                      {Array.from({ length: 6 }).map((_, index) => {
-                        const swatch = pendingPrimaryColorGroupColors[index];
-                        return swatch ? (
-                          <button
-                            key={`${swatch}-${index}`}
-                            type="button"
-                            onClick={() => handleRemovePendingColorFromGroup(swatch)}
-                            className="h-12 rounded-xl border border-black/5 shadow-sm transition hover:scale-105"
-                            style={{ backgroundColor: swatch }}
-                            title={`Remove ${swatch}`}
-                          />
-                        ) : (
-                          <div
-                            key={`editor-empty-${index}`}
-                            className="h-12 rounded-xl border border-dashed border-gray-200 bg-slate-50"
-                          />
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <div className="mt-4 flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handlePickScreenColor}
-                      disabled={isEyeDropping || pendingPrimaryColorGroupColors.length >= 6}
-                      className="inline-flex h-11 items-center gap-2 rounded-2xl border border-cyan-200 bg-cyan-50 px-4 text-sm font-semibold text-cyan-700 shadow-sm transition hover:border-cyan-300 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
-                      title="Pick a color from the screen"
-                    >
-                      <span aria-hidden="true" className="text-base leading-none">??</span>
-                      <Pipette size={16} />
-                      <span>{isEyeDropping ? 'Picking...' : 'Eyedropper'}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleAddPendingColorToGroup}
-                      disabled={pendingPrimaryColorGroupColors.length >= 6}
-                      className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-gray-200 bg-white text-gray-600 shadow-sm transition hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700 disabled:cursor-not-allowed disabled:opacity-60"
-                      aria-label="Add current color to group"
-                    >
-                      <Plus size={18} />
-                    </button>
-                  </div>
-                  <div className="mt-4 flex items-center gap-3">
-                    <div
-                      className="h-14 w-14 shrink-0 rounded-2xl border border-gray-200 shadow-sm"
-                      style={{ backgroundColor: pendingPrimaryColorHex }}
-                    />
-                    <div className="min-w-0">
-                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">Current</div>
-                      <div className="truncate text-base font-semibold text-gray-900">{pendingPrimaryColorHex}</div>
-                    </div>
-                  </div>
-                  <div className="mt-4 rounded-2xl border border-gray-100 bg-slate-50 p-3">
-                    <label className="block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
-                      Hex
-                    </label>
-                    <input
-                      type="text"
-                      value={pendingPrimaryColorHex}
-                      onChange={(event) => handlePendingPrimaryColorHexChange(event.target.value)}
-                      placeholder="#2563EB"
-                      className="mt-2 h-11 w-full rounded-2xl border border-gray-200 bg-white px-3 text-sm font-semibold uppercase text-gray-800 outline-none transition focus:border-cyan-400"
-                      aria-label="Primary color hex value"
-                    />
-                  </div>
-                  <div className="mt-3 grid grid-cols-3 gap-2">
-                    {(['r', 'g', 'b'] as const).map((channel) => (
-                      <div key={channel}>
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
-                          {channel}
-                        </div>
-                        <input
-                          type="number"
-                          min="0"
-                          max="255"
-                          value={pendingPrimaryColorRgb[channel]}
-                          onChange={(event) => handlePendingPrimaryColorChannelChange(channel, event.target.value)}
-                          className="h-11 w-full rounded-2xl border border-gray-200 bg-white px-3 text-sm text-gray-800 outline-none transition focus:border-cyan-400"
-                        />
+
+                  <div className="mt-6 grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+                    <div>
+                      <div className="mb-3 flex items-center justify-between text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
+                        <span>Group Colors</span>
+                        <span>{pendingPrimaryColorGroupColors.filter(Boolean).length}/{PRIMARY_COLOR_SLOT_COUNT}</span>
                       </div>
-                    ))}
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                        {Array.from({ length: PRIMARY_COLOR_SLOT_COUNT }).map((_, index) => {
+                          const swatch = pendingPrimaryColorGroupColors[index];
+                          const isSelected = index === selectedPrimaryColorSlotIndex;
+                          return (
+                            <button
+                              key={`editor-slot-${index}`}
+                              type="button"
+                              onClick={() => handleSelectPrimaryColorSlot(index)}
+                              className={`rounded-3xl border p-3 text-left transition ${
+                                isSelected
+                                  ? 'border-cyan-400 ring-2 ring-cyan-100 shadow-md'
+                                  : 'border-gray-200 hover:border-cyan-200'
+                              }`}
+                            >
+                              <div
+                                className={`h-24 rounded-2xl border ${
+                                  swatch ? 'border-black/5' : 'border-dashed border-gray-200 bg-slate-50'
+                                }`}
+                                style={swatch ? { backgroundColor: swatch } : undefined}
+                              />
+                              <div className="mt-3 flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+                                    Slot {index + 1}
+                                  </div>
+                                  <div className="truncate text-sm font-semibold text-gray-900">
+                                    {swatch || 'Empty'}
+                                  </div>
+                                </div>
+                                {isSelected && (
+                                  <span className="rounded-full bg-cyan-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-700">
+                                    Editing
+                                  </span>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="rounded-3xl border border-gray-100 bg-slate-50/80 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
+                            Active Slot
+                          </div>
+                          <div className="mt-1 text-lg font-semibold text-gray-900">
+                            Slot {selectedPrimaryColorSlotIndex + 1}
+                          </div>
+                          <div className="mt-1 text-sm text-gray-500">
+                            {pendingPrimaryColorGroupColors[selectedPrimaryColorSlotIndex] || 'Choose a color for this slot'}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleClearSelectedPrimaryColorSlot}
+                          className="inline-flex h-10 items-center rounded-2xl border border-gray-200 bg-white px-3 text-sm font-semibold text-gray-600 transition hover:border-rose-200 hover:text-rose-600"
+                        >
+                          Clear
+                        </button>
+                      </div>
+
+                      <div className="mt-4 flex items-center gap-3 rounded-3xl border border-white bg-white p-3 shadow-sm">
+                        <div
+                          className="h-16 w-16 shrink-0 rounded-2xl border border-gray-200 shadow-sm"
+                          style={{ backgroundColor: activePrimaryColorHex }}
+                        />
+                        <div className="min-w-0">
+                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">Current Color</div>
+                          <div className="truncate text-base font-semibold text-gray-900">{activePrimaryColorHex}</div>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handlePickScreenColor}
+                          disabled={isEyeDropping}
+                          className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-2xl border border-cyan-200 bg-cyan-50 px-4 text-sm font-semibold text-cyan-700 shadow-sm transition hover:border-cyan-300 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          title="Pick a color from the screen"
+                        >
+                          <Pipette size={16} />
+                          <span>{isEyeDropping ? 'Picking...' : 'Use Eyedropper'}</span>
+                        </button>
+                      </div>
+
+                      <div className="mt-4 rounded-3xl border border-white bg-white p-3 shadow-sm">
+                        <label className="block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
+                          Hex
+                        </label>
+                        <input
+                          type="text"
+                          value={pendingPrimaryColorHex}
+                          onChange={(event) => handlePendingPrimaryColorHexChange(event.target.value)}
+                          placeholder={DEFAULT_PRIMARY_COLOR_HEX}
+                          className="mt-2 h-11 w-full rounded-2xl border border-gray-200 bg-white px-3 text-sm font-semibold uppercase text-gray-800 outline-none transition focus:border-cyan-400"
+                          aria-label="Primary color hex value"
+                        />
+                        {!isValidHexColor(pendingPrimaryColorHex) && (
+                          <div className="mt-2 text-xs text-amber-600">
+                            Enter a full 6-digit hex value to apply it to this slot.
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        {(['r', 'g', 'b'] as const).map((channel) => (
+                          <div key={channel}>
+                            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
+                              {channel}
+                            </div>
+                            <input
+                              type="number"
+                              min="0"
+                              max="255"
+                              value={pendingPrimaryColorRgb[channel]}
+                              onChange={(event) => handlePendingPrimaryColorChannelChange(channel, event.target.value)}
+                              className="h-11 w-full rounded-2xl border border-gray-200 bg-white px-3 text-sm text-gray-800 outline-none transition focus:border-cyan-400"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void savePrimaryColorGroup(pendingPrimaryColorGroupColors, '', selectedPrimaryColorGroup.id)}
-                    disabled={isPrimaryColorSaving}
-                    className="mt-4 inline-flex h-11 w-full items-center justify-center rounded-2xl bg-cyan-600 px-4 text-sm font-semibold text-white transition hover:bg-cyan-700 disabled:cursor-not-allowed disabled:bg-cyan-300"
-                  >
-                    {isPrimaryColorSaving ? 'Saving...' : 'Save Changes'}
-                  </button>
+
+                  <div className="mt-6 flex items-center justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setIsPrimaryColorEditorOpen(false)}
+                      className="inline-flex h-11 items-center justify-center rounded-2xl border border-gray-200 bg-white px-4 text-sm font-semibold text-gray-600 transition hover:border-gray-300 hover:text-gray-900"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void savePrimaryColorGroup(pendingPrimaryColorGroupColors, '', selectedPrimaryColorGroup.id)}
+                      disabled={isPrimaryColorSaving}
+                      className="inline-flex h-11 items-center justify-center rounded-2xl bg-cyan-600 px-5 text-sm font-semibold text-white transition hover:bg-cyan-700 disabled:cursor-not-allowed disabled:bg-cyan-300"
+                    >
+                      {isPrimaryColorSaving ? 'Saving...' : 'Save Changes'}
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
