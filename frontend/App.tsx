@@ -1249,6 +1249,8 @@ const App: React.FC = () => {
   const [isRefineBucketMode, setIsRefineBucketMode] = useState(false);
   const [isApplyingBucketFill, setIsApplyingBucketFill] = useState(false);
   const [isSavingRefinePreview, setIsSavingRefinePreview] = useState(false);
+  const [canUndoRefinePreview, setCanUndoRefinePreview] = useState(false);
+  const [canRedoRefinePreview, setCanRedoRefinePreview] = useState(false);
   const [detectedRefineRectangles, setDetectedRefineRectangles] = useState<DetectedRectRegion[]>([]);
   const [isAnalyzingRefineRectangles, setIsAnalyzingRefineRectangles] = useState(false);
   const missingReferenceStyleIdsRef = useRef<Set<string>>(new Set());
@@ -1344,6 +1346,9 @@ const App: React.FC = () => {
   const annotationHistoryRef = useRef<Annotation[][]>([]);
   const annotationRedoRef = useRef<Annotation[][]>([]);
   const isAnnotationRestoringRef = useRef(false);
+  const refinePreviewHistoryRef = useRef<Array<string | null>>([]);
+  const refinePreviewRedoRef = useRef<Array<string | null>>([]);
+  const isRefinePreviewRestoringRef = useRef(false);
   const annotationPanStartRef = useRef<{ x: number; y: number } | null>(null);
   const [fadeInArtboardIds, setFadeInArtboardIds] = useState<Set<string>>(new Set());
   const fadeInTimersRef = useRef<Record<string, number>>({});
@@ -1937,6 +1942,18 @@ const App: React.FC = () => {
   const activePoster = activePosterArtboard?.posterData;
   const currentRefinePosterImageUrl = refinePreviewImageUrl || activePoster?.imageUrlMerged || activePoster?.imageUrl || '';
   const selectedRefineColorGroup = primaryColorGroups.find((group) => group.id === selectedRefineColorGroupId) || null;
+  const isUsingRefinePreviewHistory = isRefineBucketMode || Boolean(refinePreviewImageUrl);
+  const pushRefinePreviewHistory = useCallback((nextPreviewUrl: string | null) => {
+    const last = refinePreviewHistoryRef.current[refinePreviewHistoryRef.current.length - 1];
+    if (last === nextPreviewUrl) return;
+    refinePreviewHistoryRef.current = [...refinePreviewHistoryRef.current, nextPreviewUrl].slice(-50);
+    refinePreviewRedoRef.current = [];
+    setCanUndoRefinePreview(refinePreviewHistoryRef.current.length > 1);
+    setCanRedoRefinePreview(false);
+  }, []);
+  const applyRefinePreviewState = useCallback((nextPreviewUrl: string | null) => {
+    setRefinePreviewImageUrl(nextPreviewUrl);
+  }, []);
   const annotatorAspectRatio = (() => {
     if (annotatorImage) {
       const imageWidth = annotatorImage.naturalWidth || annotatorImage.width;
@@ -2175,6 +2192,11 @@ const App: React.FC = () => {
     annotationHistoryRef.current = [];
     annotationRedoRef.current = [];
     isAnnotationRestoringRef.current = false;
+    refinePreviewHistoryRef.current = [null];
+    refinePreviewRedoRef.current = [];
+    isRefinePreviewRestoringRef.current = false;
+    setCanUndoRefinePreview(false);
+    setCanRedoRefinePreview(false);
   }, [activePosterId, isPosterModalOpen]);
 
   useEffect(() => {
@@ -5648,6 +5670,35 @@ const App: React.FC = () => {
     });
   };
 
+  const handleRefinePreviewUndo = useCallback(() => {
+    if (refinePreviewHistoryRef.current.length < 2) return;
+    const current = refinePreviewHistoryRef.current[refinePreviewHistoryRef.current.length - 1];
+    const previous = refinePreviewHistoryRef.current[refinePreviewHistoryRef.current.length - 2];
+    refinePreviewHistoryRef.current = refinePreviewHistoryRef.current.slice(0, -1);
+    refinePreviewRedoRef.current = [current, ...refinePreviewRedoRef.current].slice(0, 50);
+    isRefinePreviewRestoringRef.current = true;
+    applyRefinePreviewState(previous);
+    setCanUndoRefinePreview(refinePreviewHistoryRef.current.length > 1);
+    setCanRedoRefinePreview(refinePreviewRedoRef.current.length > 0);
+    requestAnimationFrame(() => {
+      isRefinePreviewRestoringRef.current = false;
+    });
+  }, [applyRefinePreviewState]);
+
+  const handleRefinePreviewRedo = useCallback(() => {
+    if (refinePreviewRedoRef.current.length === 0) return;
+    const [next, ...rest] = refinePreviewRedoRef.current;
+    refinePreviewRedoRef.current = rest;
+    refinePreviewHistoryRef.current = [...refinePreviewHistoryRef.current, next].slice(-50);
+    isRefinePreviewRestoringRef.current = true;
+    applyRefinePreviewState(next);
+    setCanUndoRefinePreview(refinePreviewHistoryRef.current.length > 1);
+    setCanRedoRefinePreview(refinePreviewRedoRef.current.length > 0);
+    requestAnimationFrame(() => {
+      isRefinePreviewRestoringRef.current = false;
+    });
+  }, [applyRefinePreviewState]);
+
   useEffect(() => {
     if (!isLoadingSuggestions) return;
     const labels = ['Warming Up', 'Brewing Ideas', 'Gathering Sparks', 'Polishing Notions', 'Tuning Vibes', 'Charging Up'];
@@ -5763,7 +5814,8 @@ Return ONLY valid JSON in the format:
         refineColorIterations,
         refineRectDetectionThreshold
       );
-      setRefinePreviewImageUrl(recoloredImageUrl);
+      pushRefinePreviewHistory(recoloredImageUrl);
+      applyRefinePreviewState(recoloredImageUrl);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to preview color set.';
       setRefineColorSetError(message);
@@ -5772,7 +5824,9 @@ Return ONLY valid JSON in the format:
     }
   }, [
     activePosterId,
+    applyRefinePreviewState,
     artboards,
+    pushRefinePreviewHistory,
     refineColorIterations,
     refineRectDetectionThreshold,
     refineColorThreshold,
@@ -5804,14 +5858,15 @@ Return ONLY valid JSON in the format:
         refineColorThreshold
       );
       setDetectedRefineRectangles([]);
-      setRefinePreviewImageUrl(nextPreview);
+      pushRefinePreviewHistory(nextPreview);
+      applyRefinePreviewState(nextPreview);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to recolor this rectangle.';
       setRefineColorSetError(message);
     } finally {
       setIsApplyingBucketFill(false);
     }
-  }, [currentRefinePosterImageUrl, refineColorThreshold, selectedRefineColorGroup]);
+  }, [applyRefinePreviewState, currentRefinePosterImageUrl, pushRefinePreviewHistory, refineColorThreshold, selectedRefineColorGroup]);
 
   const handleBucketFillPointSelection = useCallback(async (point: { x: number; y: number }) => {
     if (!selectedRefineColorGroup || selectedRefineColorGroup.colors.length === 0 || !currentRefinePosterImageUrl) {
@@ -5830,14 +5885,15 @@ Return ONLY valid JSON in the format:
         refineColorIterations
       );
       setDetectedRefineRectangles([]);
-      setRefinePreviewImageUrl(nextPreview);
+      pushRefinePreviewHistory(nextPreview);
+      applyRefinePreviewState(nextPreview);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to recolor this region.';
       setRefineColorSetError(message);
     } finally {
       setIsApplyingBucketFill(false);
     }
-  }, [currentRefinePosterImageUrl, refineColorIterations, refineColorThreshold, selectedRefineColorGroup]);
+  }, [applyRefinePreviewState, currentRefinePosterImageUrl, pushRefinePreviewHistory, refineColorIterations, refineColorThreshold, selectedRefineColorGroup]);
 
   const handleReplaceWholePosterWithPalette = useCallback(async () => {
     if (!selectedRefineColorGroup || selectedRefineColorGroup.colors.length === 0 || !currentRefinePosterImageUrl) {
@@ -5854,14 +5910,15 @@ Return ONLY valid JSON in the format:
         refineColorThreshold
       );
       setDetectedRefineRectangles([]);
-      setRefinePreviewImageUrl(nextPreview);
+      pushRefinePreviewHistory(nextPreview);
+      applyRefinePreviewState(nextPreview);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to recolor the whole poster.';
       setRefineColorSetError(message);
     } finally {
       setIsApplyingRefineColorSet(false);
     }
-  }, [currentRefinePosterImageUrl, refineColorThreshold, selectedRefineColorGroup]);
+  }, [applyRefinePreviewState, currentRefinePosterImageUrl, pushRefinePreviewHistory, refineColorThreshold, selectedRefineColorGroup]);
 
   const handleAnalyzeRefineRectangles = useCallback(async () => {
     if (!currentRefinePosterImageUrl) {
@@ -8671,7 +8728,8 @@ Return ONLY valid JSON in the format:
                     <button
                       type="button"
                       className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100"
-                      onClick={handleAnnotationUndo}
+                      onClick={isUsingRefinePreviewHistory ? handleRefinePreviewUndo : handleAnnotationUndo}
+                      disabled={isUsingRefinePreviewHistory ? !canUndoRefinePreview : annotationHistoryRef.current.length < 2}
                       title="Undo (Ctrl+Z)"
                       aria-label="Undo"
                     >
@@ -8680,7 +8738,8 @@ Return ONLY valid JSON in the format:
                     <button
                       type="button"
                       className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100"
-                      onClick={handleAnnotationRedo}
+                      onClick={isUsingRefinePreviewHistory ? handleRefinePreviewRedo : handleAnnotationRedo}
+                      disabled={isUsingRefinePreviewHistory ? !canRedoRefinePreview : annotationRedoRef.current.length === 0}
                       title="Redo (Ctrl+Y)"
                       aria-label="Redo"
                     >
@@ -9109,7 +9168,10 @@ Return ONLY valid JSON in the format:
                       </span>
                       <button
                         type="button"
-                        onClick={() => setRefinePreviewImageUrl(null)}
+                        onClick={() => {
+                          pushRefinePreviewHistory(null);
+                          applyRefinePreviewState(null);
+                        }}
                         disabled={!refinePreviewImageUrl}
                         className="font-semibold text-slate-600 disabled:opacity-40"
                       >
