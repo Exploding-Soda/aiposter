@@ -152,7 +152,7 @@ const detectObviousRectangularRegions = (
   data: Uint8ClampedArray,
   width: number,
   height: number,
-  detectionThreshold = 15
+  detectionThreshold = 2
 ): DetectedRectRegion[] => {
   const getIndex = (x: number, y: number) => (y * width + x) * 4;
   const getColorAt = (x: number, y: number): RgbColor => {
@@ -603,6 +603,293 @@ const recolorRectRegionByDominantColor = async (
   return canvas.toDataURL('image/png');
 };
 
+const recolorRectRegionByClosestColorToTarget = async (
+  sourceUrl: string,
+  rect: { x: number; y: number; width: number; height: number },
+  targetHex: string,
+  threshold = 40,
+  iterations = 2
+) => {
+  const targetColor = hexToRgbColor(targetHex);
+  if (!targetColor) {
+    throw new Error('Invalid target color.');
+  }
+
+  const image = await loadImageFromUrl(sourceUrl);
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw new Error('Canvas is not available.');
+  }
+
+  context.drawImage(image, 0, 0, width, height);
+  const imageData = context.getImageData(0, 0, width, height);
+  const { data } = imageData;
+  const getIndex = (x: number, y: number) => (y * width + x) * 4;
+  const left = Math.max(0, Math.min(width - 1, Math.floor(rect.x)));
+  const top = Math.max(0, Math.min(height - 1, Math.floor(rect.y)));
+  const right = Math.max(left + 1, Math.min(width, Math.ceil(rect.x + rect.width)));
+  const bottom = Math.max(top + 1, Math.min(height, Math.ceil(rect.y + rect.height)));
+
+  if (right - left < 2 || bottom - top < 2) {
+    return canvas.toDataURL('image/png');
+  }
+
+  const totalIterations = Math.max(1, Math.floor(iterations));
+  let sourceColor: RgbColor | null = null;
+  for (let iteration = 0; iteration < totalIterations; iteration += 1) {
+    const sampleStep = Math.max(1, Math.floor(Math.max(right - left, bottom - top) / 48));
+    if (!sourceColor) {
+      const buckets: Array<{ color: RgbColor; count: number }> = [];
+      const bucketJoinThresholdSq = 20 * 20;
+
+      for (let y = top; y < bottom; y += sampleStep) {
+        for (let x = left; x < right; x += sampleStep) {
+          const index = getIndex(x, y);
+          if (data[index + 3] < 24) continue;
+          const color = { r: data[index], g: data[index + 1], b: data[index + 2] };
+
+          let bestBucket: { color: RgbColor; count: number } | null = null;
+          let bestDistance = Number.POSITIVE_INFINITY;
+          for (const bucket of buckets) {
+            const distance = colorDistanceSq(color, bucket.color);
+            if (distance < bestDistance) {
+              bestDistance = distance;
+              bestBucket = bucket;
+            }
+          }
+
+          if (!bestBucket || bestDistance > bucketJoinThresholdSq) {
+            buckets.push({ color, count: 1 });
+          } else {
+            const nextCount = bestBucket.count + 1;
+            bestBucket.color = {
+              r: (bestBucket.color.r * bestBucket.count + color.r) / nextCount,
+              g: (bestBucket.color.g * bestBucket.count + color.g) / nextCount,
+              b: (bestBucket.color.b * bestBucket.count + color.b) / nextCount
+            };
+            bestBucket.count = nextCount;
+          }
+        }
+      }
+
+      if (buckets.length === 0) {
+        return canvas.toDataURL('image/png');
+      }
+
+      const chosenBucket = buckets.reduce((best, bucket) => {
+        const bucketColor = {
+          r: clampChannel(bucket.color.r),
+          g: clampChannel(bucket.color.g),
+          b: clampChannel(bucket.color.b)
+        };
+        const score = colorDistanceSq(bucketColor, targetColor) - bucket.count * 8;
+        if (!best || score < best.score) {
+          return { color: bucketColor, score };
+        }
+        return best;
+      }, null as { color: RgbColor; score: number } | null);
+
+      if (!chosenBucket) {
+        return canvas.toDataURL('image/png');
+      }
+      sourceColor = chosenBucket.color;
+    }
+
+    const colorThresholdSq = threshold * threshold;
+    const regionWidth = right - left;
+    const regionHeight = bottom - top;
+    const replacedMask = new Uint8Array(regionWidth * regionHeight);
+    const maskIndex = (x: number, y: number) => (y - top) * regionWidth + (x - left);
+
+    for (let y = top; y < bottom; y += 1) {
+      for (let x = left; x < right; x += 1) {
+        const index = getIndex(x, y);
+        if (data[index + 3] < 24) continue;
+        const current: RgbColor = {
+          r: data[index],
+          g: data[index + 1],
+          b: data[index + 2]
+        };
+        const alreadyTarget =
+          current.r === targetColor.r &&
+          current.g === targetColor.g &&
+          current.b === targetColor.b;
+        if (alreadyTarget) {
+          replacedMask[maskIndex(x, y)] = 1;
+          continue;
+        }
+        if (colorDistanceSq(current, sourceColor) > colorThresholdSq) continue;
+
+        data[index] = targetColor.r;
+        data[index + 1] = targetColor.g;
+        data[index + 2] = targetColor.b;
+        replacedMask[maskIndex(x, y)] = 1;
+      }
+    }
+
+    for (let pass = 0; pass < 2; pass += 1) {
+      const nextMask = new Uint8Array(replacedMask);
+      for (let y = top; y < bottom; y += 1) {
+        for (let x = left; x < right; x += 1) {
+          const localIndex = maskIndex(x, y);
+          if (replacedMask[localIndex]) continue;
+          const pixelIndex = getIndex(x, y);
+          if (data[pixelIndex + 3] < 24) continue;
+
+          let replacedNeighbors = 0;
+          let availableNeighbors = 0;
+          const neighbors = [
+            [x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1],
+            [x - 1, y - 1], [x + 1, y - 1], [x - 1, y + 1], [x + 1, y + 1]
+          ] as const;
+          for (const [nx, ny] of neighbors) {
+            if (nx < left || nx >= right || ny < top || ny >= bottom) {
+              continue;
+            }
+            availableNeighbors += 1;
+            if (replacedMask[maskIndex(nx, ny)]) {
+              replacedNeighbors += 1;
+            }
+          }
+          if (availableNeighbors === 0 || replacedNeighbors / availableNeighbors < 0.55) continue;
+
+          data[pixelIndex] = targetColor.r;
+          data[pixelIndex + 1] = targetColor.g;
+          data[pixelIndex + 2] = targetColor.b;
+          nextMask[localIndex] = 1;
+        }
+      }
+      replacedMask.set(nextMask);
+    }
+  }
+
+  context.putImageData(imageData, 0, 0);
+  return canvas.toDataURL('image/png');
+};
+
+const recolorRectRegionByPalette = async (
+  sourceUrl: string,
+  rect: { x: number; y: number; width: number; height: number },
+  paletteHexes: string[],
+  threshold = 40
+) => {
+  const palette = paletteHexes
+    .map(hexToRgbColor)
+    .filter((color): color is RgbColor => Boolean(color));
+  if (palette.length === 0) {
+    throw new Error('Color set is empty.');
+  }
+
+  const image = await loadImageFromUrl(sourceUrl);
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw new Error('Canvas is not available.');
+  }
+
+  context.drawImage(image, 0, 0, width, height);
+  const imageData = context.getImageData(0, 0, width, height);
+  const { data } = imageData;
+  const getIndex = (x: number, y: number) => (y * width + x) * 4;
+  const left = Math.max(0, Math.min(width - 1, Math.floor(rect.x)));
+  const top = Math.max(0, Math.min(height - 1, Math.floor(rect.y)));
+  const right = Math.max(left + 1, Math.min(width, Math.ceil(rect.x + rect.width)));
+  const bottom = Math.max(top + 1, Math.min(height, Math.ceil(rect.y + rect.height)));
+
+  if (right - left < 2 || bottom - top < 2) {
+    return canvas.toDataURL('image/png');
+  }
+
+  const sampleStep = Math.max(1, Math.floor(Math.max(right - left, bottom - top) / 48));
+  const buckets: Array<{ color: RgbColor; count: number; target: RgbColor }> = [];
+  const bucketJoinThresholdSq = 20 * 20;
+  const thresholdSq = threshold * threshold;
+
+  for (let y = top; y < bottom; y += sampleStep) {
+    for (let x = left; x < right; x += sampleStep) {
+      const index = getIndex(x, y);
+      if (data[index + 3] < 24) continue;
+      const color = { r: data[index], g: data[index + 1], b: data[index + 2] };
+
+      let bestPalette = palette[0];
+      let bestPaletteDistance = colorDistanceSq(color, palette[0]);
+      for (let i = 1; i < palette.length; i += 1) {
+        const distance = colorDistanceSq(color, palette[i]);
+        if (distance < bestPaletteDistance) {
+          bestPaletteDistance = distance;
+          bestPalette = palette[i];
+        }
+      }
+      if (bestPaletteDistance > thresholdSq) continue;
+
+      let bestBucket: { color: RgbColor; count: number; target: RgbColor } | null = null;
+      let bestBucketDistance = Number.POSITIVE_INFINITY;
+      for (const bucket of buckets) {
+        const distance = colorDistanceSq(color, bucket.color);
+        if (distance < bestBucketDistance) {
+          bestBucketDistance = distance;
+          bestBucket = bucket;
+        }
+      }
+
+      if (!bestBucket || bestBucketDistance > bucketJoinThresholdSq || colorDistanceSq(bestBucket.target, bestPalette) > 1) {
+        buckets.push({ color, count: 1, target: bestPalette });
+      } else {
+        const nextCount = bestBucket.count + 1;
+        bestBucket.color = {
+          r: (bestBucket.color.r * bestBucket.count + color.r) / nextCount,
+          g: (bestBucket.color.g * bestBucket.count + color.g) / nextCount,
+          b: (bestBucket.color.b * bestBucket.count + color.b) / nextCount
+        };
+        bestBucket.count = nextCount;
+      }
+    }
+  }
+
+  if (buckets.length === 0) {
+    return canvas.toDataURL('image/png');
+  }
+
+  for (let y = top; y < bottom; y += 1) {
+    for (let x = left; x < right; x += 1) {
+      const index = getIndex(x, y);
+      if (data[index + 3] < 24) continue;
+      const current: RgbColor = { r: data[index], g: data[index + 1], b: data[index + 2] };
+
+      let bestBucket: { color: RgbColor; count: number; target: RgbColor } | null = null;
+      let bestBucketDistance = Number.POSITIVE_INFINITY;
+      for (const bucket of buckets) {
+        const distance = colorDistanceSq(current, {
+          r: clampChannel(bucket.color.r),
+          g: clampChannel(bucket.color.g),
+          b: clampChannel(bucket.color.b)
+        });
+        if (distance < bestBucketDistance) {
+          bestBucketDistance = distance;
+          bestBucket = bucket;
+        }
+      }
+      if (!bestBucket || bestBucketDistance > thresholdSq) continue;
+
+      data[index] = bestBucket.target.r;
+      data[index + 1] = bestBucket.target.g;
+      data[index + 2] = bestBucket.target.b;
+    }
+  }
+
+  context.putImageData(imageData, 0, 0);
+  return canvas.toDataURL('image/png');
+};
+
 const recolorConnectedRegionBySeedColor = async (
   sourceUrl: string,
   point: { x: number; y: number },
@@ -976,7 +1263,7 @@ const App: React.FC = () => {
   const [refineColorSetError, setRefineColorSetError] = useState('');
   const [refineColorThreshold, setRefineColorThreshold] = useState(40);
   const [refineColorIterations, setRefineColorIterations] = useState(4);
-  const [refineRectDetectionThreshold, setRefineRectDetectionThreshold] = useState(15);
+  const [refineRectDetectionThreshold, setRefineRectDetectionThreshold] = useState(2);
   const [isRefineColorSettingsOpen, setIsRefineColorSettingsOpen] = useState(false);
   const [refinePreviewImageUrl, setRefinePreviewImageUrl] = useState<string | null>(null);
   const [selectedRefinePaintColor, setSelectedRefinePaintColor] = useState<string | null>(null);
@@ -1073,6 +1360,8 @@ const App: React.FC = () => {
   const annotatorCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const annotationIdRef = useRef(1);
   const annotationStartRef = useRef<{ x: number; y: number } | null>(null);
+  const bucketLongPressTimerRef = useRef<number | null>(null);
+  const bucketRectModeRef = useRef(false);
   const annotationHistoryRef = useRef<Annotation[][]>([]);
   const annotationRedoRef = useRef<Annotation[][]>([]);
   const isAnnotationRestoringRef = useRef(false);
@@ -5231,7 +5520,24 @@ const App: React.FC = () => {
     if (isRefineBucketMode) {
       const point = getImagePointFromEvent(event);
       if (!point) return;
-      void handleBucketFillPoint(point);
+      annotationStartRef.current = point;
+      setIsAnnotating(true);
+      bucketRectModeRef.current = false;
+      if (bucketLongPressTimerRef.current) {
+        window.clearTimeout(bucketLongPressTimerRef.current);
+      }
+      bucketLongPressTimerRef.current = window.setTimeout(() => {
+        bucketRectModeRef.current = true;
+        setAnnotationDraft({
+          id: -1,
+          type: 'rect',
+          color: 'purple',
+          x: point.x,
+          y: point.y,
+          width: 0,
+          height: 0
+        });
+      }, 220);
       return;
     }
     if (annotationTool === 'pan') {
@@ -5263,6 +5569,18 @@ const App: React.FC = () => {
     if (!isAnnotatorReady) return;
     if (!isAnnotating) return;
     console.log('[annotator] mouse move', { tool: annotationTool });
+    if (isRefineBucketMode) {
+      if (!bucketRectModeRef.current || !annotationStartRef.current || !annotationDraft) return;
+      const point = getImagePointFromEvent(event);
+      if (!point) return;
+      const start = annotationStartRef.current;
+      const x = Math.min(start.x, point.x);
+      const y = Math.min(start.y, point.y);
+      const width = Math.abs(point.x - start.x);
+      const height = Math.abs(point.y - start.y);
+      setAnnotationDraft({ ...annotationDraft, x, y, width, height });
+      return;
+    }
     if (annotationTool === 'pan' && annotationPanStartRef.current) {
       const dx = event.clientX - annotationPanStartRef.current.x;
       const dy = event.clientY - annotationPanStartRef.current.y;
@@ -5288,9 +5606,29 @@ const App: React.FC = () => {
   const handleAnnotatorMouseUp = () => {
     console.log('[annotator] mouse up', { tool: annotationTool, hasDraft: Boolean(annotationDraft), ready: isAnnotatorReady });
     if (isRefineBucketMode) {
+      if (bucketLongPressTimerRef.current) {
+        window.clearTimeout(bucketLongPressTimerRef.current);
+        bucketLongPressTimerRef.current = null;
+      }
+      const startPoint = annotationStartRef.current;
+      const rectDraft = annotationDraft;
+      const shouldUseManualRect = bucketRectModeRef.current && Boolean(rectDraft && rectDraft.width > 6 && rectDraft.height > 6);
+      bucketRectModeRef.current = false;
       setAnnotationDraft(null);
       setIsAnnotating(false);
       annotationStartRef.current = null;
+      if (shouldUseManualRect && rectDraft) {
+        void handleBucketFillRectSelection({
+          x: rectDraft.x,
+          y: rectDraft.y,
+          width: rectDraft.width,
+          height: rectDraft.height
+        });
+        return;
+      }
+      if (startPoint) {
+        void handleBucketFillPoint(startPoint);
+      }
       return;
     }
     if (annotationTool === 'pan') {
@@ -5573,6 +5911,39 @@ Return ONLY valid JSON in the format:
     refineRectDetectionThreshold,
     selectedRefinePaintColor
   ]);
+
+  const handleBucketFillRectSelection = useCallback(async (rect: { x: number; y: number; width: number; height: number }) => {
+    if (!selectedRefineColorGroup || selectedRefineColorGroup.colors.length === 0 || !currentRefinePosterImageUrl) {
+      setRefineColorSetError('Choose a color set first.');
+      return;
+    }
+
+    setRefineColorSetError('');
+    setIsApplyingBucketFill(true);
+    try {
+      setDetectedRefineRectangles([{
+        left: rect.x,
+        top: rect.y,
+        right: rect.x + rect.width,
+        bottom: rect.y + rect.height,
+        dominant: hexToRgbColor(selectedRefineColorGroup.colors[0]) || { r: 0, g: 0, b: 0 },
+        area: rect.width * rect.height,
+        coverage: 1
+      }]);
+      const nextPreview = await recolorRectRegionByPalette(
+        currentRefinePosterImageUrl,
+        rect,
+        selectedRefineColorGroup.colors,
+        refineColorThreshold
+      );
+      setRefinePreviewImageUrl(nextPreview);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to recolor this rectangle.';
+      setRefineColorSetError(message);
+    } finally {
+      setIsApplyingBucketFill(false);
+    }
+  }, [currentRefinePosterImageUrl, refineColorThreshold, selectedRefineColorGroup]);
 
   const handleAnalyzeRefineRectangles = useCallback(async () => {
     if (!currentRefinePosterImageUrl) {
@@ -8771,7 +9142,9 @@ Return ONLY valid JSON in the format:
                   {selectedRefineColorGroup?.colors.length ? (
                     <div className="flex items-center justify-between text-[11px] text-slate-500">
                       <span>
-                        {selectedRefinePaintColor ? `Selected: ${selectedRefinePaintColor}` : 'Pick a swatch, then click the poster to target a rectangle'}
+                        {selectedRefinePaintColor
+                          ? `Selected: ${selectedRefinePaintColor} · click for single-color target, long-press for full color-set rectangle mapping`
+                          : 'Pick a swatch for click targeting, or long-press to map a whole rectangle with the current color set'}
                       </span>
                       <button
                         type="button"
@@ -8806,8 +9179,8 @@ Return ONLY valid JSON in the format:
                           </div>
                           <input
                             type="range"
-                            min="5"
-                            max="20"
+                            min="1"
+                            max="5"
                             step="1"
                             value={refineRectDetectionThreshold}
                             onChange={(event) => setRefineRectDetectionThreshold(Number(event.target.value))}
@@ -8865,7 +9238,7 @@ Return ONLY valid JSON in the format:
                     </div>
                   )}
                   {isApplyingBucketFill && (
-                    <div className="text-[11px] text-slate-500">Detecting rectangle and recoloring...</div>
+                    <div className="text-[11px] text-slate-500">Detecting region and recoloring...</div>
                   )}
                   <button
                     type="button"
