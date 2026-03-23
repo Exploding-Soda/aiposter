@@ -1068,6 +1068,7 @@ const App: React.FC = () => {
   const [refineColorThreshold, setRefineColorThreshold] = useState(40);
   const [refineColorIterations, setRefineColorIterations] = useState(4);
   const [refineRectDetectionThreshold, setRefineRectDetectionThreshold] = useState(2);
+  const [hasTouchedRefineRectDetect, setHasTouchedRefineRectDetect] = useState(false);
   const [isRefineColorSettingsOpen, setIsRefineColorSettingsOpen] = useState(false);
   const [refinePreviewImageUrl, setRefinePreviewImageUrl] = useState<string | null>(null);
   const [isRefineBucketMode, setIsRefineBucketMode] = useState(false);
@@ -1164,6 +1165,7 @@ const App: React.FC = () => {
   const annotatorCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const annotationIdRef = useRef(1);
   const annotationStartRef = useRef<{ x: number; y: number } | null>(null);
+  const pendingSettingsPreviewRef = useRef(false);
   const annotationHistoryRef = useRef<Annotation[][]>([]);
   const annotationRedoRef = useRef<Annotation[][]>([]);
   const isAnnotationRestoringRef = useRef(false);
@@ -1749,6 +1751,7 @@ const App: React.FC = () => {
     setRefinePreviewImageUrl(null);
     setIsRefineBucketMode(false);
     setDetectedRefineRectangles([]);
+    setHasTouchedRefineRectDetect(false);
     setIsPosterModalOpen(true);
   }, []);
 
@@ -3324,6 +3327,7 @@ const App: React.FC = () => {
       setRefinePreviewImageUrl(null);
       setIsRefineBucketMode(false);
       setDetectedRefineRectangles([]);
+      setHasTouchedRefineRectDetect(false);
     }, 180);
   };
 
@@ -5559,16 +5563,13 @@ Return ONLY valid JSON in the format:
     return derivedId;
   }, []);
 
-  const handleApplyRefineColorSet = useCallback(async () => {
+  const handlePreviewRefineColorSet = useCallback(async () => {
     if (!activePosterId) return;
-    if (!selectedRefineColorGroup || selectedRefineColorGroup.colors.length === 0) {
-      setRefineColorSetError('Choose a color set first.');
-      return;
-    }
+    if (!selectedRefineColorGroup || selectedRefineColorGroup.colors.length === 0) return;
 
     const currentArtboard = artboards.find((ab) => ab.id === activePosterId);
     const currentPoster = currentArtboard?.posterData;
-    const sourceImageUrl = currentRefinePosterImageUrl || currentPoster?.imageUrlMerged || currentPoster?.imageUrl;
+    const sourceImageUrl = currentPoster?.imageUrlMerged || currentPoster?.imageUrl;
     if (!currentArtboard || !currentPoster || !sourceImageUrl) {
       setRefineColorSetError('Poster image is missing.');
       return;
@@ -5576,17 +5577,7 @@ Return ONLY valid JSON in the format:
 
     setRefineColorSetError('');
     setIsApplyingRefineColorSet(true);
-    let derivedId: string | null = null;
-
     try {
-      derivedId = createDerivedArtboard(currentArtboard, {
-        ...currentPoster,
-        status: 'generating'
-      }, {
-        x: currentArtboard.x + currentArtboard.width + ARTBOARD_GAP,
-        nameSuffix: selectedRefineColorGroup.name?.trim() || 'Recolored'
-      });
-
       const recoloredImageUrl = await recolorPosterBlocksWithPalette(
         sourceImageUrl,
         selectedRefineColorGroup.colors,
@@ -5594,32 +5585,9 @@ Return ONLY valid JSON in the format:
         refineColorIterations,
         refineRectDetectionThreshold
       );
-      updatePosterArtboard(derivedId, (ab) => ({
-        ...ab,
-        posterData: {
-          ...ab.posterData!,
-          accentColor: selectedRefineColorGroup.colors[0] || ab.posterData!.accentColor,
-          imageUrl: recoloredImageUrl,
-          imageUrlMerged: recoloredImageUrl,
-          imageUrlNoText: undefined,
-          status: 'completed',
-          taskId: undefined
-        }
-      }));
-      handleClosePosterModal();
+      setRefinePreviewImageUrl(recoloredImageUrl);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to apply color set.';
-      if (derivedId) {
-        updatePosterArtboard(derivedId, (ab) => ({
-          ...ab,
-          posterData: {
-            ...ab.posterData!,
-            status: 'error',
-            error: message,
-            taskId: undefined
-          }
-        }));
-      }
+      const message = error instanceof Error ? error.message : 'Failed to preview color set.';
       setRefineColorSetError(message);
     } finally {
       setIsApplyingRefineColorSet(false);
@@ -5627,12 +5595,10 @@ Return ONLY valid JSON in the format:
   }, [
     activePosterId,
     artboards,
-    createDerivedArtboard,
     refineColorIterations,
     refineRectDetectionThreshold,
     refineColorThreshold,
-    selectedRefineColorGroup,
-    updatePosterArtboard
+    selectedRefineColorGroup
   ]);
 
   const handleBucketFillRectSelection = useCallback(async (rect: { x: number; y: number; width: number; height: number }) => {
@@ -5703,6 +5669,7 @@ Return ONLY valid JSON in the format:
 
   useEffect(() => {
     if (!isPosterModalOpen) return;
+    if (!hasTouchedRefineRectDetect) return;
     if (!currentRefinePosterImageUrl) {
       setDetectedRefineRectangles([]);
       return;
@@ -5713,7 +5680,13 @@ Return ONLY valid JSON in the format:
     }, 120);
 
     return () => window.clearTimeout(timeoutId);
-  }, [currentRefinePosterImageUrl, handleAnalyzeRefineRectangles, isPosterModalOpen]);
+  }, [currentRefinePosterImageUrl, handleAnalyzeRefineRectangles, hasTouchedRefineRectDetect, isPosterModalOpen]);
+
+  const handleSettingsPreviewCommit = useCallback(() => {
+    if (!pendingSettingsPreviewRef.current) return;
+    pendingSettingsPreviewRef.current = false;
+    void handlePreviewRefineColorSet();
+  }, [handlePreviewRefineColorSet]);
 
   const handleSaveRefinePreview = useCallback(() => {
     if (!activePosterId || !refinePreviewImageUrl) {
@@ -8943,7 +8916,13 @@ Return ONLY valid JSON in the format:
                             max="10"
                             step="1"
                             value={refineRectDetectionThreshold}
-                            onChange={(event) => setRefineRectDetectionThreshold(Number(event.target.value))}
+                            onChange={(event) => {
+                              pendingSettingsPreviewRef.current = true;
+                              setHasTouchedRefineRectDetect(true);
+                              setRefineRectDetectionThreshold(Number(event.target.value));
+                            }}
+                            onMouseUp={handleSettingsPreviewCommit}
+                            onTouchEnd={handleSettingsPreviewCommit}
                             className="mt-2 w-full accent-slate-700"
                           />
                           <div className="mt-1 text-[10px] text-slate-400">
@@ -8958,15 +8937,17 @@ Return ONLY valid JSON in the format:
                           <input
                             type="range"
                             min="24"
-                            max="72"
+                            max="300"
                             step="2"
                             value={refineColorThreshold}
-                            onChange={(event) => setRefineColorThreshold(Number(event.target.value))}
+                            onChange={(event) => {
+                              pendingSettingsPreviewRef.current = true;
+                              setRefineColorThreshold(Number(event.target.value));
+                            }}
+                            onMouseUp={handleSettingsPreviewCommit}
+                            onTouchEnd={handleSettingsPreviewCommit}
                             className="mt-2 w-full accent-slate-700"
                           />
-                          <div className="mt-1 text-[10px] text-slate-400">
-                            Higher values replace a broader range of nearby colors.
-                          </div>
                         </div>
                         <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
                           <div className="flex items-center justify-between text-[11px] text-slate-500">
@@ -8979,12 +8960,14 @@ Return ONLY valid JSON in the format:
                             max="8"
                             step="1"
                             value={refineColorIterations}
-                            onChange={(event) => setRefineColorIterations(Number(event.target.value))}
+                            onChange={(event) => {
+                              pendingSettingsPreviewRef.current = true;
+                              setRefineColorIterations(Number(event.target.value));
+                            }}
+                            onMouseUp={handleSettingsPreviewCommit}
+                            onTouchEnd={handleSettingsPreviewCommit}
                             className="mt-2 w-full accent-slate-700"
                           />
-                          <div className="mt-1 text-[10px] text-slate-400">
-                            Detect rectangles once, then recolor those same regions repeatedly.
-                          </div>
                         </div>
                       </div>
                     )}
@@ -9008,14 +8991,9 @@ Return ONLY valid JSON in the format:
                   >
                     {isSavingRefinePreview ? 'Saving Fill Result...' : 'Save Fill Result'}
                   </button>
-                  <button
-                    type="button"
-                    onClick={handleApplyRefineColorSet}
-                    disabled={isApplyingRefineColorSet || !selectedRefineColorGroup}
-                    className="w-full rounded-xl border border-slate-200 bg-white py-2 text-[11px] font-bold uppercase tracking-widest text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {isApplyingRefineColorSet ? 'Applying Color Set...' : 'Apply Color Set'}
-                  </button>
+                  {isApplyingRefineColorSet && (
+                    <div className="text-[11px] text-slate-500">Rendering color set preview...</div>
+                  )}
                 </div>
                 <button
                   onClick={handleRefinePoster}
