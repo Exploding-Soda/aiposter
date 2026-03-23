@@ -125,6 +125,29 @@ const colorDistanceSq = (a: RgbColor, b: RgbColor) => {
   return dr * dr + dg * dg + db * db;
 };
 
+const measureFlatnessInsideRect = (
+  x: number,
+  y: number,
+  rectangle: { left: number; top: number; right: number; bottom: number },
+  getColorAt: (x: number, y: number) => RgbColor
+) => {
+  const center = getColorAt(x, y);
+  const neighbors: RgbColor[] = [];
+  const candidates = [
+    [x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]
+  ] as const;
+  for (const [nx, ny] of candidates) {
+    if (nx < rectangle.left || nx >= rectangle.right || ny < rectangle.top || ny >= rectangle.bottom) {
+      continue;
+    }
+    neighbors.push(getColorAt(nx, ny));
+  }
+  if (neighbors.length === 0) {
+    return 0;
+  }
+  return neighbors.reduce((sum, neighbor) => sum + Math.sqrt(colorDistanceSq(center, neighbor)), 0) / neighbors.length;
+};
+
 const detectObviousRectangularRegions = (
   data: Uint8ClampedArray,
   width: number,
@@ -283,7 +306,12 @@ const loadImageFromUrl = async (sourceUrl: string) => {
   }
 };
 
-const recolorPosterBlocksWithPalette = async (sourceUrl: string, paletteHexes: string[]) => {
+const recolorPosterBlocksWithPalette = async (
+  sourceUrl: string,
+  paletteHexes: string[],
+  threshold = 40,
+  iterations = 2
+) => {
   const palette = paletteHexes
     .map(hexToRgbColor)
     .filter((color): color is RgbColor => Boolean(color));
@@ -337,20 +365,76 @@ const recolorPosterBlocksWithPalette = async (sourceUrl: string, paletteHexes: s
     return canvas.toDataURL('image/png');
   }
 
-  for (const rectangle of meaningfulRectangles) {
-    const colorThresholdSq = 34 * 34;
-    const shadingRetention = 0.24;
-    for (let y = rectangle.top; y < rectangle.bottom; y += 1) {
-      for (let x = rectangle.left; x < rectangle.right; x += 1) {
-        const index = getIndex(x, y);
-        if (data[index + 3] < 220) continue;
-        const original = getColorAt(x, y);
-        if (colorDistanceSq(original, rectangle.dominant) > colorThresholdSq) continue;
-        if (measureFlatness(x, y) > 24) continue;
+  const totalIterations = Math.max(1, Math.floor(iterations));
+  for (let iteration = 0; iteration < totalIterations; iteration += 1) {
+    for (const rectangle of meaningfulRectangles) {
+      const colorThresholdSq = threshold * threshold;
+      const rectangleWidth = rectangle.right - rectangle.left;
+      const rectangleHeight = rectangle.bottom - rectangle.top;
+      const replacedMask = new Uint8Array(rectangleWidth * rectangleHeight);
+      const maskIndex = (x: number, y: number) => (y - rectangle.top) * rectangleWidth + (x - rectangle.left);
+      for (let y = rectangle.top; y < rectangle.bottom; y += 1) {
+        for (let x = rectangle.left; x < rectangle.right; x += 1) {
+          const index = getIndex(x, y);
+          if (data[index + 3] < 220) continue;
+          const current = getColorAt(x, y);
+          const alreadyTarget =
+            current.r === rectangle.target.r &&
+            current.g === rectangle.target.g &&
+            current.b === rectangle.target.b;
+          if (alreadyTarget) {
+            replacedMask[maskIndex(x, y)] = 1;
+            continue;
+          }
+          if (colorDistanceSq(current, rectangle.dominant) > colorThresholdSq) continue;
+          const isEdgePixel =
+            x === rectangle.left ||
+            x === rectangle.right - 1 ||
+            y === rectangle.top ||
+            y === rectangle.bottom - 1;
+          const flatness = isEdgePixel ? measureFlatnessInsideRect(x, y, rectangle, getColorAt) : measureFlatness(x, y);
+          if (flatness > 28) continue;
 
-        data[index] = clampChannel(rectangle.target.r + (original.r - rectangle.dominant.r) * shadingRetention);
-        data[index + 1] = clampChannel(rectangle.target.g + (original.g - rectangle.dominant.g) * shadingRetention);
-        data[index + 2] = clampChannel(rectangle.target.b + (original.b - rectangle.dominant.b) * shadingRetention);
+          data[index] = rectangle.target.r;
+          data[index + 1] = rectangle.target.g;
+          data[index + 2] = rectangle.target.b;
+          replacedMask[maskIndex(x, y)] = 1;
+        }
+      }
+
+      for (let pass = 0; pass < 2; pass += 1) {
+        const nextMask = new Uint8Array(replacedMask);
+        for (let y = rectangle.top; y < rectangle.bottom; y += 1) {
+          for (let x = rectangle.left; x < rectangle.right; x += 1) {
+            const localIndex = maskIndex(x, y);
+            if (replacedMask[localIndex]) continue;
+            const pixelIndex = getIndex(x, y);
+            if (data[pixelIndex + 3] < 220) continue;
+
+            let replacedNeighbors = 0;
+            let availableNeighbors = 0;
+            const neighbors = [
+              [x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1],
+              [x - 1, y - 1], [x + 1, y - 1], [x - 1, y + 1], [x + 1, y + 1]
+            ] as const;
+            for (const [nx, ny] of neighbors) {
+              if (nx < rectangle.left || nx >= rectangle.right || ny < rectangle.top || ny >= rectangle.bottom) {
+                continue;
+              }
+              availableNeighbors += 1;
+              if (replacedMask[maskIndex(nx, ny)]) {
+                replacedNeighbors += 1;
+              }
+            }
+            if (availableNeighbors === 0 || replacedNeighbors / availableNeighbors < 0.55) continue;
+
+            data[pixelIndex] = rectangle.target.r;
+            data[pixelIndex + 1] = rectangle.target.g;
+            data[pixelIndex + 2] = rectangle.target.b;
+            nextMask[localIndex] = 1;
+          }
+        }
+        replacedMask.set(nextMask);
       }
     }
   }
@@ -362,7 +446,9 @@ const recolorPosterBlocksWithPalette = async (sourceUrl: string, paletteHexes: s
 const recolorRectRegionByDominantColor = async (
   sourceUrl: string,
   rect: { x: number; y: number; width: number; height: number },
-  targetHex: string
+  targetHex: string,
+  threshold = 40,
+  iterations = 2
 ) => {
   const targetColor = hexToRgbColor(targetHex);
   if (!targetColor) {
@@ -393,67 +479,121 @@ const recolorRectRegionByDominantColor = async (
     return canvas.toDataURL('image/png');
   }
 
-  const sampleStep = Math.max(1, Math.floor(Math.max(right - left, bottom - top) / 48));
-  const buckets: Array<{ color: RgbColor; count: number }> = [];
-  const bucketJoinThresholdSq = 20 * 20;
+  const totalIterations = Math.max(1, Math.floor(iterations));
+  let dominantColor: RgbColor | null = null;
+  for (let iteration = 0; iteration < totalIterations; iteration += 1) {
+    const sampleStep = Math.max(1, Math.floor(Math.max(right - left, bottom - top) / 48));
+    if (!dominantColor) {
+      const buckets: Array<{ color: RgbColor; count: number }> = [];
+      const bucketJoinThresholdSq = 20 * 20;
 
-  for (let y = top; y < bottom; y += sampleStep) {
-    for (let x = left; x < right; x += sampleStep) {
-      const index = getIndex(x, y);
-      if (data[index + 3] < 24) continue;
-      const color = { r: data[index], g: data[index + 1], b: data[index + 2] };
+      for (let y = top; y < bottom; y += sampleStep) {
+        for (let x = left; x < right; x += sampleStep) {
+          const index = getIndex(x, y);
+          if (data[index + 3] < 24) continue;
+          const color = { r: data[index], g: data[index + 1], b: data[index + 2] };
 
-      let bestBucket: { color: RgbColor; count: number } | null = null;
-      let bestDistance = Number.POSITIVE_INFINITY;
-      for (const bucket of buckets) {
-        const distance = colorDistanceSq(color, bucket.color);
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          bestBucket = bucket;
+          let bestBucket: { color: RgbColor; count: number } | null = null;
+          let bestDistance = Number.POSITIVE_INFINITY;
+          for (const bucket of buckets) {
+            const distance = colorDistanceSq(color, bucket.color);
+            if (distance < bestDistance) {
+              bestDistance = distance;
+              bestBucket = bucket;
+            }
+          }
+
+          if (!bestBucket || bestDistance > bucketJoinThresholdSq) {
+            buckets.push({ color, count: 1 });
+          } else {
+            const nextCount = bestBucket.count + 1;
+            bestBucket.color = {
+              r: (bestBucket.color.r * bestBucket.count + color.r) / nextCount,
+              g: (bestBucket.color.g * bestBucket.count + color.g) / nextCount,
+              b: (bestBucket.color.b * bestBucket.count + color.b) / nextCount
+            };
+            bestBucket.count = nextCount;
+          }
         }
       }
 
-      if (!bestBucket || bestDistance > bucketJoinThresholdSq) {
-        buckets.push({ color, count: 1 });
-      } else {
-        const nextCount = bestBucket.count + 1;
-        bestBucket.color = {
-          r: (bestBucket.color.r * bestBucket.count + color.r) / nextCount,
-          g: (bestBucket.color.g * bestBucket.count + color.g) / nextCount,
-          b: (bestBucket.color.b * bestBucket.count + color.b) / nextCount
+      if (buckets.length === 0) {
+        return canvas.toDataURL('image/png');
+      }
+
+      const dominantBucket = buckets.sort((a, b) => b.count - a.count)[0];
+      dominantColor = {
+        r: clampChannel(dominantBucket.color.r),
+        g: clampChannel(dominantBucket.color.g),
+        b: clampChannel(dominantBucket.color.b)
+      };
+    }
+
+    const colorThresholdSq = threshold * threshold;
+    const regionWidth = right - left;
+    const regionHeight = bottom - top;
+    const replacedMask = new Uint8Array(regionWidth * regionHeight);
+    const maskIndex = (x: number, y: number) => (y - top) * regionWidth + (x - left);
+
+    for (let y = top; y < bottom; y += 1) {
+      for (let x = left; x < right; x += 1) {
+        const index = getIndex(x, y);
+        if (data[index + 3] < 24) continue;
+        const current: RgbColor = {
+          r: data[index],
+          g: data[index + 1],
+          b: data[index + 2]
         };
-        bestBucket.count = nextCount;
+        const alreadyTarget =
+          current.r === targetColor.r &&
+          current.g === targetColor.g &&
+          current.b === targetColor.b;
+        if (alreadyTarget) {
+          replacedMask[maskIndex(x, y)] = 1;
+          continue;
+        }
+        if (colorDistanceSq(current, dominantColor) > colorThresholdSq) continue;
+
+        data[index] = targetColor.r;
+        data[index + 1] = targetColor.g;
+        data[index + 2] = targetColor.b;
+        replacedMask[maskIndex(x, y)] = 1;
       }
     }
-  }
 
-  if (buckets.length === 0) {
-    return canvas.toDataURL('image/png');
-  }
+    for (let pass = 0; pass < 2; pass += 1) {
+      const nextMask = new Uint8Array(replacedMask);
+      for (let y = top; y < bottom; y += 1) {
+        for (let x = left; x < right; x += 1) {
+          const localIndex = maskIndex(x, y);
+          if (replacedMask[localIndex]) continue;
+          const pixelIndex = getIndex(x, y);
+          if (data[pixelIndex + 3] < 24) continue;
 
-  const dominantBucket = buckets.sort((a, b) => b.count - a.count)[0];
-  const dominantColor: RgbColor = {
-    r: clampChannel(dominantBucket.color.r),
-    g: clampChannel(dominantBucket.color.g),
-    b: clampChannel(dominantBucket.color.b)
-  };
-  const colorThresholdSq = 32 * 32;
-  const shadingRetention = 0.22;
+          let replacedNeighbors = 0;
+          let availableNeighbors = 0;
+          const neighbors = [
+            [x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1],
+            [x - 1, y - 1], [x + 1, y - 1], [x - 1, y + 1], [x + 1, y + 1]
+          ] as const;
+          for (const [nx, ny] of neighbors) {
+            if (nx < left || nx >= right || ny < top || ny >= bottom) {
+              continue;
+            }
+            availableNeighbors += 1;
+            if (replacedMask[maskIndex(nx, ny)]) {
+              replacedNeighbors += 1;
+            }
+          }
+          if (availableNeighbors === 0 || replacedNeighbors / availableNeighbors < 0.55) continue;
 
-  for (let y = top; y < bottom; y += 1) {
-    for (let x = left; x < right; x += 1) {
-      const index = getIndex(x, y);
-      if (data[index + 3] < 24) continue;
-      const current: RgbColor = {
-        r: data[index],
-        g: data[index + 1],
-        b: data[index + 2]
-      };
-      if (colorDistanceSq(current, dominantColor) > colorThresholdSq) continue;
-
-      data[index] = clampChannel(targetColor.r + (current.r - dominantColor.r) * shadingRetention);
-      data[index + 1] = clampChannel(targetColor.g + (current.g - dominantColor.g) * shadingRetention);
-      data[index + 2] = clampChannel(targetColor.b + (current.b - dominantColor.b) * shadingRetention);
+          data[pixelIndex] = targetColor.r;
+          data[pixelIndex + 1] = targetColor.g;
+          data[pixelIndex + 2] = targetColor.b;
+          nextMask[localIndex] = 1;
+        }
+      }
+      replacedMask.set(nextMask);
     }
   }
 
@@ -655,6 +795,8 @@ const App: React.FC = () => {
   const [selectedRefineColorGroupId, setSelectedRefineColorGroupId] = useState<string | null>(null);
   const [isApplyingRefineColorSet, setIsApplyingRefineColorSet] = useState(false);
   const [refineColorSetError, setRefineColorSetError] = useState('');
+  const [refineColorThreshold, setRefineColorThreshold] = useState(40);
+  const [refineColorIterations, setRefineColorIterations] = useState(2);
   const [refinePreviewImageUrl, setRefinePreviewImageUrl] = useState<string | null>(null);
   const [selectedRefinePaintColor, setSelectedRefinePaintColor] = useState<string | null>(null);
   const [isRefineBucketMode, setIsRefineBucketMode] = useState(false);
@@ -5175,7 +5317,12 @@ Return ONLY valid JSON in the format:
         nameSuffix: selectedRefineColorGroup.name?.trim() || 'Recolored'
       });
 
-      const recoloredImageUrl = await recolorPosterBlocksWithPalette(sourceImageUrl, selectedRefineColorGroup.colors);
+      const recoloredImageUrl = await recolorPosterBlocksWithPalette(
+        sourceImageUrl,
+        selectedRefineColorGroup.colors,
+        refineColorThreshold,
+        refineColorIterations
+      );
       updatePosterArtboard(derivedId, (ab) => ({
         ...ab,
         posterData: {
@@ -5210,6 +5357,8 @@ Return ONLY valid JSON in the format:
     activePosterId,
     artboards,
     createDerivedArtboard,
+    refineColorIterations,
+    refineColorThreshold,
     selectedRefineColorGroup,
     updatePosterArtboard
   ]);
@@ -5223,7 +5372,13 @@ Return ONLY valid JSON in the format:
     setRefineColorSetError('');
     setIsApplyingBucketFill(true);
     try {
-      const nextPreview = await recolorRectRegionByDominantColor(currentRefinePosterImageUrl, rect, selectedRefinePaintColor);
+      const nextPreview = await recolorRectRegionByDominantColor(
+        currentRefinePosterImageUrl,
+        rect,
+        selectedRefinePaintColor,
+        refineColorThreshold,
+        refineColorIterations
+      );
       setRefinePreviewImageUrl(nextPreview);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to recolor this region.';
@@ -5231,7 +5386,7 @@ Return ONLY valid JSON in the format:
     } finally {
       setIsApplyingBucketFill(false);
     }
-  }, [currentRefinePosterImageUrl, selectedRefinePaintColor]);
+  }, [currentRefinePosterImageUrl, refineColorIterations, refineColorThreshold, selectedRefinePaintColor]);
 
   const handleAnalyzeRefineRectangles = useCallback(async () => {
     if (!currentRefinePosterImageUrl) {
@@ -8442,6 +8597,42 @@ Return ONLY valid JSON in the format:
                       </button>
                     </div>
                   ) : null}
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                    <div className="flex items-center justify-between text-[11px] text-slate-500">
+                      <span>Threshold</span>
+                      <span className="font-semibold text-slate-700">{refineColorThreshold}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="24"
+                      max="72"
+                      step="2"
+                      value={refineColorThreshold}
+                      onChange={(event) => setRefineColorThreshold(Number(event.target.value))}
+                      className="mt-2 w-full accent-slate-700"
+                    />
+                    <div className="mt-1 text-[10px] text-slate-400">
+                      Higher values replace a broader range of nearby colors.
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                    <div className="flex items-center justify-between text-[11px] text-slate-500">
+                      <span>Iterations</span>
+                      <span className="font-semibold text-slate-700">{refineColorIterations}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="1"
+                      max="5"
+                      step="1"
+                      value={refineColorIterations}
+                      onChange={(event) => setRefineColorIterations(Number(event.target.value))}
+                      className="mt-2 w-full accent-slate-700"
+                    />
+                    <div className="mt-1 text-[10px] text-slate-400">
+                      Detect rectangles once, then recolor those same regions repeatedly.
+                    </div>
+                  </div>
                   {refineColorSetError && (
                     <div className="text-[11px] text-rose-600">{refineColorSetError}</div>
                   )}
