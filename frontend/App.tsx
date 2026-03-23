@@ -712,6 +712,150 @@ const recolorRectRegionByPalette = async (
   return canvas.toDataURL('image/png');
 };
 
+const recolorConnectedRegionByClosestPaletteColor = async (
+  sourceUrl: string,
+  point: { x: number; y: number },
+  paletteHexes: string[],
+  threshold = 40,
+  iterations = 4
+) => {
+  const palette = paletteHexes
+    .map(hexToRgbColor)
+    .filter((color): color is RgbColor => Boolean(color));
+  if (palette.length === 0) {
+    throw new Error('Color set is empty.');
+  }
+
+  const image = await loadImageFromUrl(sourceUrl);
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw new Error('Canvas is not available.');
+  }
+
+  context.drawImage(image, 0, 0, width, height);
+  const imageData = context.getImageData(0, 0, width, height);
+  const { data } = imageData;
+  const getIndex = (x: number, y: number) => (y * width + x) * 4;
+  const px = Math.max(0, Math.min(width - 1, Math.round(point.x)));
+  const py = Math.max(0, Math.min(height - 1, Math.round(point.y)));
+  const seedIndex = getIndex(px, py);
+  if (data[seedIndex + 3] < 24) {
+    return canvas.toDataURL('image/png');
+  }
+
+  const seedColor: RgbColor = {
+    r: data[seedIndex],
+    g: data[seedIndex + 1],
+    b: data[seedIndex + 2]
+  };
+  const closestPaletteColor = palette.reduce((best, color) => (
+    colorDistanceSq(seedColor, color) < colorDistanceSq(seedColor, best) ? color : best
+  ), palette[0]);
+  const isSeedAlreadyTarget =
+    seedColor.r === closestPaletteColor.r &&
+    seedColor.g === closestPaletteColor.g &&
+    seedColor.b === closestPaletteColor.b;
+  if (isSeedAlreadyTarget) {
+    return canvas.toDataURL('image/png');
+  }
+
+  const totalIterations = Math.max(1, Math.floor(iterations));
+  const baseThresholdSq = threshold * threshold;
+  const visited = new Uint8Array(width * height);
+  const replacedMask = new Uint8Array(width * height);
+  const queue: Array<[number, number]> = [[px, py]];
+  visited[py * width + px] = 1;
+  let minX = px;
+  let maxX = px;
+  let minY = py;
+  let maxY = py;
+
+  while (queue.length > 0) {
+    const [x, y] = queue.shift()!;
+    const index = getIndex(x, y);
+    if (data[index + 3] < 24) continue;
+    const current: RgbColor = { r: data[index], g: data[index + 1], b: data[index + 2] };
+    if (colorDistanceSq(current, seedColor) > baseThresholdSq) continue;
+
+    data[index] = closestPaletteColor.r;
+    data[index + 1] = closestPaletteColor.g;
+    data[index + 2] = closestPaletteColor.b;
+    replacedMask[y * width + x] = 1;
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+
+    const neighbors = [
+      [x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]
+    ] as const;
+    for (const [nx, ny] of neighbors) {
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+      const visitIndex = ny * width + nx;
+      if (visited[visitIndex]) continue;
+      visited[visitIndex] = 1;
+      queue.push([nx, ny]);
+    }
+  }
+
+  if (maxX < minX || maxY < minY) {
+    return canvas.toDataURL('image/png');
+  }
+
+  for (let iteration = 1; iteration < totalIterations; iteration += 1) {
+    const nextMask = new Uint8Array(replacedMask);
+    const expandedThresholdSq = (threshold + Math.min(12, iteration * 3)) ** 2;
+    for (let y = Math.max(0, minY - 1); y <= Math.min(height - 1, maxY + 1); y += 1) {
+      for (let x = Math.max(0, minX - 1); x <= Math.min(width - 1, maxX + 1); x += 1) {
+        const maskIndex = y * width + x;
+        if (replacedMask[maskIndex]) continue;
+        const pixelIndex = getIndex(x, y);
+        if (data[pixelIndex + 3] < 24) continue;
+
+        let replacedNeighbors = 0;
+        let availableNeighbors = 0;
+        const neighbors = [
+          [x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1],
+          [x - 1, y - 1], [x + 1, y - 1], [x - 1, y + 1], [x + 1, y + 1]
+        ] as const;
+        for (const [nx, ny] of neighbors) {
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+          availableNeighbors += 1;
+          if (replacedMask[ny * width + nx]) {
+            replacedNeighbors += 1;
+          }
+        }
+        if (availableNeighbors === 0 || replacedNeighbors / availableNeighbors < 0.45) continue;
+
+        const current: RgbColor = {
+          r: data[pixelIndex],
+          g: data[pixelIndex + 1],
+          b: data[pixelIndex + 2]
+        };
+        if (colorDistanceSq(current, seedColor) > expandedThresholdSq) continue;
+
+        data[pixelIndex] = closestPaletteColor.r;
+        data[pixelIndex + 1] = closestPaletteColor.g;
+        data[pixelIndex + 2] = closestPaletteColor.b;
+        nextMask[maskIndex] = 1;
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    replacedMask.set(nextMask);
+  }
+
+  context.putImageData(imageData, 0, 0);
+  return canvas.toDataURL('image/png');
+};
+
 const recolorConnectedRegionBySeedColor = async (
   sourceUrl: string,
   point: { x: number; y: number },
@@ -5385,6 +5529,7 @@ const App: React.FC = () => {
     if (isRefineBucketMode) {
       const rectDraft = annotationDraft;
       const shouldUseManualRect = Boolean(rectDraft && rectDraft.width > 6 && rectDraft.height > 6);
+      const clickPoint = annotationStartRef.current;
       setAnnotationDraft(null);
       setIsAnnotating(false);
       annotationStartRef.current = null;
@@ -5395,6 +5540,8 @@ const App: React.FC = () => {
           width: rectDraft.width,
           height: rectDraft.height
         });
+      } else if (clickPoint) {
+        void handleBucketFillPointSelection(clickPoint);
       }
       return;
     }
@@ -5614,6 +5761,32 @@ Return ONLY valid JSON in the format:
       setIsApplyingBucketFill(false);
     }
   }, [currentRefinePosterImageUrl, refineColorThreshold, selectedRefineColorGroup]);
+
+  const handleBucketFillPointSelection = useCallback(async (point: { x: number; y: number }) => {
+    if (!selectedRefineColorGroup || selectedRefineColorGroup.colors.length === 0 || !currentRefinePosterImageUrl) {
+      setRefineColorSetError('Choose a color set first.');
+      return;
+    }
+
+    setRefineColorSetError('');
+    setIsApplyingBucketFill(true);
+    try {
+      const nextPreview = await recolorConnectedRegionByClosestPaletteColor(
+        currentRefinePosterImageUrl,
+        point,
+        selectedRefineColorGroup.colors,
+        refineColorThreshold,
+        refineColorIterations
+      );
+      setDetectedRefineRectangles([]);
+      setRefinePreviewImageUrl(nextPreview);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to recolor this region.';
+      setRefineColorSetError(message);
+    } finally {
+      setIsApplyingBucketFill(false);
+    }
+  }, [currentRefinePosterImageUrl, refineColorIterations, refineColorThreshold, selectedRefineColorGroup]);
 
   const handleAnalyzeRefineRectangles = useCallback(async () => {
     if (!currentRefinePosterImageUrl) {
@@ -8857,7 +9030,7 @@ Return ONLY valid JSON in the format:
                   {selectedRefineColorGroup?.colors.length ? (
                     <div className="flex items-center justify-between text-[11px] text-slate-500">
                       <span>
-                        Fill mode uses drag-to-select only and maps the whole rectangle with the current color set.
+                        Click fills the connected region from the sampled color. Drag still remaps the whole rectangle with the current color set.
                       </span>
                       <button
                         type="button"
