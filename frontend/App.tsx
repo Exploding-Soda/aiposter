@@ -95,6 +95,192 @@ const pickLogoForModel = (preferred: string | null, fallback: string | null) => 
   return preferred ?? fallback ?? null;
 };
 
+type RgbColor = { r: number; g: number; b: number };
+
+const hexToRgbColor = (hex: string): RgbColor | null => {
+  const normalized = hex.trim().replace('#', '');
+  if (!/^[0-9A-Fa-f]{6}$/.test(normalized)) return null;
+  return {
+    r: Number.parseInt(normalized.slice(0, 2), 16),
+    g: Number.parseInt(normalized.slice(2, 4), 16),
+    b: Number.parseInt(normalized.slice(4, 6), 16)
+  };
+};
+
+const clampChannel = (value: number) => Math.max(0, Math.min(255, Math.round(value)));
+
+const colorDistanceSq = (a: RgbColor, b: RgbColor) => {
+  const dr = a.r - b.r;
+  const dg = a.g - b.g;
+  const db = a.b - b.b;
+  return dr * dr + dg * dg + db * db;
+};
+
+const loadImageFromUrl = async (sourceUrl: string) => {
+  const response = await fetch(normalizeSecureImageUrl(sourceUrl));
+  if (!response.ok) {
+    throw new Error(`Failed to load poster image (${response.status})`);
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Failed to decode poster image.'));
+      img.src = objectUrl;
+    });
+    return image;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+};
+
+const recolorPosterBlocksWithPalette = async (sourceUrl: string, paletteHexes: string[]) => {
+  const palette = paletteHexes
+    .map(hexToRgbColor)
+    .filter((color): color is RgbColor => Boolean(color));
+
+  if (palette.length === 0) {
+    throw new Error('Color set is empty.');
+  }
+
+  const image = await loadImageFromUrl(sourceUrl);
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw new Error('Canvas is not available.');
+  }
+
+  context.drawImage(image, 0, 0, width, height);
+  const imageData = context.getImageData(0, 0, width, height);
+  const { data } = imageData;
+
+  const getIndex = (x: number, y: number) => (y * width + x) * 4;
+  const getColorAt = (x: number, y: number): RgbColor => {
+    const index = getIndex(x, y);
+    return { r: data[index], g: data[index + 1], b: data[index + 2] };
+  };
+
+  const measureFlatness = (x: number, y: number) => {
+    const center = getColorAt(x, y);
+    const neighbors = [
+      getColorAt(x - 1, y),
+      getColorAt(x + 1, y),
+      getColorAt(x, y - 1),
+      getColorAt(x, y + 1)
+    ];
+    return neighbors.reduce((sum, neighbor) => {
+      return sum + Math.sqrt(colorDistanceSq(center, neighbor));
+    }, 0) / neighbors.length;
+  };
+
+  const sampleStep = Math.max(2, Math.floor(Math.max(width, height) / 360));
+  const bucketJoinThresholdSq = 24 * 24;
+  const buckets: Array<{ color: RgbColor; count: number }> = [];
+  let candidateSamples = 0;
+
+  for (let y = 1; y < height - 1; y += sampleStep) {
+    for (let x = 1; x < width - 1; x += sampleStep) {
+      const alpha = data[getIndex(x, y) + 3];
+      if (alpha < 220) continue;
+      if (measureFlatness(x, y) > 20) continue;
+
+      candidateSamples += 1;
+      const color = getColorAt(x, y);
+      let bestBucket: { color: RgbColor; count: number } | null = null;
+      let bestDistance = Number.POSITIVE_INFINITY;
+
+      for (const bucket of buckets) {
+        const distance = colorDistanceSq(color, bucket.color);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestBucket = bucket;
+        }
+      }
+
+      if (!bestBucket || bestDistance > bucketJoinThresholdSq) {
+        buckets.push({ color, count: 1 });
+      } else {
+        const nextCount = bestBucket.count + 1;
+        bestBucket.color = {
+          r: (bestBucket.color.r * bestBucket.count + color.r) / nextCount,
+          g: (bestBucket.color.g * bestBucket.count + color.g) / nextCount,
+          b: (bestBucket.color.b * bestBucket.count + color.b) / nextCount
+        };
+        bestBucket.count = nextCount;
+      }
+    }
+  }
+
+  const meaningfulBuckets = buckets
+    .filter((bucket) => bucket.count >= Math.max(12, candidateSamples * 0.04))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, Math.max(4, palette.length * 2))
+    .map((bucket) => ({
+      source: {
+        r: clampChannel(bucket.color.r),
+        g: clampChannel(bucket.color.g),
+        b: clampChannel(bucket.color.b)
+      },
+      target: palette.reduce((best, paletteColor) => (
+        colorDistanceSq(bucket.color, paletteColor) < colorDistanceSq(bucket.color, best)
+          ? paletteColor
+          : best
+      ), palette[0]),
+      count: bucket.count
+    }));
+
+  if (meaningfulBuckets.length === 0) {
+    return canvas.toDataURL('image/png');
+  }
+
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
+      const index = getIndex(x, y);
+      if (data[index + 3] < 220) continue;
+      if (measureFlatness(x, y) > 24) continue;
+
+      const original = getColorAt(x, y);
+      let bestBucket = meaningfulBuckets[0];
+      let bestDistance = colorDistanceSq(original, bestBucket.source);
+
+      for (let i = 1; i < meaningfulBuckets.length; i += 1) {
+        const candidate = meaningfulBuckets[i];
+        const distance = colorDistanceSq(original, candidate.source);
+        if (distance < bestDistance) {
+          bestBucket = candidate;
+          bestDistance = distance;
+        }
+      }
+
+      if (bestDistance > 34 * 34) continue;
+
+      let matchingNeighbors = 0;
+      const neighborOffsets = [[-1, 0], [1, 0], [0, -1], [0, 1]] as const;
+      for (const [dx, dy] of neighborOffsets) {
+        const neighbor = getColorAt(x + dx, y + dy);
+        if (colorDistanceSq(neighbor, bestBucket.source) <= 36 * 36) {
+          matchingNeighbors += 1;
+        }
+      }
+      if (matchingNeighbors < 2) continue;
+
+      const retain = 0.35;
+      data[index] = clampChannel(bestBucket.target.r + (original.r - bestBucket.source.r) * retain);
+      data[index + 1] = clampChannel(bestBucket.target.g + (original.g - bestBucket.source.g) * retain);
+      data[index + 2] = clampChannel(bestBucket.target.b + (original.b - bestBucket.source.b) * retain);
+    }
+  }
+
+  context.putImageData(imageData, 0, 0);
+  return canvas.toDataURL('image/png');
+};
+
 type Rect = { left: number; top: number; right: number; bottom: number };
 type AnnotationColor = 'red' | 'green' | 'purple';
 type AnnotationTool = 'rect' | 'arrow' | 'pan';
@@ -121,6 +307,12 @@ type LogoItem = {
   png?: string;
   webp: string;
   filename: string;
+};
+type PrimaryColorGroupItem = {
+  id: string;
+  name?: string | null;
+  colors: string[];
+  created_at: string;
 };
 type FontReferenceItem = {
   id: string;
@@ -278,6 +470,11 @@ const App: React.FC = () => {
   const [fontReferencesLoading, setFontReferencesLoading] = useState(false);
   const [fontReferencesError, setFontReferencesError] = useState('');
   const [selectedFontReferenceId, setSelectedFontReferenceId] = useState<string | null>(null);
+  const [primaryColorGroups, setPrimaryColorGroups] = useState<PrimaryColorGroupItem[]>([]);
+  const [primaryColorGroupsLoading, setPrimaryColorGroupsLoading] = useState(false);
+  const [selectedRefineColorGroupId, setSelectedRefineColorGroupId] = useState<string | null>(null);
+  const [isApplyingRefineColorSet, setIsApplyingRefineColorSet] = useState(false);
+  const [refineColorSetError, setRefineColorSetError] = useState('');
   const missingReferenceStyleIdsRef = useRef<Set<string>>(new Set());
   const missingLogoAssetIdsRef = useRef<Set<string>>(new Set());
   const missingFontReferenceIdsRef = useRef<Set<string>>(new Set());
@@ -287,6 +484,7 @@ const App: React.FC = () => {
   const referenceStylesLoadedOnceRef = useRef(false);
   const logoAssetsLoadedOnceRef = useRef(false);
   const fontReferencesLoadedOnceRef = useRef(false);
+  const primaryColorGroupsLoadedOnceRef = useRef(false);
   const lastBoardAssetsRefreshRef = useRef<{ projectId: string | null; at: number }>({ projectId: null, at: 0 });
   const createCanvasButtonRef = useRef<HTMLButtonElement | null>(null);
   const boardReferenceSectionRef = useRef<HTMLDivElement | null>(null);
@@ -947,6 +1145,7 @@ const App: React.FC = () => {
   const openPosterModal = useCallback((artboardId: string) => {
     setActivePosterId(artboardId);
     setPosterFeedback('');
+    setRefineColorSetError('');
     setIsPosterModalOpen(true);
   }, []);
 
@@ -955,6 +1154,7 @@ const App: React.FC = () => {
   const boardHeight = activeProject?.height ?? DEFAULT_BOARD_HEIGHT;
   const activePosterArtboard = artboards.find(ab => ab.id === activePosterId);
   const activePoster = activePosterArtboard?.posterData;
+  const selectedRefineColorGroup = primaryColorGroups.find((group) => group.id === selectedRefineColorGroupId) || null;
   const annotatorAspectRatio = (() => {
     if (annotatorImage) {
       const imageWidth = annotatorImage.naturalWidth || annotatorImage.width;
@@ -2513,6 +2713,7 @@ const App: React.FC = () => {
 
   const handleClosePosterModal = () => {
     setIsPosterModalClosing(true);
+    setRefineColorSetError('');
     setTimeout(() => {
       setIsPosterModalOpen(false);
       setIsPosterModalClosing(false);
@@ -2681,6 +2882,36 @@ const App: React.FC = () => {
     } finally {
       setFontReferencesLoading(false);
       fontReferencesLoadedOnceRef.current = true;
+    }
+  }, [authUser]);
+
+  const loadPrimaryColorGroups = useCallback(async () => {
+    if (!authUser) {
+      setPrimaryColorGroups([]);
+      primaryColorGroupsLoadedOnceRef.current = true;
+      return;
+    }
+    setPrimaryColorGroupsLoading(true);
+    try {
+      const response = await fetchWithAuth(`${BACKEND_API}/primary-colors`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load color groups';
+        throw new Error(message);
+      }
+      const items = Array.isArray(data.items) ? data.items : [];
+      setPrimaryColorGroups(items);
+      setSelectedRefineColorGroupId((prev) => {
+        if (prev && items.some((item: PrimaryColorGroupItem) => item.id === prev)) {
+          return prev;
+        }
+        return items[0]?.id ?? null;
+      });
+    } catch (err) {
+      console.warn('Failed to load color groups for board', err);
+    } finally {
+      setPrimaryColorGroupsLoading(false);
+      primaryColorGroupsLoadedOnceRef.current = true;
     }
   }, [authUser]);
 
@@ -3021,21 +3252,7 @@ const App: React.FC = () => {
 
   const confirmArtboardDeletion = useCallback((artboardIds: string[]) => {
     const targets = artboards.filter((artboard) => artboardIds.includes(artboard.id));
-    if (!targets.length) return false;
-
-    for (const artboard of targets) {
-      const expectedName = artboard.name.trim();
-      const typedName = window.prompt(`请输入画板名 “${expectedName}” 以确认删除`);
-      if (typedName === null) {
-        return false;
-      }
-      if (typedName.trim() !== expectedName) {
-        window.alert(`画板名不匹配，已取消删除：${expectedName}`);
-        return false;
-      }
-    }
-
-    return true;
+    return targets.length > 0;
   }, [artboards]);
 
   const renderSidebarAccountSection = () => (
@@ -4670,6 +4887,73 @@ Return ONLY valid JSON in the format:
     return derivedId;
   }, []);
 
+  const handleApplyRefineColorSet = useCallback(async () => {
+    if (!activePosterId) return;
+    if (!selectedRefineColorGroup || selectedRefineColorGroup.colors.length === 0) {
+      setRefineColorSetError('Choose a color set first.');
+      return;
+    }
+
+    const currentArtboard = artboards.find((ab) => ab.id === activePosterId);
+    const currentPoster = currentArtboard?.posterData;
+    const sourceImageUrl = currentPoster?.imageUrlMerged || currentPoster?.imageUrl;
+    if (!currentArtboard || !currentPoster || !sourceImageUrl) {
+      setRefineColorSetError('Poster image is missing.');
+      return;
+    }
+
+    setRefineColorSetError('');
+    setIsApplyingRefineColorSet(true);
+    let derivedId: string | null = null;
+
+    try {
+      derivedId = createDerivedArtboard(currentArtboard, {
+        ...currentPoster,
+        status: 'generating'
+      }, {
+        x: currentArtboard.x + currentArtboard.width + ARTBOARD_GAP,
+        nameSuffix: selectedRefineColorGroup.name?.trim() || 'Recolored'
+      });
+
+      const recoloredImageUrl = await recolorPosterBlocksWithPalette(sourceImageUrl, selectedRefineColorGroup.colors);
+      updatePosterArtboard(derivedId, (ab) => ({
+        ...ab,
+        posterData: {
+          ...ab.posterData!,
+          accentColor: selectedRefineColorGroup.colors[0] || ab.posterData!.accentColor,
+          imageUrl: recoloredImageUrl,
+          imageUrlMerged: recoloredImageUrl,
+          imageUrlNoText: undefined,
+          status: 'completed',
+          taskId: undefined
+        }
+      }));
+      handleClosePosterModal();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to apply color set.';
+      if (derivedId) {
+        updatePosterArtboard(derivedId, (ab) => ({
+          ...ab,
+          posterData: {
+            ...ab.posterData!,
+            status: 'error',
+            error: message,
+            taskId: undefined
+          }
+        }));
+      }
+      setRefineColorSetError(message);
+    } finally {
+      setIsApplyingRefineColorSet(false);
+    }
+  }, [
+    activePosterId,
+    artboards,
+    createDerivedArtboard,
+    selectedRefineColorGroup,
+    updatePosterArtboard
+  ]);
+
   const handleRefinePoster = async () => {
     if (!activePosterId) return;
     if (!editablePoster) return;
@@ -5396,13 +5680,15 @@ Return ONLY valid JSON in the format:
     void loadReferenceStyles();
     void loadLogoAssets();
     void loadFontReferences();
+    void loadPrimaryColorGroups();
   }, [
     isOnBoardRoute,
     activeProjectId,
     authUser,
     loadReferenceStyles,
     loadLogoAssets,
-    loadFontReferences
+    loadFontReferences,
+    loadPrimaryColorGroups
   ]);
 
   const dismissDashboardOnboarding = useCallback(() => {
@@ -7730,6 +8016,58 @@ Return ONLY valid JSON in the format:
                     </button>
                   </div>
                 )}
+                <div className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Color Set</label>
+                    {primaryColorGroupsLoading && (
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Loading</span>
+                    )}
+                  </div>
+                  <select
+                    value={selectedRefineColorGroupId ?? ''}
+                    onChange={(event) => {
+                      setSelectedRefineColorGroupId(event.target.value || null);
+                      setRefineColorSetError('');
+                    }}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 outline-none focus:border-slate-400"
+                    disabled={primaryColorGroupsLoading || primaryColorGroups.length === 0}
+                  >
+                    {primaryColorGroups.length === 0 ? (
+                      <option value="">No color sets available</option>
+                    ) : (
+                      primaryColorGroups.map((group) => (
+                        <option key={group.id} value={group.id}>
+                          {group.name?.trim() || 'Color Set'}{group.colors.length ? ` (${group.colors.length})` : ' (Empty)'}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                  {selectedRefineColorGroup && (
+                    <div className="flex items-center gap-2">
+                      {selectedRefineColorGroup.colors.length > 0 ? selectedRefineColorGroup.colors.map((color, index) => (
+                        <div
+                          key={`${selectedRefineColorGroup.id}-${color}-${index}`}
+                          className="h-7 flex-1 rounded-lg border border-black/5"
+                          style={{ backgroundColor: color }}
+                          title={color}
+                        />
+                      )) : (
+                        <div className="text-[11px] text-slate-400">Empty color set</div>
+                      )}
+                    </div>
+                  )}
+                  {refineColorSetError && (
+                    <div className="text-[11px] text-rose-600">{refineColorSetError}</div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleApplyRefineColorSet}
+                    disabled={isApplyingRefineColorSet || !selectedRefineColorGroup}
+                    className="w-full rounded-xl border border-slate-200 bg-white py-2 text-[11px] font-bold uppercase tracking-widest text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isApplyingRefineColorSet ? 'Applying Color Set...' : 'Apply Color Set'}
+                  </button>
+                </div>
                 <button
                   onClick={handleRefinePoster}
                   disabled={isRefiningPoster || (annotations.length === 0 && !posterFeedback.trim())}
