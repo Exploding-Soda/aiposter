@@ -8568,7 +8568,7 @@ Return ONLY valid JSON in the format:
                   />
                 </div>
               </div>
-              <div className="space-y-4">
+              <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
                 {annotations.length > 0 ? (
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
