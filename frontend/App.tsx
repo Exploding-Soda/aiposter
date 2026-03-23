@@ -651,80 +651,79 @@ const recolorRectRegionByPalette = async (
     return canvas.toDataURL('image/png');
   }
 
-  const sampleStep = Math.max(1, Math.floor(Math.max(right - left, bottom - top) / 48));
-  const buckets: Array<{ color: RgbColor; count: number; target: RgbColor }> = [];
-  const bucketJoinThresholdSq = 20 * 20;
   const thresholdSq = threshold * threshold;
+  const colorCounts = new Map<string, { color: RgbColor; count: number }>();
 
-  for (let y = top; y < bottom; y += sampleStep) {
-    for (let x = left; x < right; x += sampleStep) {
+  for (let y = top; y < bottom; y += 1) {
+    for (let x = left; x < right; x += 1) {
       const index = getIndex(x, y);
       if (data[index + 3] < 24) continue;
-      const color = { r: data[index], g: data[index + 1], b: data[index + 2] };
-
-      let bestPalette = palette[0];
-      let bestPaletteDistance = colorDistanceSq(color, palette[0]);
-      for (let i = 1; i < palette.length; i += 1) {
-        const distance = colorDistanceSq(color, palette[i]);
-        if (distance < bestPaletteDistance) {
-          bestPaletteDistance = distance;
-          bestPalette = palette[i];
-        }
-      }
-      if (bestPaletteDistance > thresholdSq) continue;
-
-      let bestBucket: { color: RgbColor; count: number; target: RgbColor } | null = null;
-      let bestBucketDistance = Number.POSITIVE_INFINITY;
-      for (const bucket of buckets) {
-        const distance = colorDistanceSq(color, bucket.color);
-        if (distance < bestBucketDistance) {
-          bestBucketDistance = distance;
-          bestBucket = bucket;
-        }
-      }
-
-      if (!bestBucket || bestBucketDistance > bucketJoinThresholdSq || colorDistanceSq(bestBucket.target, bestPalette) > 1) {
-        buckets.push({ color, count: 1, target: bestPalette });
+      const color: RgbColor = { r: data[index], g: data[index + 1], b: data[index + 2] };
+      const key = `${color.r},${color.g},${color.b}`;
+      const existing = colorCounts.get(key);
+      if (existing) {
+        existing.count += 1;
       } else {
-        const nextCount = bestBucket.count + 1;
-        bestBucket.color = {
-          r: (bestBucket.color.r * bestBucket.count + color.r) / nextCount,
-          g: (bestBucket.color.g * bestBucket.count + color.g) / nextCount,
-          b: (bestBucket.color.b * bestBucket.count + color.b) / nextCount
-        };
-        bestBucket.count = nextCount;
+        colorCounts.set(key, { color, count: 1 });
       }
     }
   }
 
-  if (buckets.length === 0) {
+  const dominantColors = Array.from(colorCounts.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 2)
+    .map((entry) => entry.color);
+
+  if (dominantColors.length === 0) {
     return canvas.toDataURL('image/png');
+  }
+  if (dominantColors.length === 1) {
+    dominantColors.push(dominantColors[0]);
   }
 
   for (let y = top; y < bottom; y += 1) {
     for (let x = left; x < right; x += 1) {
       const index = getIndex(x, y);
       if (data[index + 3] < 24) continue;
+      const color = { r: data[index], g: data[index + 1], b: data[index + 2] };
+
+      const firstDistance = colorDistanceSq(color, dominantColors[0]);
+      const secondDistance = colorDistanceSq(color, dominantColors[1]);
+      const normalized = firstDistance <= secondDistance ? dominantColors[0] : dominantColors[1];
+      data[index] = normalized.r;
+      data[index + 1] = normalized.g;
+      data[index + 2] = normalized.b;
+    }
+  }
+
+  const normalizedTargets = dominantColors.map((dominantColor) => {
+    const target = palette.reduce((best, paletteColor) => (
+      colorDistanceSq(dominantColor, paletteColor) < colorDistanceSq(dominantColor, best)
+        ? paletteColor
+        : best
+    ), palette[0]);
+    return {
+      source: dominantColor,
+      target,
+      allowed: colorDistanceSq(dominantColor, target) <= thresholdSq
+    };
+  });
+
+  for (let y = top; y < bottom; y += 1) {
+    for (let x = left; x < right; x += 1) {
+      const index = getIndex(x, y);
+      if (data[index + 3] < 24) continue;
       const current: RgbColor = { r: data[index], g: data[index + 1], b: data[index + 2] };
+      const match = normalizedTargets.find((entry) => (
+        current.r === entry.source.r &&
+        current.g === entry.source.g &&
+        current.b === entry.source.b
+      ));
+      if (!match?.allowed) continue;
 
-      let bestBucket: { color: RgbColor; count: number; target: RgbColor } | null = null;
-      let bestBucketDistance = Number.POSITIVE_INFINITY;
-      for (const bucket of buckets) {
-        const distance = colorDistanceSq(current, {
-          r: clampChannel(bucket.color.r),
-          g: clampChannel(bucket.color.g),
-          b: clampChannel(bucket.color.b)
-        });
-        if (distance < bestBucketDistance) {
-          bestBucketDistance = distance;
-          bestBucket = bucket;
-        }
-      }
-      if (!bestBucket || bestBucketDistance > thresholdSq) continue;
-
-      data[index] = bestBucket.target.r;
-      data[index + 1] = bestBucket.target.g;
-      data[index + 2] = bestBucket.target.b;
+      data[index] = match.target.r;
+      data[index + 1] = match.target.g;
+      data[index + 2] = match.target.b;
     }
   }
 
