@@ -151,7 +151,8 @@ const measureFlatnessInsideRect = (
 const detectObviousRectangularRegions = (
   data: Uint8ClampedArray,
   width: number,
-  height: number
+  height: number,
+  detectionThreshold = 15
 ): DetectedRectRegion[] => {
   const getIndex = (x: number, y: number) => (y * width + x) * 4;
   const getColorAt = (x: number, y: number): RgbColor => {
@@ -184,7 +185,7 @@ const detectObviousRectangularRegions = (
       if (data[pixelIndex + 3] < 220) continue;
       const color = getColorAt(x, y);
       gridColors[gridIndex(gx, gy)] = color;
-      if (measureFlatness(x, y) <= 18) {
+      if (measureFlatness(x, y) <= Math.max(12, detectionThreshold * 0.7)) {
         flatMask[gridIndex(gx, gy)] = 1;
       }
     }
@@ -192,7 +193,7 @@ const detectObviousRectangularRegions = (
 
   const visited = new Uint8Array(gridWidth * gridHeight);
   const rectangleCandidates: DetectedRectRegion[] = [];
-  const componentJoinThresholdSq = 26 * 26;
+  const componentJoinThresholdSq = detectionThreshold * detectionThreshold;
 
   for (let gy = 0; gy < gridHeight; gy += 1) {
     for (let gx = 0; gx < gridWidth; gx += 1) {
@@ -249,7 +250,7 @@ const detectObviousRectangularRegions = (
       const pixelRectHeight = (maxGY - minGY + 1) * sampleStep;
 
       if (count < 6) continue;
-      if (coverage < 0.72) continue;
+      if (coverage < Math.max(0.58, 0.78 - detectionThreshold * 0.004)) continue;
       if (pixelRectWidth < Math.max(56, width * 0.08)) continue;
       if (pixelRectHeight < Math.max(32, height * 0.04)) continue;
 
@@ -310,7 +311,8 @@ const recolorPosterBlocksWithPalette = async (
   sourceUrl: string,
   paletteHexes: string[],
   threshold = 40,
-  iterations = 2
+  iterations = 2,
+  detectionThreshold = 26
 ) => {
   const palette = paletteHexes
     .map(hexToRgbColor)
@@ -351,7 +353,7 @@ const recolorPosterBlocksWithPalette = async (
     return neighbors.reduce((sum, neighbor) => sum + Math.sqrt(colorDistanceSq(center, neighbor)), 0) / neighbors.length;
   };
 
-  const meaningfulRectangles = detectObviousRectangularRegions(data, width, height)
+  const meaningfulRectangles = detectObviousRectangularRegions(data, width, height, detectionThreshold)
     .map((rectangle) => ({
       ...rectangle,
       target: palette.reduce((best, paletteColor) => (
@@ -796,7 +798,8 @@ const App: React.FC = () => {
   const [isApplyingRefineColorSet, setIsApplyingRefineColorSet] = useState(false);
   const [refineColorSetError, setRefineColorSetError] = useState('');
   const [refineColorThreshold, setRefineColorThreshold] = useState(40);
-  const [refineColorIterations, setRefineColorIterations] = useState(2);
+  const [refineColorIterations, setRefineColorIterations] = useState(4);
+  const [refineRectDetectionThreshold, setRefineRectDetectionThreshold] = useState(15);
   const [refinePreviewImageUrl, setRefinePreviewImageUrl] = useState<string | null>(null);
   const [selectedRefinePaintColor, setSelectedRefinePaintColor] = useState<string | null>(null);
   const [isRefineBucketMode, setIsRefineBucketMode] = useState(false);
@@ -5321,7 +5324,8 @@ Return ONLY valid JSON in the format:
         sourceImageUrl,
         selectedRefineColorGroup.colors,
         refineColorThreshold,
-        refineColorIterations
+        refineColorIterations,
+        refineRectDetectionThreshold
       );
       updatePosterArtboard(derivedId, (ab) => ({
         ...ab,
@@ -5358,6 +5362,7 @@ Return ONLY valid JSON in the format:
     artboards,
     createDerivedArtboard,
     refineColorIterations,
+    refineRectDetectionThreshold,
     refineColorThreshold,
     selectedRefineColorGroup,
     updatePosterArtboard
@@ -5410,7 +5415,7 @@ Return ONLY valid JSON in the format:
 
       context.drawImage(image, 0, 0, width, height);
       const imageData = context.getImageData(0, 0, width, height);
-      const rectangles = detectObviousRectangularRegions(imageData.data, width, height);
+      const rectangles = detectObviousRectangularRegions(imageData.data, width, height, refineRectDetectionThreshold);
       setDetectedRefineRectangles(rectangles);
       if (rectangles.length === 0) {
         setRefineColorSetError('No obvious rectangles detected.');
@@ -5421,7 +5426,7 @@ Return ONLY valid JSON in the format:
     } finally {
       setIsAnalyzingRefineRectangles(false);
     }
-  }, [currentRefinePosterImageUrl]);
+  }, [currentRefinePosterImageUrl, refineRectDetectionThreshold]);
 
   const handleRefinePoster = async () => {
     if (!activePosterId) return;
@@ -8599,6 +8604,24 @@ Return ONLY valid JSON in the format:
                   ) : null}
                   <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
                     <div className="flex items-center justify-between text-[11px] text-slate-500">
+                      <span>Rect Detect</span>
+                      <span className="font-semibold text-slate-700">{refineRectDetectionThreshold}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="5"
+                      max="20"
+                      step="1"
+                      value={refineRectDetectionThreshold}
+                      onChange={(event) => setRefineRectDetectionThreshold(Number(event.target.value))}
+                      className="mt-2 w-full accent-slate-700"
+                    />
+                    <div className="mt-1 text-[10px] text-slate-400">
+                      Higher values detect looser, less uniform rectangles.
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                    <div className="flex items-center justify-between text-[11px] text-slate-500">
                       <span>Threshold</span>
                       <span className="font-semibold text-slate-700">{refineColorThreshold}</span>
                     </div>
@@ -8622,8 +8645,8 @@ Return ONLY valid JSON in the format:
                     </div>
                     <input
                       type="range"
-                      min="1"
-                      max="5"
+                      min="2"
+                      max="8"
                       step="1"
                       value={refineColorIterations}
                       onChange={(event) => setRefineColorIterations(Number(event.target.value))}
