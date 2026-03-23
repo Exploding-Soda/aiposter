@@ -445,164 +445,6 @@ const recolorPosterBlocksWithPalette = async (
   return canvas.toDataURL('image/png');
 };
 
-const recolorRectRegionByDominantColor = async (
-  sourceUrl: string,
-  rect: { x: number; y: number; width: number; height: number },
-  targetHex: string,
-  threshold = 40,
-  iterations = 2
-) => {
-  const targetColor = hexToRgbColor(targetHex);
-  if (!targetColor) {
-    throw new Error('Invalid target color.');
-  }
-
-  const image = await loadImageFromUrl(sourceUrl);
-  const width = image.naturalWidth || image.width;
-  const height = image.naturalHeight || image.height;
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext('2d', { willReadFrequently: true });
-  if (!context) {
-    throw new Error('Canvas is not available.');
-  }
-
-  context.drawImage(image, 0, 0, width, height);
-  const imageData = context.getImageData(0, 0, width, height);
-  const { data } = imageData;
-  const getIndex = (x: number, y: number) => (y * width + x) * 4;
-  const left = Math.max(0, Math.min(width - 1, Math.floor(rect.x)));
-  const top = Math.max(0, Math.min(height - 1, Math.floor(rect.y)));
-  const right = Math.max(left + 1, Math.min(width, Math.ceil(rect.x + rect.width)));
-  const bottom = Math.max(top + 1, Math.min(height, Math.ceil(rect.y + rect.height)));
-
-  if (right - left < 2 || bottom - top < 2) {
-    return canvas.toDataURL('image/png');
-  }
-
-  const totalIterations = Math.max(1, Math.floor(iterations));
-  let dominantColor: RgbColor | null = null;
-  for (let iteration = 0; iteration < totalIterations; iteration += 1) {
-    const sampleStep = Math.max(1, Math.floor(Math.max(right - left, bottom - top) / 48));
-    if (!dominantColor) {
-      const buckets: Array<{ color: RgbColor; count: number }> = [];
-      const bucketJoinThresholdSq = 20 * 20;
-
-      for (let y = top; y < bottom; y += sampleStep) {
-        for (let x = left; x < right; x += sampleStep) {
-          const index = getIndex(x, y);
-          if (data[index + 3] < 24) continue;
-          const color = { r: data[index], g: data[index + 1], b: data[index + 2] };
-
-          let bestBucket: { color: RgbColor; count: number } | null = null;
-          let bestDistance = Number.POSITIVE_INFINITY;
-          for (const bucket of buckets) {
-            const distance = colorDistanceSq(color, bucket.color);
-            if (distance < bestDistance) {
-              bestDistance = distance;
-              bestBucket = bucket;
-            }
-          }
-
-          if (!bestBucket || bestDistance > bucketJoinThresholdSq) {
-            buckets.push({ color, count: 1 });
-          } else {
-            const nextCount = bestBucket.count + 1;
-            bestBucket.color = {
-              r: (bestBucket.color.r * bestBucket.count + color.r) / nextCount,
-              g: (bestBucket.color.g * bestBucket.count + color.g) / nextCount,
-              b: (bestBucket.color.b * bestBucket.count + color.b) / nextCount
-            };
-            bestBucket.count = nextCount;
-          }
-        }
-      }
-
-      if (buckets.length === 0) {
-        return canvas.toDataURL('image/png');
-      }
-
-      const dominantBucket = buckets.sort((a, b) => b.count - a.count)[0];
-      dominantColor = {
-        r: clampChannel(dominantBucket.color.r),
-        g: clampChannel(dominantBucket.color.g),
-        b: clampChannel(dominantBucket.color.b)
-      };
-    }
-
-    const colorThresholdSq = threshold * threshold;
-    const regionWidth = right - left;
-    const regionHeight = bottom - top;
-    const replacedMask = new Uint8Array(regionWidth * regionHeight);
-    const maskIndex = (x: number, y: number) => (y - top) * regionWidth + (x - left);
-
-    for (let y = top; y < bottom; y += 1) {
-      for (let x = left; x < right; x += 1) {
-        const index = getIndex(x, y);
-        if (data[index + 3] < 24) continue;
-        const current: RgbColor = {
-          r: data[index],
-          g: data[index + 1],
-          b: data[index + 2]
-        };
-        const alreadyTarget =
-          current.r === targetColor.r &&
-          current.g === targetColor.g &&
-          current.b === targetColor.b;
-        if (alreadyTarget) {
-          replacedMask[maskIndex(x, y)] = 1;
-          continue;
-        }
-        if (colorDistanceSq(current, dominantColor) > colorThresholdSq) continue;
-
-        data[index] = targetColor.r;
-        data[index + 1] = targetColor.g;
-        data[index + 2] = targetColor.b;
-        replacedMask[maskIndex(x, y)] = 1;
-      }
-    }
-
-    for (let pass = 0; pass < 2; pass += 1) {
-      const nextMask = new Uint8Array(replacedMask);
-      for (let y = top; y < bottom; y += 1) {
-        for (let x = left; x < right; x += 1) {
-          const localIndex = maskIndex(x, y);
-          if (replacedMask[localIndex]) continue;
-          const pixelIndex = getIndex(x, y);
-          if (data[pixelIndex + 3] < 24) continue;
-
-          let replacedNeighbors = 0;
-          let availableNeighbors = 0;
-          const neighbors = [
-            [x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1],
-            [x - 1, y - 1], [x + 1, y - 1], [x - 1, y + 1], [x + 1, y + 1]
-          ] as const;
-          for (const [nx, ny] of neighbors) {
-            if (nx < left || nx >= right || ny < top || ny >= bottom) {
-              continue;
-            }
-            availableNeighbors += 1;
-            if (replacedMask[maskIndex(nx, ny)]) {
-              replacedNeighbors += 1;
-            }
-          }
-          if (availableNeighbors === 0 || replacedNeighbors / availableNeighbors < 0.55) continue;
-
-          data[pixelIndex] = targetColor.r;
-          data[pixelIndex + 1] = targetColor.g;
-          data[pixelIndex + 2] = targetColor.b;
-          nextMask[localIndex] = 1;
-        }
-      }
-      replacedMask.set(nextMask);
-    }
-  }
-
-  context.putImageData(imageData, 0, 0);
-  return canvas.toDataURL('image/png');
-};
-
 const recolorRectRegionByClosestColorToTarget = async (
   sourceUrl: string,
   rect: { x: number; y: number; width: number; height: number },
@@ -1029,44 +871,6 @@ const recolorConnectedRegionBySeedColor = async (
   return canvas.toDataURL('image/png');
 };
 
-const findBestRectangleForPoint = (
-  rectangles: DetectedRectRegion[],
-  point: { x: number; y: number }
-) => {
-  if (rectangles.length === 0) {
-    return null;
-  }
-
-  const containing = rectangles
-    .filter((rectangle) => (
-      point.x >= rectangle.left &&
-      point.x <= rectangle.right &&
-      point.y >= rectangle.top &&
-      point.y <= rectangle.bottom
-    ))
-    .sort((a, b) => a.area - b.area);
-  if (containing.length > 0) {
-    return containing[0];
-  }
-
-  return rectangles.reduce((best, rectangle) => {
-    const centerX = (rectangle.left + rectangle.right) / 2;
-    const centerY = (rectangle.top + rectangle.bottom) / 2;
-    const dx = point.x - centerX;
-    const dy = point.y - centerY;
-    const distanceScore = dx * dx + dy * dy;
-    const edgeDx = point.x < rectangle.left ? rectangle.left - point.x : point.x > rectangle.right ? point.x - rectangle.right : 0;
-    const edgeDy = point.y < rectangle.top ? rectangle.top - point.y : point.y > rectangle.bottom ? point.y - rectangle.bottom : 0;
-    const edgeScore = edgeDx * edgeDx + edgeDy * edgeDy;
-    const score = edgeScore * 4 + distanceScore;
-
-    if (!best || score < best.score || (score === best.score && rectangle.area < best.rectangle.area)) {
-      return { rectangle, score };
-    }
-    return best;
-  }, null as { rectangle: DetectedRectRegion; score: number } | null)?.rectangle ?? null;
-};
-
 type Rect = { left: number; top: number; right: number; bottom: number };
 type AnnotationColor = 'red' | 'green' | 'purple';
 type AnnotationTool = 'rect' | 'arrow' | 'pan';
@@ -1266,7 +1070,6 @@ const App: React.FC = () => {
   const [refineRectDetectionThreshold, setRefineRectDetectionThreshold] = useState(2);
   const [isRefineColorSettingsOpen, setIsRefineColorSettingsOpen] = useState(false);
   const [refinePreviewImageUrl, setRefinePreviewImageUrl] = useState<string | null>(null);
-  const [selectedRefinePaintColor, setSelectedRefinePaintColor] = useState<string | null>(null);
   const [isRefineBucketMode, setIsRefineBucketMode] = useState(false);
   const [isApplyingBucketFill, setIsApplyingBucketFill] = useState(false);
   const [detectedRefineRectangles, setDetectedRefineRectangles] = useState<DetectedRectRegion[]>([]);
@@ -1360,8 +1163,6 @@ const App: React.FC = () => {
   const annotatorCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const annotationIdRef = useRef(1);
   const annotationStartRef = useRef<{ x: number; y: number } | null>(null);
-  const bucketLongPressTimerRef = useRef<number | null>(null);
-  const bucketRectModeRef = useRef(false);
   const annotationHistoryRef = useRef<Annotation[][]>([]);
   const annotationRedoRef = useRef<Annotation[][]>([]);
   const isAnnotationRestoringRef = useRef(false);
@@ -1945,7 +1746,6 @@ const App: React.FC = () => {
     setPosterFeedback('');
     setRefineColorSetError('');
     setRefinePreviewImageUrl(null);
-    setSelectedRefinePaintColor(null);
     setIsRefineBucketMode(false);
     setDetectedRefineRectangles([]);
     setIsPosterModalOpen(true);
@@ -3521,7 +3321,6 @@ const App: React.FC = () => {
       setIsPosterModalOpen(false);
       setIsPosterModalClosing(false);
       setRefinePreviewImageUrl(null);
-      setSelectedRefinePaintColor(null);
       setIsRefineBucketMode(false);
       setDetectedRefineRectangles([]);
     }, 180);
@@ -5522,22 +5321,15 @@ const App: React.FC = () => {
       if (!point) return;
       annotationStartRef.current = point;
       setIsAnnotating(true);
-      bucketRectModeRef.current = false;
-      if (bucketLongPressTimerRef.current) {
-        window.clearTimeout(bucketLongPressTimerRef.current);
-      }
-      bucketLongPressTimerRef.current = window.setTimeout(() => {
-        bucketRectModeRef.current = true;
-        setAnnotationDraft({
-          id: -1,
-          type: 'rect',
-          color: 'purple',
-          x: point.x,
-          y: point.y,
-          width: 0,
-          height: 0
-        });
-      }, 220);
+      setAnnotationDraft({
+        id: -1,
+        type: 'rect',
+        color: 'purple',
+        x: point.x,
+        y: point.y,
+        width: 0,
+        height: 0
+      });
       return;
     }
     if (annotationTool === 'pan') {
@@ -5570,7 +5362,7 @@ const App: React.FC = () => {
     if (!isAnnotating) return;
     console.log('[annotator] mouse move', { tool: annotationTool });
     if (isRefineBucketMode) {
-      if (!bucketRectModeRef.current || !annotationStartRef.current || !annotationDraft) return;
+      if (!annotationStartRef.current || !annotationDraft) return;
       const point = getImagePointFromEvent(event);
       if (!point) return;
       const start = annotationStartRef.current;
@@ -5606,14 +5398,8 @@ const App: React.FC = () => {
   const handleAnnotatorMouseUp = () => {
     console.log('[annotator] mouse up', { tool: annotationTool, hasDraft: Boolean(annotationDraft), ready: isAnnotatorReady });
     if (isRefineBucketMode) {
-      if (bucketLongPressTimerRef.current) {
-        window.clearTimeout(bucketLongPressTimerRef.current);
-        bucketLongPressTimerRef.current = null;
-      }
-      const startPoint = annotationStartRef.current;
       const rectDraft = annotationDraft;
-      const shouldUseManualRect = bucketRectModeRef.current && Boolean(rectDraft && rectDraft.width > 6 && rectDraft.height > 6);
-      bucketRectModeRef.current = false;
+      const shouldUseManualRect = Boolean(rectDraft && rectDraft.width > 6 && rectDraft.height > 6);
       setAnnotationDraft(null);
       setIsAnnotating(false);
       annotationStartRef.current = null;
@@ -5624,10 +5410,6 @@ const App: React.FC = () => {
           width: rectDraft.width,
           height: rectDraft.height
         });
-        return;
-      }
-      if (startPoint) {
-        void handleBucketFillPoint(startPoint);
       }
       return;
     }
@@ -5852,66 +5634,6 @@ Return ONLY valid JSON in the format:
     updatePosterArtboard
   ]);
 
-  const handleBucketFillPoint = useCallback(async (point: { x: number; y: number }) => {
-    if (!selectedRefinePaintColor || !currentRefinePosterImageUrl) {
-      setRefineColorSetError('Choose a color from the color set first.');
-      return;
-    }
-
-    setRefineColorSetError('');
-    setIsApplyingBucketFill(true);
-    try {
-      const image = await loadImageFromUrl(currentRefinePosterImageUrl);
-      const width = image.naturalWidth || image.width;
-      const height = image.naturalHeight || image.height;
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const context = canvas.getContext('2d', { willReadFrequently: true });
-      if (!context) {
-        throw new Error('Canvas is not available.');
-      }
-      context.drawImage(image, 0, 0, width, height);
-      const imageData = context.getImageData(0, 0, width, height);
-      const rectangles = detectObviousRectangularRegions(
-        imageData.data,
-        width,
-        height,
-        refineRectDetectionThreshold
-      );
-      setDetectedRefineRectangles(rectangles);
-      const selectedRectangle = findBestRectangleForPoint(rectangles, point);
-      if (!selectedRectangle) {
-        throw new Error('No obvious rectangular region found near this click.');
-      }
-
-      const nextPreview = await recolorRectRegionByDominantColor(
-        currentRefinePosterImageUrl,
-        {
-          x: selectedRectangle.left,
-          y: selectedRectangle.top,
-          width: selectedRectangle.right - selectedRectangle.left,
-          height: selectedRectangle.bottom - selectedRectangle.top
-        },
-        selectedRefinePaintColor,
-        refineColorThreshold,
-        refineColorIterations
-      );
-      setRefinePreviewImageUrl(nextPreview);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to recolor this region.';
-      setRefineColorSetError(message);
-    } finally {
-      setIsApplyingBucketFill(false);
-    }
-  }, [
-    currentRefinePosterImageUrl,
-    refineColorIterations,
-    refineColorThreshold,
-    refineRectDetectionThreshold,
-    selectedRefinePaintColor
-  ]);
-
   const handleBucketFillRectSelection = useCallback(async (rect: { x: number; y: number; width: number; height: number }) => {
     if (!selectedRefineColorGroup || selectedRefineColorGroup.colors.length === 0 || !currentRefinePosterImageUrl) {
       setRefineColorSetError('Choose a color set first.');
@@ -5936,6 +5658,7 @@ Return ONLY valid JSON in the format:
         selectedRefineColorGroup.colors,
         refineColorThreshold
       );
+      setDetectedRefineRectangles([]);
       setRefinePreviewImageUrl(nextPreview);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to recolor this rectangle.';
@@ -9095,10 +8818,6 @@ Return ONLY valid JSON in the format:
                     value={selectedRefineColorGroupId ?? ''}
                     onChange={(event) => {
                       setSelectedRefineColorGroupId(event.target.value || null);
-                      const nextGroup = primaryColorGroups.find((group) => group.id === event.target.value) || null;
-                      setSelectedRefinePaintColor((prev) => (
-                        prev && nextGroup?.colors.includes(prev) ? prev : null
-                      ));
                       setRefineColorSetError('');
                     }}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 outline-none focus:border-slate-400"
@@ -9117,22 +8836,12 @@ Return ONLY valid JSON in the format:
                   {selectedRefineColorGroup && (
                     <div className="flex items-center gap-2">
                       {selectedRefineColorGroup.colors.length > 0 ? selectedRefineColorGroup.colors.map((color, index) => (
-                        <button
+                        <div
                           key={`${selectedRefineColorGroup.id}-${color}-${index}`}
-                          type="button"
-                          onClick={() => {
-                            setSelectedRefinePaintColor(color);
-                            setIsRefineBucketMode(true);
-                            setRefineColorSetError('');
-                          }}
-                          className={`h-7 flex-1 rounded-lg border transition ${
-                            selectedRefinePaintColor === color
-                              ? 'border-slate-900 ring-2 ring-slate-300'
-                              : 'border-black/5 hover:border-slate-300'
-                          }`}
+                          className="h-7 flex-1 rounded-lg border border-black/5"
                           style={{ backgroundColor: color }}
                           title={color}
-                          aria-label={`Use ${color} for bucket fill`}
+                          aria-label={color}
                         />
                       )) : (
                         <div className="text-[11px] text-slate-400">Empty color set</div>
@@ -9142,9 +8851,7 @@ Return ONLY valid JSON in the format:
                   {selectedRefineColorGroup?.colors.length ? (
                     <div className="flex items-center justify-between text-[11px] text-slate-500">
                       <span>
-                        {selectedRefinePaintColor
-                          ? `Selected: ${selectedRefinePaintColor} · click for single-color target, long-press for full color-set rectangle mapping`
-                          : 'Pick a swatch for click targeting, or long-press to map a whole rectangle with the current color set'}
+                        Fill mode uses drag-to-select only and maps the whole rectangle with the current color set.
                       </span>
                       <button
                         type="button"
