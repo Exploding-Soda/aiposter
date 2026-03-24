@@ -1179,7 +1179,8 @@ const App: React.FC = () => {
   const [primaryColorGroups, setPrimaryColorGroups] = useState<PrimaryColorGroupItem[]>([]);
   const [primaryColorGroupsLoading, setPrimaryColorGroupsLoading] = useState(false);
   const [selectedRefineColorGroupId, setSelectedRefineColorGroupId] = useState<string | null>(null);
-  const [isApplyingRefineColorSet, setIsApplyingRefineColorSet] = useState(false);
+  const [isPreviewingRefineColorSet, setIsPreviewingRefineColorSet] = useState(false);
+  const [isReplacingWholePoster, setIsReplacingWholePoster] = useState(false);
   const [refineColorSetError, setRefineColorSetError] = useState('');
   const [refineColorThreshold, setRefineColorThreshold] = useState(40);
   const [refineColorIterations, setRefineColorIterations] = useState(4);
@@ -5746,7 +5747,7 @@ Return ONLY valid JSON in the format:
     }
 
     setRefineColorSetError('');
-    setIsApplyingRefineColorSet(true);
+    setIsPreviewingRefineColorSet(true);
     try {
       const recoloredImageUrl = await recolorPosterBlocksWithPalette(
         sourceImageUrl,
@@ -5761,7 +5762,7 @@ Return ONLY valid JSON in the format:
       const message = error instanceof Error ? error.message : 'Failed to preview color set.';
       setRefineColorSetError(message);
     } finally {
-      setIsApplyingRefineColorSet(false);
+      setIsPreviewingRefineColorSet(false);
     }
   }, [
     activePosterId,
@@ -5843,7 +5844,7 @@ Return ONLY valid JSON in the format:
     }
 
     setRefineColorSetError('');
-    setIsApplyingRefineColorSet(true);
+    setIsReplacingWholePoster(true);
     try {
       const nextPreview = await recolorEntireImageByPalette(
         currentRefinePosterImageUrl,
@@ -5857,7 +5858,7 @@ Return ONLY valid JSON in the format:
       const message = error instanceof Error ? error.message : 'Failed to recolor the whole poster.';
       setRefineColorSetError(message);
     } finally {
-      setIsApplyingRefineColorSet(false);
+      setIsReplacingWholePoster(false);
     }
   }, [applyRefinePreviewState, currentRefinePosterImageUrl, pushRefinePreviewHistory, refineColorThreshold, selectedRefineColorGroup]);
 
@@ -9123,10 +9124,10 @@ Return ONLY valid JSON in the format:
                   <button
                     type="button"
                     onClick={handleReplaceWholePosterWithPalette}
-                    disabled={!selectedRefineColorGroup?.colors.length || !currentRefinePosterImageUrl || isApplyingRefineColorSet}
+                    disabled={!selectedRefineColorGroup?.colors.length || !currentRefinePosterImageUrl || isReplacingWholePoster}
                     className="w-full rounded-xl border border-slate-200 bg-white py-2 text-[11px] font-bold uppercase tracking-widest text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {isApplyingRefineColorSet ? 'Replacing Whole Poster...' : 'Replace Whole Poster'}
+                    {isReplacingWholePoster ? 'Replacing Whole Poster...' : 'Replace Whole Poster'}
                   </button>
                   <div className="rounded-xl border border-slate-200 bg-white">
                     <button
@@ -9230,7 +9231,7 @@ Return ONLY valid JSON in the format:
                   >
                     {isSavingRefinePreview ? 'Saving Fill Result...' : 'Save Fill Result'}
                   </button>
-                  {isApplyingRefineColorSet && (
+                  {isPreviewingRefineColorSet && (
                     <div className="text-[11px] text-slate-500">Rendering color set preview...</div>
                   )}
                 </div>
