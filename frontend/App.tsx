@@ -370,17 +370,6 @@ const recolorPosterBlocksWithPalette = async (
     const index = getIndex(x, y);
     return { r: data[index], g: data[index + 1], b: data[index + 2] };
   };
-  const measureFlatness = (x: number, y: number) => {
-    const center = getColorAt(x, y);
-    const neighbors = [
-      getColorAt(Math.max(0, x - 1), y),
-      getColorAt(Math.min(width - 1, x + 1), y),
-      getColorAt(x, Math.max(0, y - 1)),
-      getColorAt(x, Math.min(height - 1, y + 1))
-    ];
-    return neighbors.reduce((sum, neighbor) => sum + Math.sqrt(colorDistanceSq(center, neighbor)), 0) / neighbors.length;
-  };
-
   const meaningfulRectangles = detectObviousRectangularRegions(data, width, height, detectionThreshold)
     .map((rectangle) => ({
       ...rectangle,
@@ -400,10 +389,6 @@ const recolorPosterBlocksWithPalette = async (
   for (let iteration = 0; iteration < totalIterations; iteration += 1) {
     for (const rectangle of meaningfulRectangles) {
       const colorThresholdSq = threshold * threshold;
-      const rectangleWidth = rectangle.right - rectangle.left;
-      const rectangleHeight = rectangle.bottom - rectangle.top;
-      const replacedMask = new Uint8Array(rectangleWidth * rectangleHeight);
-      const maskIndex = (x: number, y: number) => (y - rectangle.top) * rectangleWidth + (x - rectangle.left);
       const dominantColors = rectangle.dominantColors.length > 0 ? rectangle.dominantColors : [rectangle.dominant];
       for (let y = rectangle.top; y < rectangle.bottom; y += 1) {
         for (let x = rectangle.left; x < rectangle.right; x += 1) {
@@ -415,61 +400,17 @@ const recolorPosterBlocksWithPalette = async (
             current.g === rectangle.target.g &&
             current.b === rectangle.target.b;
           if (alreadyTarget) {
-            replacedMask[maskIndex(x, y)] = 1;
             continue;
           }
           const normalizedDominant = dominantColors.reduce((best, candidate) => (
             colorDistanceSq(current, candidate) < colorDistanceSq(current, best) ? candidate : best
           ), dominantColors[0]);
           if (colorDistanceSq(current, normalizedDominant) > colorThresholdSq) continue;
-          const isEdgePixel =
-            x === rectangle.left ||
-            x === rectangle.right - 1 ||
-            y === rectangle.top ||
-            y === rectangle.bottom - 1;
-          const flatness = isEdgePixel ? measureFlatnessInsideRect(x, y, rectangle, getColorAt) : measureFlatness(x, y);
-          if (flatness > 28) continue;
 
           data[index] = rectangle.target.r;
           data[index + 1] = rectangle.target.g;
           data[index + 2] = rectangle.target.b;
-          replacedMask[maskIndex(x, y)] = 1;
         }
-      }
-
-      for (let pass = 0; pass < 2; pass += 1) {
-        const nextMask = new Uint8Array(replacedMask);
-        for (let y = rectangle.top; y < rectangle.bottom; y += 1) {
-          for (let x = rectangle.left; x < rectangle.right; x += 1) {
-            const localIndex = maskIndex(x, y);
-            if (replacedMask[localIndex]) continue;
-            const pixelIndex = getIndex(x, y);
-            if (data[pixelIndex + 3] < 220) continue;
-
-            let replacedNeighbors = 0;
-            let availableNeighbors = 0;
-            const neighbors = [
-              [x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1],
-              [x - 1, y - 1], [x + 1, y - 1], [x - 1, y + 1], [x + 1, y + 1]
-            ] as const;
-            for (const [nx, ny] of neighbors) {
-              if (nx < rectangle.left || nx >= rectangle.right || ny < rectangle.top || ny >= rectangle.bottom) {
-                continue;
-              }
-              availableNeighbors += 1;
-              if (replacedMask[maskIndex(nx, ny)]) {
-                replacedNeighbors += 1;
-              }
-            }
-            if (availableNeighbors === 0 || replacedNeighbors / availableNeighbors < 0.55) continue;
-
-            data[pixelIndex] = rectangle.target.r;
-            data[pixelIndex + 1] = rectangle.target.g;
-            data[pixelIndex + 2] = rectangle.target.b;
-            nextMask[localIndex] = 1;
-          }
-        }
-        replacedMask.set(nextMask);
       }
     }
   }
