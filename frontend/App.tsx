@@ -1028,6 +1028,12 @@ type FontReferenceItem = {
   mime_type?: string | null;
   created_at: string;
 };
+type RuleItem = {
+  id: string;
+  description: string;
+  source: string;
+  created_at: string;
+};
 
 const rectsOverlap = (a: Rect, b: Rect, padding = 0) => (
   !(a.right + padding <= b.left || a.left - padding >= b.right || a.bottom + padding <= b.top || a.top - padding >= b.bottom)
@@ -1162,6 +1168,10 @@ const App: React.FC = () => {
   const [referenceStylesError, setReferenceStylesError] = useState('');
   const [selectedReferenceStyleId, setSelectedReferenceStyleId] = useState<string | null>(null);
   const [selectedReferenceStyleStrength, setSelectedReferenceStyleStrength] = useState<ReferenceStyleStrength>('high');
+  const [rules, setRules] = useState<RuleItem[]>([]);
+  const [rulesLoading, setRulesLoading] = useState(false);
+  const [rulesError, setRulesError] = useState('');
+  const [selectedRuleIds, setSelectedRuleIds] = useState<string[]>([]);
   const [referenceSelectLoadingId, setReferenceSelectLoadingId] = useState<string | null>(null);
   const [referenceUploadProgress, setReferenceUploadProgress] = useState<number | null>(null);
   const [isReferenceUploading, setIsReferenceUploading] = useState(false);
@@ -1202,6 +1212,7 @@ const App: React.FC = () => {
   const logoAssetFetchAttemptedRef = useRef<Set<string>>(new Set());
   const fontReferenceFetchAttemptedRef = useRef<Set<string>>(new Set());
   const referenceStylesLoadedOnceRef = useRef(false);
+  const rulesLoadedOnceRef = useRef(false);
   const logoAssetsLoadedOnceRef = useRef(false);
   const fontReferencesLoadedOnceRef = useRef(false);
   const primaryColorGroupsLoadedOnceRef = useRef(false);
@@ -1213,6 +1224,9 @@ const App: React.FC = () => {
   const [isFontReferenceUploading, setIsFontReferenceUploading] = useState(false);
   const [refStylesCanLeft, setRefStylesCanLeft] = useState(false);
   const [refStylesCanRight, setRefStylesCanRight] = useState(false);
+  const rulesScrollRef = useRef<HTMLDivElement | null>(null);
+  const [rulesCanLeft, setRulesCanLeft] = useState(false);
+  const [rulesCanRight, setRulesCanRight] = useState(false);
   const [logosCanLeft, setLogosCanLeft] = useState(false);
   const [logosCanRight, setLogosCanRight] = useState(false);
   const [fontRefsCanLeft, setFontRefsCanLeft] = useState(false);
@@ -1564,6 +1578,7 @@ const App: React.FC = () => {
     fontReferenceImage: null,
     selectedReferenceStyleId: project.selectedReferenceStyleId ?? null,
     selectedReferenceStyleStrength: project.selectedReferenceStyleStrength ?? 'high',
+    selectedRuleIds: project.selectedRuleIds ?? [],
     selectedLogoAssetId: project.selectedLogoAssetId ?? null,
     selectedFontReferenceId: project.selectedFontReferenceId ?? null,
     view: project.view
@@ -1854,7 +1869,8 @@ const App: React.FC = () => {
       createdAt: importedProject.createdAt || Date.now(),
       updatedAt: Date.now(),
       artboards: importedProject.artboards || [],
-      selectedReferenceStyleStrength: importedProject.selectedReferenceStyleStrength || 'high'
+      selectedReferenceStyleStrength: importedProject.selectedReferenceStyleStrength || 'high',
+      selectedRuleIds: importedProject.selectedRuleIds || []
     };
     const updatedProjects = [normalized, ...projects];
     saveProjectsToDisk(updatedProjects);
@@ -1942,6 +1958,7 @@ const App: React.FC = () => {
     setFontReferenceImage(activeProject.fontReferenceImage || null);
     setSelectedReferenceStyleId(activeProject.selectedReferenceStyleId || null);
     setSelectedReferenceStyleStrength(activeProject.selectedReferenceStyleStrength || 'high');
+    setSelectedRuleIds(activeProject.selectedRuleIds || []);
     setSelectedLogoAssetId(activeProject.selectedLogoAssetId || null);
     setSelectedFontReferenceId(activeProject.selectedFontReferenceId || null);
     setActivePosterId(null);
@@ -2622,6 +2639,7 @@ const App: React.FC = () => {
       height: DEFAULT_BOARD_HEIGHT,
       artboards: [],
       selectedReferenceStyleStrength: 'high',
+      selectedRuleIds: [],
       view: { x: 0, y: 0, zoom: 1 }
     };
     const updated = [newProject, ...projects];
@@ -3585,6 +3603,39 @@ const App: React.FC = () => {
     }
   }, [authUser]);
 
+  const loadRules = useCallback(async () => {
+    if (!authUser) {
+      setRules([]);
+      return;
+    }
+    setRulesLoading(true);
+    setRulesError('');
+    try {
+      const response = await fetchWithAuth(`${BACKEND_API}/design-guidance`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load rules';
+        throw new Error(message);
+      }
+      setRules(Array.isArray(data.items) ? data.items : []);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load rules';
+      setRulesError(message);
+    } finally {
+      setRulesLoading(false);
+      rulesLoadedOnceRef.current = true;
+    }
+  }, [authUser]);
+
+  useEffect(() => {
+    rulesLoadedOnceRef.current = false;
+    if (!authUser) {
+      setRules([]);
+      setSelectedRuleIds([]);
+      setRulesError('');
+    }
+  }, [authUser]);
+
   const loadLogoAssets = useCallback(async () => {
     if (!authUser) {
       setLogoAssets([]);
@@ -3837,6 +3888,14 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (rightPanelMode !== 'generator') return;
+    if (rulesLoading) return;
+    if (rules.length > 0) return;
+    if (rulesLoadedOnceRef.current) return;
+    void loadRules();
+  }, [rightPanelMode, loadRules, rules.length, rulesLoading]);
+
+  useEffect(() => {
+    if (rightPanelMode !== 'generator') return;
     if (logoAssetsLoading) return;
     if (logoAssets.length > 0) return;
     if (logoAssetsLoadedOnceRef.current) return;
@@ -3850,6 +3909,17 @@ const App: React.FC = () => {
     if (fontReferencesLoadedOnceRef.current) return;
     void loadFontReferences();
   }, [rightPanelMode, loadFontReferences, fontReferences.length, fontReferencesLoading]);
+
+  useEffect(() => {
+    if (rules.length === 0) {
+      setSelectedRuleIds((prev) => (prev.length === 0 ? prev : []));
+      return;
+    }
+    setSelectedRuleIds((prev) => {
+      const next = prev.filter((id) => rules.some((item) => item.id === id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [rules]);
 
   useEffect(() => {
     if (!selectedReferenceStyleId) return;
@@ -4277,6 +4347,13 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const raf = window.requestAnimationFrame(() => {
+      updateScrollIndicators(rulesScrollRef, setRulesCanLeft, setRulesCanRight);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [rules.length, updateScrollIndicators]);
+
+  useEffect(() => {
+    const raf = window.requestAnimationFrame(() => {
       updateScrollIndicators(logoAssetsScrollRef, setLogosCanLeft, setLogosCanRight);
     });
     return () => window.cancelAnimationFrame(raf);
@@ -4296,6 +4373,22 @@ const App: React.FC = () => {
     }
     await applyLogoAssetSelection(item);
   };
+
+  const toggleSelectedRule = useCallback((ruleId: string) => {
+    setSelectedRuleIds((prev) => (
+      prev.includes(ruleId)
+        ? prev.filter((id) => id !== ruleId)
+        : [...prev, ruleId]
+    ));
+  }, []);
+
+  const buildSelectedRulesPrompt = useCallback((ruleIds: string[]) => {
+    const selected = ruleIds
+      .map((id) => rules.find((item) => item.id === id)?.description?.trim())
+      .filter((value): value is string => Boolean(value));
+    if (selected.length === 0) return '';
+    return `Rules:\n${selected.map((rule, index) => `${index + 1}. ${rule}`).join('\n')}`;
+  }, [rules]);
 
   const applyLogoAssetSelection = async (item: LogoItem) => {
     setLogoSelectLoadingId(item.filename);
@@ -6253,10 +6346,14 @@ Return ONLY valid JSON in the format:
     const currentTheme = theme;
     const currentCount = count;
     const currentStyleImages = [...styleImages];
+    const currentRuleIds = [...selectedRuleIds];
     const currentLogoImage = await resolveLogoImageForModel();
     const currentFont = selectedServerFont;
     const currentFontReferenceImage = fontReferenceImage;
-    const currentDesignGuidance = '';
+    const currentRulesPrompt = buildSelectedRulesPrompt(currentRuleIds);
+    const themedPrompt = currentRulesPrompt
+      ? `${currentRulesPrompt}\n\nUser prompt:\n${currentTheme}`
+      : currentTheme;
 
     // Clear generator inputs immediately after submission
     resetGeneratorForm();
@@ -6490,7 +6587,7 @@ Return ONLY valid JSON in the format:
     // Run the generation in background (don't await, allow parallel submissions)
     void (async () => {
       try {
-        const plans = await planPosters(currentTheme, currentCount, currentStyleImages, currentLogoImage, selectedReferenceStyleStrength);
+        const plans = await planPosters(themedPrompt, currentCount, currentStyleImages, currentLogoImage, selectedReferenceStyleStrength);
         const fontReferenceUrl = await resolveFontReferenceUrl(currentFontReferenceImage);
         const serverFontReferenceUrl = await resolveServerFontPreviewUrl(currentFont);
 
@@ -6526,8 +6623,8 @@ Return ONLY valid JSON in the format:
                 fontReferenceUrl,
                 serverFontReferenceUrl,
                 undefined,
-                currentTheme,
-                currentDesignGuidance
+                themedPrompt,
+                undefined
               );
               // Store taskId in posterData for recovery after refresh
               setArtboards(prev => prev.map(ab => {
@@ -6652,6 +6749,7 @@ Return ONLY valid JSON in the format:
       fontReferenceImage: sanitizeUploadUrl(fontReferenceImage),
       selectedReferenceStyleId,
       selectedReferenceStyleStrength,
+      selectedRuleIds,
       selectedLogoAssetId,
       selectedFontReferenceId,
       view: {
@@ -8117,6 +8215,99 @@ Return ONLY valid JSON in the format:
                       )}
                     </div>
                   </>
+                )}
+              </motion.div>
+              <motion.div layout className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                    Rules (optional)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => handleNavigate('/personal-space')}
+                    className="text-sm font-semibold text-slate-400 hover:text-slate-600"
+                    aria-label="Open Personal Space"
+                    title="Open Personal Space"
+                  >
+                    ⚙
+                  </button>
+                </div>
+                {rulesError && (
+                  <div className="text-[10px] text-red-500">{rulesError}</div>
+                )}
+                {rulesLoading ? (
+                  <div className="text-[11px] text-slate-400">Loading rules...</div>
+                ) : rules.length > 0 ? (
+                  <>
+                    <div className="relative">
+                      <div
+                        ref={rulesScrollRef}
+                        className="overflow-x-auto scrollbar-hide"
+                        onScroll={() => updateScrollIndicators(rulesScrollRef, setRulesCanLeft, setRulesCanRight)}
+                        onWheel={(event) => {
+                          if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+                          event.preventDefault();
+                          event.currentTarget.scrollBy({ left: event.deltaY, behavior: 'auto' });
+                        }}
+                      >
+                        <div
+                          className="grid gap-2 pr-1"
+                          style={{ gridAutoFlow: 'column', gridAutoColumns: 'calc((100% - 16px) / 3)' }}
+                        >
+                          {rules.map((item) => {
+                            const isSelected = selectedRuleIds.includes(item.id);
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => toggleSelectedRule(item.id)}
+                                className={`h-20 rounded-lg border bg-white p-2 text-left transition ${isSelected ? 'border-amber-500 ring-2 ring-amber-200 bg-amber-50' : 'border-slate-200 hover:border-slate-300'}`}
+                                title={item.description}
+                              >
+                                <div className="line-clamp-4 text-[10px] leading-4 text-slate-700 whitespace-pre-wrap break-words">
+                                  {item.description}
+                                </div>
+                                {isSelected && (
+                                  <div className="mt-1 text-[9px] font-bold uppercase tracking-widest text-amber-700">
+                                    Using
+                                  </div>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      {rulesCanLeft && (
+                        <button
+                          type="button"
+                          onClick={() => scrollRow(rulesScrollRef, 'left')}
+                          className="absolute left-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-slate-700 hover:border-slate-300 shadow-sm"
+                          aria-label="Scroll left"
+                        >
+                          ‹
+                        </button>
+                      )}
+                      {rulesCanRight && (
+                        <button
+                          type="button"
+                          onClick={() => scrollRow(rulesScrollRef, 'right')}
+                          className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-slate-700 hover:border-slate-300 shadow-sm"
+                          aria-label="Scroll right"
+                        >
+                          ›
+                        </button>
+                      )}
+                    </div>
+                    {selectedRuleIds.length > 0 && (
+                      <div className="text-[10px] text-slate-500">
+                        Selected rules are prepended to the prompt before poster planning and generation.
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-[11px] text-slate-400">
+                    No rules found. Add some in Personal Space.
+                  </div>
                 )}
               </motion.div>
               <motion.div layout className="space-y-2">

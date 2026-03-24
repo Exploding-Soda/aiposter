@@ -86,6 +86,7 @@ export interface Project {
   fontReferenceImage?: string | null;
   selectedReferenceStyleId?: string | null;
   selectedReferenceStyleStrength?: ReferenceStyleStrength;
+  selectedRuleIds?: string[];
   selectedLogoAssetId?: string | null;
   selectedFontReferenceId?: string | null;
   canvasAssets?: Asset[];
