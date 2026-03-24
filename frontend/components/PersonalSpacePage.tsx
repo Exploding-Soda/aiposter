@@ -44,6 +44,13 @@ type PrimaryColorGroupItem = {
   created_at: string;
 };
 
+type RuleItem = {
+  id: string;
+  description: string;
+  source: string;
+  created_at: string;
+};
+
 const PRIMARY_COLOR_SLOT_COUNT = 6;
 const DEFAULT_PRIMARY_COLOR_HEX = '#2563EB';
 
@@ -112,9 +119,18 @@ const PersonalSpacePage: React.FC = () => {
   const [previewImageName, setPreviewImageName] = useState<string | null>(null);
   const [previewImageSize, setPreviewImageSize] = useState<{ width: number; height: number } | null>(null);
   const [isPreviewClosing, setIsPreviewClosing] = useState(false);
+  const [rules, setRules] = useState<RuleItem[]>([]);
+  const [rulesLoading, setRulesLoading] = useState(true);
+  const [rulesError, setRulesError] = useState('');
+  const [ruleDeleting, setRuleDeleting] = useState<string | null>(null);
+  const [isRuleModalOpen, setIsRuleModalOpen] = useState(false);
+  const [ruleDraft, setRuleDraft] = useState('');
+  const [isSavingRule, setIsSavingRule] = useState(false);
+  const [previewRule, setPreviewRule] = useState<RuleItem | null>(null);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
   const [guideStep, setGuideStep] = useState(0);
   const referenceSectionRef = useRef<HTMLElement | null>(null);
+  const rulesSectionRef = useRef<HTMLElement | null>(null);
   const primaryColorSectionRef = useRef<HTMLElement | null>(null);
   const fontSectionRef = useRef<HTMLElement | null>(null);
   const logoSectionRef = useRef<HTMLElement | null>(null);
@@ -203,8 +219,30 @@ const PersonalSpacePage: React.FC = () => {
     }
   };
 
+  const loadRules = async () => {
+    setRulesLoading(true);
+    setRulesError('');
+    try {
+      const response = await fetchWithAuth(
+        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/design-guidance`
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load rules';
+        throw new Error(message);
+      }
+      setRules(Array.isArray(data.items) ? data.items : []);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load rules';
+      setRulesError(message);
+    } finally {
+      setRulesLoading(false);
+    }
+  };
+
   useEffect(() => {
     void loadReferenceStyles();
+    void loadRules();
     void loadPrimaryColors();
     void loadFontReferences();
     void loadLogos();
@@ -224,6 +262,17 @@ const PersonalSpacePage: React.FC = () => {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [isPrimaryColorEditorOpen]);
+
+  useEffect(() => {
+    if (!isRuleModalOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !isSavingRule) {
+        setIsRuleModalOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isRuleModalOpen, isSavingRule]);
 
   const handleReferenceUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -613,6 +662,67 @@ const PersonalSpacePage: React.FC = () => {
     });
   };
 
+  const handleSaveRule = async () => {
+    const description = ruleDraft.trim();
+    if (!description) {
+      setRulesError('Rule text cannot be empty.');
+      return;
+    }
+
+    setRulesError('');
+    setIsSavingRule(true);
+    try {
+      const response = await fetchWithAuth(
+        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/design-guidance`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            description,
+            source: 'text'
+          })
+        }
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to save rule';
+        throw new Error(message);
+      }
+
+      setRules((prev) => [data.item as RuleItem, ...prev]);
+      setRuleDraft('');
+      setIsRuleModalOpen(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save rule';
+      setRulesError(message);
+    } finally {
+      setIsSavingRule(false);
+    }
+  };
+
+  const handleDeleteRule = async (item: RuleItem) => {
+    if (ruleDeleting) return;
+    setRulesError('');
+    setRuleDeleting(item.id);
+    try {
+      const response = await fetchWithAuth(
+        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/design-guidance/${item.id}`,
+        { method: 'DELETE' }
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to delete rule';
+        throw new Error(message);
+      }
+      setRules((prev) => prev.filter((rule) => rule.id !== item.id));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete rule';
+      setRulesError(message);
+    } finally {
+      setRuleDeleting(null);
+    }
+  };
+
   const handlePendingPrimaryColorChannelChange = (channel: 'r' | 'g' | 'b', value: string) => {
     const numericValue = Number.parseInt(value, 10);
     const safeValue = Number.isNaN(numericValue) ? 0 : Math.max(0, Math.min(255, numericValue));
@@ -743,6 +853,19 @@ const PersonalSpacePage: React.FC = () => {
             alt="Reference style example poster"
             className="h-56 w-full rounded-2xl border border-gray-200 bg-slate-50 object-contain p-3"
           />
+        </div>
+      )
+    },
+    {
+      title: 'Rules',
+      target: rulesSectionRef,
+      content: (
+        <div className="space-y-3">
+          <p>Store short text rules here, like tone, wording constraints, or layout requirements. Each rule is a reusable string the system can refer back to.</p>
+          <div className="space-y-2 rounded-2xl border border-gray-200 bg-white p-4">
+            <div className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-gray-700">Always preserve official event name wording.</div>
+            <div className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-gray-700">Use warm seasonal colors and avoid neon accents.</div>
+          </div>
         </div>
       )
     },
@@ -928,6 +1051,78 @@ const PersonalSpacePage: React.FC = () => {
                   <span className="text-[10px] font-bold uppercase tracking-wider">Add Image</span>
                   <input type="file" className="hidden" accept="image/*" onChange={handleReferenceUpload} />
                 </label>
+              </div>
+            </div>
+          </section>
+
+          <section ref={rulesSectionRef} className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 flex flex-col">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-50 text-amber-600 rounded-xl">
+                  <FileText size={18} />
+                </div>
+                <h3 className="font-bold text-gray-900">Rules</h3>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setRulesError('');
+                  setRuleDraft('');
+                  setIsRuleModalOpen(true);
+                }}
+                className="p-2 hover:bg-gray-100 rounded-full cursor-pointer transition-colors"
+                aria-label="Add rule"
+                title="Add rule"
+              >
+                <Plus size={20} className="text-gray-400 hover:text-gray-900" />
+              </button>
+            </div>
+
+            <div className="flex-1">
+              {rulesError && (
+                <div className="text-xs text-red-600 mb-3">{rulesError}</div>
+              )}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                {rulesLoading && rules.length === 0 ? (
+                  <div className="col-span-full text-sm text-gray-400">Loading rules...</div>
+                ) : rules.length > 0 ? (
+                  rules.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setPreviewRule(item)}
+                      className="aspect-square bg-gray-50 rounded-2xl border border-gray-100 overflow-hidden relative group shadow-sm text-left transition hover:border-amber-200 hover:bg-amber-50/30"
+                    >
+                      <div className="flex h-full flex-col p-4">
+                        <div className="min-h-0 flex-1 pr-8">
+                          <div className="line-clamp-6 text-sm leading-6 text-gray-800 whitespace-pre-wrap break-words">
+                            {item.description}
+                          </div>
+                        </div>
+                        <div className="mt-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+                            {new Date(item.created_at).toLocaleString()}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleDeleteRule(item);
+                          }}
+                          disabled={ruleDeleting === item.id}
+                          className="absolute top-2 right-2 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/90 text-xs font-bold text-gray-600 shadow-sm transition hover:bg-white hover:text-rose-600 opacity-0 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          aria-label="Delete rule"
+                        >
+                          x
+                        </button>
+                      </div>
+                    </button>
+                  ))
+                ) : (
+                  <div className="col-span-full rounded-2xl border border-dashed border-gray-200 bg-slate-50 px-4 py-10 text-sm text-gray-400">
+                    No rules yet.
+                  </div>
+                )}
               </div>
             </div>
           </section>
@@ -1459,6 +1654,105 @@ const PersonalSpacePage: React.FC = () => {
                   }
                 }}
               />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isRuleModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+          onClick={() => {
+            if (!isSavingRule) {
+              setIsRuleModalOpen(false);
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-xl rounded-3xl bg-white p-6 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold text-gray-900">Add Rule</div>
+                <div className="mt-1 text-sm text-gray-500">Each rule is saved as a single text record.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsRuleModalOpen(false)}
+                disabled={isSavingRule}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-gray-200 text-gray-500 transition hover:border-gray-300 hover:text-gray-800 disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Close rule modal"
+              >
+                x
+              </button>
+            </div>
+
+            <div className="mt-5">
+              <label className="block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
+                Rule Text
+              </label>
+              <textarea
+                value={ruleDraft}
+                onChange={(event) => setRuleDraft(event.target.value)}
+                placeholder="For example: Keep headline wording formal and avoid slang."
+                rows={6}
+                className="mt-2 w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800 outline-none transition focus:border-amber-400"
+              />
+            </div>
+
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setIsRuleModalOpen(false)}
+                disabled={isSavingRule}
+                className="inline-flex h-11 items-center justify-center rounded-2xl border border-gray-200 bg-white px-4 text-sm font-semibold text-gray-600 transition hover:border-gray-300 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSaveRule()}
+                disabled={isSavingRule}
+                className="inline-flex h-11 items-center justify-center rounded-2xl bg-amber-500 px-5 text-sm font-semibold text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:bg-amber-300"
+              >
+                {isSavingRule ? 'Saving...' : 'Save Rule'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {previewRule && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+          onClick={() => setPreviewRule(null)}
+        >
+          <div
+            className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold text-gray-900">Rule Preview</div>
+                <div className="mt-1 text-sm text-gray-500">
+                  {new Date(previewRule.created_at).toLocaleString()}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewRule(null)}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-gray-200 text-gray-500 transition hover:border-gray-300 hover:text-gray-800"
+                aria-label="Close rule preview"
+              >
+                x
+              </button>
+            </div>
+
+            <div className="mt-5 rounded-3xl border border-gray-100 bg-slate-50 p-5">
+              <div className="whitespace-pre-wrap break-words text-sm leading-7 text-gray-800">
+                {previewRule.description}
+              </div>
             </div>
           </div>
         </div>
