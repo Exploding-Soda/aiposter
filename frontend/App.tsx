@@ -11,6 +11,7 @@ import PosterCard from './components/PosterCard';
 import LandingPage from './components/LandingPage';
 import PersonalSpacePage from './components/PersonalSpacePage';
 import SpotlightTour from './components/SpotlightTour';
+import { getLandingLocaleFromWindow, persistLandingLocale, type LandingLocale } from './components/landingI18n';
 import { norefPoster, refPosterOne, refPosterTwo } from './onboardingAssets';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 
@@ -1128,6 +1129,7 @@ const App: React.FC = () => {
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
   const [newProjectData, setNewProjectData] = useState({ title: '', width: DEFAULT_BOARD_WIDTH, height: DEFAULT_BOARD_HEIGHT });
   const [route, setRoute] = useState(() => window.location.pathname);
+  const [landingLocale, setLandingLocale] = useState<LandingLocale>(() => getLandingLocaleFromWindow());
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -1517,6 +1519,7 @@ const App: React.FC = () => {
 
   const syncRouteState = useCallback((path: string) => {
     setRoute(path);
+    setLandingLocale(getLandingLocaleFromWindow());
     const boardMatch = path.match(/^\/board\/([^/]+)$/);
     if (boardMatch) {
       setActiveProjectId(boardMatch[1]);
@@ -3395,6 +3398,14 @@ const App: React.FC = () => {
     syncRouteState(path);
   }, [syncRouteState]);
 
+  const handleLandingLocaleChange = useCallback((locale: LandingLocale) => {
+    persistLandingLocale(locale);
+    setLandingLocale(locale);
+    const url = new URL(window.location.href);
+    url.searchParams.set('lang', locale);
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  }, []);
+
   const handleLogout = async () => {
     await logoutUser();
     setAuthUser(null);
@@ -3625,7 +3636,7 @@ const App: React.FC = () => {
   }, [authUser]);
 
   const loadRules = useCallback(async () => {
-    if (!authUser) {
+  if (!authUser) {
       setRules([]);
       return;
     }
@@ -6916,9 +6927,15 @@ Return ONLY valid JSON in the format:
     );
   }
 
-  if (!authUser) {
+    if (!authUser) {
     if (isLandingRoute) {
-      return <LandingPage onStartCreating={() => handleNavigate('/login')} />;
+      return (
+        <LandingPage
+          locale={landingLocale}
+          onLocaleChange={handleLandingLocaleChange}
+          onStartCreating={() => handleNavigate('/login')}
+        />
+      );
     }
 
     if (isLoginRoute) {
