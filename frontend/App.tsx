@@ -745,27 +745,22 @@ const recolorConnectedRegionByClosestPaletteColor = async (
     g: data[seedIndex + 1],
     b: data[seedIndex + 2]
   };
-  const closestPaletteColor = palette.reduce((best, color) => (
-    colorDistanceSq(seedColor, color) < colorDistanceSq(seedColor, best) ? color : best
-  ), palette[0]);
-  const isSeedAlreadyTarget =
-    seedColor.r === closestPaletteColor.r &&
-    seedColor.g === closestPaletteColor.g &&
-    seedColor.b === closestPaletteColor.b;
-  if (isSeedAlreadyTarget) {
-    return canvas.toDataURL('image/png');
-  }
 
   const totalIterations = Math.max(1, Math.floor(iterations));
   const baseThresholdSq = threshold * threshold;
   const visited = new Uint8Array(width * height);
   const replacedMask = new Uint8Array(width * height);
   const queue: Array<[number, number]> = [[px, py]];
+  const regionPixels: Array<[number, number]> = [];
   visited[py * width + px] = 1;
   let minX = px;
   let maxX = px;
   let minY = py;
   let maxY = py;
+  let regionColorSumR = 0;
+  let regionColorSumG = 0;
+  let regionColorSumB = 0;
+  let regionPixelCount = 0;
 
   while (queue.length > 0) {
     const [x, y] = queue.shift()!;
@@ -774,10 +769,11 @@ const recolorConnectedRegionByClosestPaletteColor = async (
     const current: RgbColor = { r: data[index], g: data[index + 1], b: data[index + 2] };
     if (colorDistanceSq(current, seedColor) > baseThresholdSq) continue;
 
-    data[index] = closestPaletteColor.r;
-    data[index + 1] = closestPaletteColor.g;
-    data[index + 2] = closestPaletteColor.b;
-    replacedMask[y * width + x] = 1;
+    regionPixels.push([x, y]);
+    regionColorSumR += current.r;
+    regionColorSumG += current.g;
+    regionColorSumB += current.b;
+    regionPixelCount += 1;
     minX = Math.min(minX, x);
     maxX = Math.max(maxX, x);
     minY = Math.min(minY, y);
@@ -795,8 +791,32 @@ const recolorConnectedRegionByClosestPaletteColor = async (
     }
   }
 
-  if (maxX < minX || maxY < minY) {
+  if (regionPixelCount === 0 || maxX < minX || maxY < minY) {
     return canvas.toDataURL('image/png');
+  }
+
+  const regionColor: RgbColor = {
+    r: clampChannel(regionColorSumR / regionPixelCount),
+    g: clampChannel(regionColorSumG / regionPixelCount),
+    b: clampChannel(regionColorSumB / regionPixelCount)
+  };
+  const closestPaletteColor = palette.reduce((best, color) => (
+    colorDistanceSq(regionColor, color) < colorDistanceSq(regionColor, best) ? color : best
+  ), palette[0]);
+  const isRegionAlreadyTarget =
+    regionColor.r === closestPaletteColor.r &&
+    regionColor.g === closestPaletteColor.g &&
+    regionColor.b === closestPaletteColor.b;
+  if (isRegionAlreadyTarget) {
+    return canvas.toDataURL('image/png');
+  }
+
+  for (const [x, y] of regionPixels) {
+    const index = getIndex(x, y);
+    data[index] = closestPaletteColor.r;
+    data[index + 1] = closestPaletteColor.g;
+    data[index + 2] = closestPaletteColor.b;
+    replacedMask[y * width + x] = 1;
   }
 
   for (let iteration = 1; iteration < totalIterations; iteration += 1) {
@@ -1194,6 +1214,7 @@ const App: React.FC = () => {
   const [refineColorSetError, setRefineColorSetError] = useState('');
   const [refineColorThreshold, setRefineColorThreshold] = useState(40);
   const [refineColorIterations, setRefineColorIterations] = useState(4);
+  const [refineWholePosterThreshold, setRefineWholePosterThreshold] = useState(40);
   const [refineRectDetectionThreshold, setRefineRectDetectionThreshold] = useState(2);
   const [hasTouchedRefineRectDetect, setHasTouchedRefineRectDetect] = useState(false);
   const [isRefineColorSettingsOpen, setIsRefineColorSettingsOpen] = useState(false);
@@ -5942,7 +5963,7 @@ Return ONLY valid JSON in the format:
       const nextPreview = await recolorEntireImageByPalette(
         currentRefinePosterImageUrl,
         selectedRefineColorGroup.colors,
-        refineColorThreshold
+        refineWholePosterThreshold
       );
       setDetectedRefineRectangles([]);
       pushRefinePreviewHistory(nextPreview);
@@ -5953,7 +5974,7 @@ Return ONLY valid JSON in the format:
     } finally {
       setIsReplacingWholePoster(false);
     }
-  }, [applyRefinePreviewState, currentRefinePosterImageUrl, pushRefinePreviewHistory, refineColorThreshold, selectedRefineColorGroup]);
+  }, [applyRefinePreviewState, currentRefinePosterImageUrl, pushRefinePreviewHistory, refineWholePosterThreshold, selectedRefineColorGroup]);
 
   const handleAnalyzeRefineRectangles = useCallback(async () => {
     if (!currentRefinePosterImageUrl) {
@@ -9320,6 +9341,24 @@ Return ONLY valid JSON in the format:
                   >
                     {isReplacingWholePoster ? 'Replacing Whole Poster...' : 'Replace Whole Poster'}
                   </button>
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                    <div className="flex items-center justify-between text-[11px] text-slate-500">
+                      <span>Whole Poster Threshold</span>
+                      <span className="font-semibold text-slate-700">{refineWholePosterThreshold}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="24"
+                      max="300"
+                      step="2"
+                      value={refineWholePosterThreshold}
+                      onChange={(event) => setRefineWholePosterThreshold(Number(event.target.value))}
+                      className="mt-2 w-full accent-slate-700"
+                    />
+                    <div className="mt-1 text-[10px] text-slate-400">
+                      Controls how far each poster pixel can snap to the nearest color in the selected set.
+                    </div>
+                  </div>
                   <div className="rounded-xl border border-slate-200 bg-white">
                     <button
                       type="button"
@@ -9327,7 +9366,7 @@ Return ONLY valid JSON in the format:
                       className="flex w-full items-center justify-between px-3 py-2 text-[11px] font-semibold text-slate-600"
                     >
                       <span>
-                        Settings
+                        Rect Settings
                         <span className="ml-2 font-normal text-slate-400">
                           D {refineRectDetectionThreshold} / T {refineColorThreshold} / I {refineColorIterations}
                         </span>
