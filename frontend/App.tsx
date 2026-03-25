@@ -97,16 +97,6 @@ const pickLogoForModel = (preferred: string | null, fallback: string | null) => 
 };
 
 type RgbColor = { r: number; g: number; b: number };
-type DetectedRectRegion = {
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
-  dominant: RgbColor;
-  area: number;
-  coverage: number;
-};
-
 const hexToRgbColor = (hex: string): RgbColor | null => {
   const normalized = hex.trim().replace('#', '');
   if (!/^[0-9A-Fa-f]{6}$/.test(normalized)) return null;
@@ -149,173 +139,6 @@ const measureFlatnessInsideRect = (
   return neighbors.reduce((sum, neighbor) => sum + Math.sqrt(colorDistanceSq(center, neighbor)), 0) / neighbors.length;
 };
 
-const getMostFrequentRectColors = (
-  data: Uint8ClampedArray,
-  width: number,
-  rectangle: { left: number; top: number; right: number; bottom: number },
-  count = 2
-): RgbColor[] => {
-  const frequencies = new Map<string, { color: RgbColor; count: number }>();
-  for (let y = rectangle.top; y < rectangle.bottom; y += 1) {
-    for (let x = rectangle.left; x < rectangle.right; x += 1) {
-      const index = (y * width + x) * 4;
-      if (data[index + 3] < 220) continue;
-      const color: RgbColor = { r: data[index], g: data[index + 1], b: data[index + 2] };
-      const key = `${color.r},${color.g},${color.b}`;
-      const existing = frequencies.get(key);
-      if (existing) {
-        existing.count += 1;
-      } else {
-        frequencies.set(key, { color, count: 1 });
-      }
-    }
-  }
-
-  return Array.from(frequencies.values())
-    .sort((a, b) => b.count - a.count)
-    .slice(0, count)
-    .map((entry) => entry.color);
-};
-
-const detectObviousRectangularRegions = (
-  data: Uint8ClampedArray,
-  width: number,
-  height: number,
-  detectionThreshold = 2
-): DetectedRectRegion[] => {
-  const getIndex = (x: number, y: number) => (y * width + x) * 4;
-  const getColorAt = (x: number, y: number): RgbColor => {
-    const index = getIndex(x, y);
-    return { r: data[index], g: data[index + 1], b: data[index + 2] };
-  };
-  const measureFlatness = (x: number, y: number) => {
-    const center = getColorAt(x, y);
-    const neighbors = [
-      getColorAt(Math.max(0, x - 1), y),
-      getColorAt(Math.min(width - 1, x + 1), y),
-      getColorAt(x, Math.max(0, y - 1)),
-      getColorAt(x, Math.min(height - 1, y + 1))
-    ];
-    return neighbors.reduce((sum, neighbor) => sum + Math.sqrt(colorDistanceSq(center, neighbor)), 0) / neighbors.length;
-  };
-
-  const sampleStep = Math.max(4, Math.floor(Math.max(width, height) / 220));
-  const gridWidth = Math.max(1, Math.floor(width / sampleStep));
-  const gridHeight = Math.max(1, Math.floor(height / sampleStep));
-  const gridColors: Array<RgbColor | null> = new Array(gridWidth * gridHeight).fill(null);
-  const flatMask = new Uint8Array(gridWidth * gridHeight);
-  const gridIndex = (gx: number, gy: number) => gy * gridWidth + gx;
-
-  for (let gy = 0; gy < gridHeight; gy += 1) {
-    for (let gx = 0; gx < gridWidth; gx += 1) {
-      const x = Math.min(width - 1, gx * sampleStep + Math.floor(sampleStep / 2));
-      const y = Math.min(height - 1, gy * sampleStep + Math.floor(sampleStep / 2));
-      const pixelIndex = getIndex(x, y);
-      if (data[pixelIndex + 3] < 220) continue;
-      const color = getColorAt(x, y);
-      gridColors[gridIndex(gx, gy)] = color;
-      if (measureFlatness(x, y) <= Math.max(12, detectionThreshold * 0.7)) {
-        flatMask[gridIndex(gx, gy)] = 1;
-      }
-    }
-  }
-
-  const visited = new Uint8Array(gridWidth * gridHeight);
-  const rectangleCandidates: DetectedRectRegion[] = [];
-  const componentJoinThresholdSq = detectionThreshold * detectionThreshold;
-
-  for (let gy = 0; gy < gridHeight; gy += 1) {
-    for (let gx = 0; gx < gridWidth; gx += 1) {
-      const start = gridIndex(gx, gy);
-      if (visited[start] || !flatMask[start] || !gridColors[start]) continue;
-
-      const queue: Array<[number, number]> = [[gx, gy]];
-      visited[start] = 1;
-      let head = 0;
-      let count = 0;
-      let minGX = gx;
-      let maxGX = gx;
-      let minGY = gy;
-      let maxGY = gy;
-      let sumR = 0;
-      let sumG = 0;
-      let sumB = 0;
-
-      while (head < queue.length) {
-        const [currentGX, currentGY] = queue[head++];
-        const currentIndex = gridIndex(currentGX, currentGY);
-        const currentColor = gridColors[currentIndex];
-        if (!currentColor) continue;
-
-        count += 1;
-        minGX = Math.min(minGX, currentGX);
-        maxGX = Math.max(maxGX, currentGX);
-        minGY = Math.min(minGY, currentGY);
-        maxGY = Math.max(maxGY, currentGY);
-        sumR += currentColor.r;
-        sumG += currentColor.g;
-        sumB += currentColor.b;
-
-        const neighbors = [
-          [currentGX - 1, currentGY],
-          [currentGX + 1, currentGY],
-          [currentGX, currentGY - 1],
-          [currentGX, currentGY + 1]
-        ] as const;
-
-        for (const [nextGX, nextGY] of neighbors) {
-          if (nextGX < 0 || nextGY < 0 || nextGX >= gridWidth || nextGY >= gridHeight) continue;
-          const nextIndex = gridIndex(nextGX, nextGY);
-          if (visited[nextIndex] || !flatMask[nextIndex] || !gridColors[nextIndex]) continue;
-          if (colorDistanceSq(currentColor, gridColors[nextIndex]!) > componentJoinThresholdSq) continue;
-          visited[nextIndex] = 1;
-          queue.push([nextGX, nextGY]);
-        }
-      }
-
-      const boxCells = (maxGX - minGX + 1) * (maxGY - minGY + 1);
-      const coverage = count / Math.max(1, boxCells);
-      const pixelRectWidth = (maxGX - minGX + 1) * sampleStep;
-      const pixelRectHeight = (maxGY - minGY + 1) * sampleStep;
-
-      if (count < 6) continue;
-      if (coverage < Math.max(0.58, 0.78 - detectionThreshold * 0.004)) continue;
-      if (pixelRectWidth < Math.max(56, width * 0.08)) continue;
-      if (pixelRectHeight < Math.max(32, height * 0.04)) continue;
-
-      rectangleCandidates.push({
-        left: minGX * sampleStep,
-        top: minGY * sampleStep,
-        right: Math.min(width, (maxGX + 1) * sampleStep),
-        bottom: Math.min(height, (maxGY + 1) * sampleStep),
-        dominant: {
-          r: clampChannel(sumR / count),
-          g: clampChannel(sumG / count),
-          b: clampChannel(sumB / count)
-        },
-        area: pixelRectWidth * pixelRectHeight,
-        coverage
-      });
-    }
-  }
-
-  return rectangleCandidates
-    .sort((a, b) => b.area - a.area)
-    .filter((candidate, index, array) => {
-      const overlapsExisting = array.slice(0, index).some((other) => {
-        const overlapLeft = Math.max(candidate.left, other.left);
-        const overlapTop = Math.max(candidate.top, other.top);
-        const overlapRight = Math.min(candidate.right, other.right);
-        const overlapBottom = Math.min(candidate.bottom, other.bottom);
-        if (overlapRight <= overlapLeft || overlapBottom <= overlapTop) return false;
-        const overlapArea = (overlapRight - overlapLeft) * (overlapBottom - overlapTop);
-        return overlapArea / Math.max(1, Math.min(candidate.area, other.area)) > 0.75;
-      });
-      return !overlapsExisting;
-    })
-    .slice(0, 8);
-};
-
 const loadImageFromUrl = async (sourceUrl: string) => {
   const response = await fetch(normalizeSecureImageUrl(sourceUrl));
   if (!response.ok) {
@@ -334,90 +157,6 @@ const loadImageFromUrl = async (sourceUrl: string) => {
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
-};
-
-const recolorPosterBlocksWithPalette = async (
-  sourceUrl: string,
-  paletteHexes: string[],
-  threshold = 40,
-  iterations = 2,
-  detectionThreshold = 26
-) => {
-  const palette = paletteHexes
-    .map(hexToRgbColor)
-    .filter((color): color is RgbColor => Boolean(color));
-
-  if (palette.length === 0) {
-    throw new Error('Color set is empty.');
-  }
-
-  const image = await loadImageFromUrl(sourceUrl);
-  const width = image.naturalWidth || image.width;
-  const height = image.naturalHeight || image.height;
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext('2d', { willReadFrequently: true });
-  if (!context) {
-    throw new Error('Canvas is not available.');
-  }
-
-  context.drawImage(image, 0, 0, width, height);
-  const imageData = context.getImageData(0, 0, width, height);
-  const { data } = imageData;
-
-  const getIndex = (x: number, y: number) => (y * width + x) * 4;
-  const getColorAt = (x: number, y: number): RgbColor => {
-    const index = getIndex(x, y);
-    return { r: data[index], g: data[index + 1], b: data[index + 2] };
-  };
-  const meaningfulRectangles = detectObviousRectangularRegions(data, width, height, detectionThreshold)
-    .map((rectangle) => ({
-      ...rectangle,
-      dominantColors: getMostFrequentRectColors(data, width, rectangle, 2),
-      target: palette.reduce((best, paletteColor) => (
-        colorDistanceSq(rectangle.dominant, paletteColor) < colorDistanceSq(rectangle.dominant, best)
-          ? paletteColor
-          : best
-      ), palette[0])
-    }));
-
-  if (meaningfulRectangles.length === 0) {
-    return canvas.toDataURL('image/png');
-  }
-
-  const totalIterations = Math.max(1, Math.floor(iterations));
-  for (let iteration = 0; iteration < totalIterations; iteration += 1) {
-    for (const rectangle of meaningfulRectangles) {
-      const colorThresholdSq = threshold * threshold;
-      const dominantColors = rectangle.dominantColors.length > 0 ? rectangle.dominantColors : [rectangle.dominant];
-      for (let y = rectangle.top; y < rectangle.bottom; y += 1) {
-        for (let x = rectangle.left; x < rectangle.right; x += 1) {
-          const index = getIndex(x, y);
-          if (data[index + 3] < 220) continue;
-          const current = getColorAt(x, y);
-          const alreadyTarget =
-            current.r === rectangle.target.r &&
-            current.g === rectangle.target.g &&
-            current.b === rectangle.target.b;
-          if (alreadyTarget) {
-            continue;
-          }
-          const normalizedDominant = dominantColors.reduce((best, candidate) => (
-            colorDistanceSq(current, candidate) < colorDistanceSq(current, best) ? candidate : best
-          ), dominantColors[0]);
-          if (colorDistanceSq(current, normalizedDominant) > colorThresholdSq) continue;
-
-          data[index] = rectangle.target.r;
-          data[index + 1] = rectangle.target.g;
-          data[index + 2] = rectangle.target.b;
-        }
-      }
-    }
-  }
-
-  context.putImageData(imageData, 0, 0);
-  return canvas.toDataURL('image/png');
 };
 
 const recolorRectRegionByClosestColorToTarget = async (
@@ -709,8 +448,7 @@ const recolorConnectedRegionByClosestPaletteColor = async (
   sourceUrl: string,
   point: { x: number; y: number },
   paletteHexes: string[],
-  threshold = 40,
-  iterations = 4
+  threshold = 40
 ) => {
   const palette = paletteHexes
     .map(hexToRgbColor)
@@ -747,17 +485,11 @@ const recolorConnectedRegionByClosestPaletteColor = async (
     b: data[seedIndex + 2]
   };
 
-  const totalIterations = Math.max(1, Math.floor(iterations));
   const baseThresholdSq = threshold * threshold;
   const visited = new Uint8Array(width * height);
-  const replacedMask = new Uint8Array(width * height);
   const queue: Array<[number, number]> = [[px, py]];
   const regionPixels: Array<[number, number]> = [];
   visited[py * width + px] = 1;
-  let minX = px;
-  let maxX = px;
-  let minY = py;
-  let maxY = py;
   let regionColorSumR = 0;
   let regionColorSumG = 0;
   let regionColorSumB = 0;
@@ -775,10 +507,6 @@ const recolorConnectedRegionByClosestPaletteColor = async (
     regionColorSumG += current.g;
     regionColorSumB += current.b;
     regionPixelCount += 1;
-    minX = Math.min(minX, x);
-    maxX = Math.max(maxX, x);
-    minY = Math.min(minY, y);
-    maxY = Math.max(maxY, y);
 
     const neighbors = [
       [x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]
@@ -792,7 +520,7 @@ const recolorConnectedRegionByClosestPaletteColor = async (
     }
   }
 
-  if (regionPixelCount === 0 || maxX < minX || maxY < minY) {
+  if (regionPixelCount === 0) {
     return canvas.toDataURL('image/png');
   }
 
@@ -817,52 +545,6 @@ const recolorConnectedRegionByClosestPaletteColor = async (
     data[index] = closestPaletteColor.r;
     data[index + 1] = closestPaletteColor.g;
     data[index + 2] = closestPaletteColor.b;
-    replacedMask[y * width + x] = 1;
-  }
-
-  for (let iteration = 1; iteration < totalIterations; iteration += 1) {
-    const nextMask = new Uint8Array(replacedMask);
-    const expandedThresholdSq = (threshold + Math.min(12, iteration * 3)) ** 2;
-    for (let y = Math.max(0, minY - 1); y <= Math.min(height - 1, maxY + 1); y += 1) {
-      for (let x = Math.max(0, minX - 1); x <= Math.min(width - 1, maxX + 1); x += 1) {
-        const maskIndex = y * width + x;
-        if (replacedMask[maskIndex]) continue;
-        const pixelIndex = getIndex(x, y);
-        if (data[pixelIndex + 3] < 24) continue;
-
-        let replacedNeighbors = 0;
-        let availableNeighbors = 0;
-        const neighbors = [
-          [x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1],
-          [x - 1, y - 1], [x + 1, y - 1], [x - 1, y + 1], [x + 1, y + 1]
-        ] as const;
-        for (const [nx, ny] of neighbors) {
-          if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-          availableNeighbors += 1;
-          if (replacedMask[ny * width + nx]) {
-            replacedNeighbors += 1;
-          }
-        }
-        if (availableNeighbors === 0 || replacedNeighbors / availableNeighbors < 0.45) continue;
-
-        const current: RgbColor = {
-          r: data[pixelIndex],
-          g: data[pixelIndex + 1],
-          b: data[pixelIndex + 2]
-        };
-        if (colorDistanceSq(current, seedColor) > expandedThresholdSq) continue;
-
-        data[pixelIndex] = closestPaletteColor.r;
-        data[pixelIndex + 1] = closestPaletteColor.g;
-        data[pixelIndex + 2] = closestPaletteColor.b;
-        nextMask[maskIndex] = 1;
-        minX = Math.min(minX, x);
-        maxX = Math.max(maxX, x);
-        minY = Math.min(minY, y);
-        maxY = Math.max(maxY, y);
-      }
-    }
-    replacedMask.set(nextMask);
   }
 
   context.putImageData(imageData, 0, 0);
@@ -1211,14 +893,10 @@ const App: React.FC = () => {
   const [primaryColorGroups, setPrimaryColorGroups] = useState<PrimaryColorGroupItem[]>([]);
   const [primaryColorGroupsLoading, setPrimaryColorGroupsLoading] = useState(false);
   const [selectedRefineColorGroupId, setSelectedRefineColorGroupId] = useState<string | null>(null);
-  const [isPreviewingRefineColorSet, setIsPreviewingRefineColorSet] = useState(false);
   const [isReplacingWholePoster, setIsReplacingWholePoster] = useState(false);
   const [refineColorSetError, setRefineColorSetError] = useState('');
   const [refineColorThreshold, setRefineColorThreshold] = useState(40);
-  const [refineColorIterations, setRefineColorIterations] = useState(4);
   const [refineWholePosterThreshold, setRefineWholePosterThreshold] = useState(40);
-  const [refineRectDetectionThreshold, setRefineRectDetectionThreshold] = useState(2);
-  const [hasTouchedRefineRectDetect, setHasTouchedRefineRectDetect] = useState(false);
   const [isRefineColorSettingsOpen, setIsRefineColorSettingsOpen] = useState(false);
   const [refinePreviewImageUrl, setRefinePreviewImageUrl] = useState<string | null>(null);
   const [isRefineBucketMode, setIsRefineBucketMode] = useState(false);
@@ -1226,8 +904,6 @@ const App: React.FC = () => {
   const [isSavingRefinePreview, setIsSavingRefinePreview] = useState(false);
   const [canUndoRefinePreview, setCanUndoRefinePreview] = useState(false);
   const [canRedoRefinePreview, setCanRedoRefinePreview] = useState(false);
-  const [detectedRefineRectangles, setDetectedRefineRectangles] = useState<DetectedRectRegion[]>([]);
-  const [isAnalyzingRefineRectangles, setIsAnalyzingRefineRectangles] = useState(false);
   const missingReferenceStyleIdsRef = useRef<Set<string>>(new Set());
   const missingLogoAssetIdsRef = useRef<Set<string>>(new Set());
   const missingFontReferenceIdsRef = useRef<Set<string>>(new Set());
@@ -1321,7 +997,6 @@ const App: React.FC = () => {
   const annotatorCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const annotationIdRef = useRef(1);
   const annotationStartRef = useRef<{ x: number; y: number } | null>(null);
-  const pendingSettingsPreviewRef = useRef(false);
   const annotationHistoryRef = useRef<Annotation[][]>([]);
   const annotationRedoRef = useRef<Annotation[][]>([]);
   const isAnnotationRestoringRef = useRef(false);
@@ -1912,8 +1587,6 @@ const App: React.FC = () => {
     setRefineColorSetError('');
     setRefinePreviewImageUrl(null);
     setIsRefineBucketMode(false);
-    setDetectedRefineRectangles([]);
-    setHasTouchedRefineRectDetect(false);
     setIsPosterModalOpen(true);
   }, []);
 
@@ -3515,8 +3188,6 @@ const App: React.FC = () => {
       setIsPosterModalClosing(false);
       setRefinePreviewImageUrl(null);
       setIsRefineBucketMode(false);
-      setDetectedRefineRectangles([]);
-      setHasTouchedRefineRectDetect(false);
     }, 180);
   };
 
@@ -5550,32 +5221,11 @@ const App: React.FC = () => {
       }
     };
 
-    detectedRefineRectangles.forEach((rectangle, index) => {
-      ctx.strokeStyle = '#06b6d4';
-      ctx.lineWidth = 3;
-      ctx.setLineDash([10, 6]);
-      ctx.strokeRect(
-        rectangle.left,
-        rectangle.top,
-        rectangle.right - rectangle.left,
-        rectangle.bottom - rectangle.top
-      );
-      ctx.setLineDash([]);
-      ctx.fillStyle = 'rgba(6, 182, 212, 0.12)';
-      ctx.fillRect(
-        rectangle.left,
-        rectangle.top,
-        rectangle.right - rectangle.left,
-        rectangle.bottom - rectangle.top
-      );
-      drawLabel(index + 1, rectangle.left, rectangle.top, '#0891b2');
-    });
-
     annotations.forEach(drawAnnotation);
     if (annotationDraft) {
       drawAnnotation(annotationDraft);
     }
-  }, [annotatorImage, annotatorSize, annotationZoom, annotations, annotationDraft, detectedRefineRectangles, getAnnotatorTransform]);
+  }, [annotatorImage, annotatorSize, annotationZoom, annotations, annotationDraft, getAnnotatorTransform]);
 
   const handleAnnotatorMouseDown = (event: React.MouseEvent) => {
     console.log('[annotator] mouse down', { tool: annotationTool, loaded: annotatorLoaded, ready: isAnnotatorReady, size: annotatorSize, tick: annotatorReadyTick });
@@ -5859,47 +5509,6 @@ Return ONLY valid JSON in the format:
     return derivedId;
   }, []);
 
-  const handlePreviewRefineColorSet = useCallback(async () => {
-    if (!activePosterId) return;
-    if (!selectedRefineColorGroup || selectedRefineColorGroup.colors.length === 0) return;
-
-    const currentArtboard = artboards.find((ab) => ab.id === activePosterId);
-    const currentPoster = currentArtboard?.posterData;
-    const sourceImageUrl = currentPoster?.imageUrlMerged || currentPoster?.imageUrl;
-    if (!currentArtboard || !currentPoster || !sourceImageUrl) {
-      setRefineColorSetError('Poster image is missing.');
-      return;
-    }
-
-    setRefineColorSetError('');
-    setIsPreviewingRefineColorSet(true);
-    try {
-      const recoloredImageUrl = await recolorPosterBlocksWithPalette(
-        sourceImageUrl,
-        selectedRefineColorGroup.colors,
-        refineColorThreshold,
-        refineColorIterations,
-        refineRectDetectionThreshold
-      );
-      pushRefinePreviewHistory(recoloredImageUrl);
-      applyRefinePreviewState(recoloredImageUrl);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to preview color set.';
-      setRefineColorSetError(message);
-    } finally {
-      setIsPreviewingRefineColorSet(false);
-    }
-  }, [
-    activePosterId,
-    applyRefinePreviewState,
-    artboards,
-    pushRefinePreviewHistory,
-    refineColorIterations,
-    refineRectDetectionThreshold,
-    refineColorThreshold,
-    selectedRefineColorGroup
-  ]);
-
   const handleBucketFillRectSelection = useCallback(async (rect: { x: number; y: number; width: number; height: number }) => {
     if (!selectedRefineColorGroup || selectedRefineColorGroup.colors.length === 0 || !currentRefinePosterImageUrl) {
       setRefineColorSetError('Choose a color set first.');
@@ -5909,22 +5518,12 @@ Return ONLY valid JSON in the format:
     setRefineColorSetError('');
     setIsApplyingBucketFill(true);
     try {
-      setDetectedRefineRectangles([{
-        left: rect.x,
-        top: rect.y,
-        right: rect.x + rect.width,
-        bottom: rect.y + rect.height,
-        dominant: hexToRgbColor(selectedRefineColorGroup.colors[0]) || { r: 0, g: 0, b: 0 },
-        area: rect.width * rect.height,
-        coverage: 1
-      }]);
       const nextPreview = await recolorRectRegionByPalette(
         currentRefinePosterImageUrl,
         rect,
         selectedRefineColorGroup.colors,
         refineColorThreshold
       );
-      setDetectedRefineRectangles([]);
       pushRefinePreviewHistory(nextPreview);
       applyRefinePreviewState(nextPreview);
     } catch (error) {
@@ -5948,10 +5547,8 @@ Return ONLY valid JSON in the format:
         currentRefinePosterImageUrl,
         point,
         selectedRefineColorGroup.colors,
-        refineColorThreshold,
-        refineColorIterations
+        refineColorThreshold
       );
-      setDetectedRefineRectangles([]);
       pushRefinePreviewHistory(nextPreview);
       applyRefinePreviewState(nextPreview);
     } catch (error) {
@@ -5960,7 +5557,7 @@ Return ONLY valid JSON in the format:
     } finally {
       setIsApplyingBucketFill(false);
     }
-  }, [applyRefinePreviewState, currentRefinePosterImageUrl, pushRefinePreviewHistory, refineColorIterations, refineColorThreshold, selectedRefineColorGroup]);
+  }, [applyRefinePreviewState, currentRefinePosterImageUrl, pushRefinePreviewHistory, refineColorThreshold, selectedRefineColorGroup]);
 
   const handleReplaceWholePosterWithPalette = useCallback(async () => {
     if (!selectedRefineColorGroup || selectedRefineColorGroup.colors.length === 0 || !currentRefinePosterImageUrl) {
@@ -5976,7 +5573,6 @@ Return ONLY valid JSON in the format:
         selectedRefineColorGroup.colors,
         refineWholePosterThreshold
       );
-      setDetectedRefineRectangles([]);
       pushRefinePreviewHistory(nextPreview);
       applyRefinePreviewState(nextPreview);
     } catch (error) {
@@ -5986,59 +5582,6 @@ Return ONLY valid JSON in the format:
       setIsReplacingWholePoster(false);
     }
   }, [applyRefinePreviewState, currentRefinePosterImageUrl, pushRefinePreviewHistory, refineWholePosterThreshold, selectedRefineColorGroup]);
-
-  const handleAnalyzeRefineRectangles = useCallback(async () => {
-    if (!currentRefinePosterImageUrl) {
-      setRefineColorSetError('Poster image is missing.');
-      return;
-    }
-
-    setRefineColorSetError('');
-    setIsAnalyzingRefineRectangles(true);
-    try {
-      const image = await loadImageFromUrl(currentRefinePosterImageUrl);
-      const width = image.naturalWidth || image.width;
-      const height = image.naturalHeight || image.height;
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const context = canvas.getContext('2d', { willReadFrequently: true });
-      if (!context) {
-        throw new Error('Canvas is not available.');
-      }
-
-      context.drawImage(image, 0, 0, width, height);
-      const imageData = context.getImageData(0, 0, width, height);
-      const rectangles = detectObviousRectangularRegions(imageData.data, width, height, refineRectDetectionThreshold);
-      setDetectedRefineRectangles(rectangles);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to analyze rectangular regions.';
-      setRefineColorSetError(message);
-    } finally {
-      setIsAnalyzingRefineRectangles(false);
-    }
-  }, [currentRefinePosterImageUrl, refineRectDetectionThreshold]);
-
-  useEffect(() => {
-    if (!isPosterModalOpen) return;
-    if (!hasTouchedRefineRectDetect) return;
-    if (!currentRefinePosterImageUrl) {
-      setDetectedRefineRectangles([]);
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      void handleAnalyzeRefineRectangles();
-    }, 120);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [currentRefinePosterImageUrl, handleAnalyzeRefineRectangles, hasTouchedRefineRectDetect, isPosterModalOpen]);
-
-  const handleSettingsPreviewCommit = useCallback(() => {
-    if (!pendingSettingsPreviewRef.current) return;
-    pendingSettingsPreviewRef.current = false;
-    void handlePreviewRefineColorSet();
-  }, [handlePreviewRefineColorSet]);
 
   const handleSaveRefinePreview = useCallback(() => {
     if (!activePosterId || !refinePreviewImageUrl) {
@@ -9280,22 +8823,13 @@ Return ONLY valid JSON in the format:
                     </button>
                   </div>
                 )}
-                <div className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Color Set</label>
-                    <div className="flex items-center gap-2">
-                      {detectedRefineRectangles.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setDetectedRefineRectangles([])}
-                          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-slate-500 transition hover:bg-slate-100"
-                        >
-                          Clear
-                        </button>
-                      )}
-                      {primaryColorGroupsLoading && (
-                        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Loading</span>
-                      )}
+                  <div className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Color Set</label>
+                      <div className="flex items-center gap-2">
+                        {primaryColorGroupsLoading && (
+                          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Loading</span>
+                        )}
                     </div>
                   </div>
                   <select
@@ -9383,9 +8917,9 @@ Return ONLY valid JSON in the format:
                       className="flex w-full items-center justify-between px-3 py-2 text-[11px] font-semibold text-slate-600"
                     >
                       <span>
-                        Rect Settings
+                        Color Threshold
                         <span className="ml-2 font-normal text-slate-400">
-                          D {refineRectDetectionThreshold} / T {refineColorThreshold} / I {refineColorIterations}
+                          {refineColorThreshold}
                         </span>
                       </span>
                       <ChevronDown className={`h-4 w-4 transition-transform ${isRefineColorSettingsOpen ? 'rotate-180' : ''}`} />
@@ -9394,31 +8928,7 @@ Return ONLY valid JSON in the format:
                       <div className="space-y-2 border-t border-slate-200 px-3 py-2">
                         <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
                           <div className="flex items-center justify-between text-[11px] text-slate-500">
-                            <span>Rect Detect</span>
-                            <span className="font-semibold text-slate-700">{refineRectDetectionThreshold}</span>
-                          </div>
-                          <input
-                            type="range"
-                            min="2"
-                            max="10"
-                            step="1"
-                            value={refineRectDetectionThreshold}
-                            onChange={(event) => {
-                              pendingSettingsPreviewRef.current = true;
-                              setHasTouchedRefineRectDetect(true);
-                              setRefineRectDetectionThreshold(Number(event.target.value));
-                            }}
-                            onMouseUp={handleSettingsPreviewCommit}
-                            onTouchEnd={handleSettingsPreviewCommit}
-                            className="mt-2 w-full accent-slate-700"
-                          />
-                          <div className="mt-1 text-[10px] text-slate-400">
-                            Higher values detect looser, less uniform rectangles.
-                          </div>
-                        </div>
-                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                          <div className="flex items-center justify-between text-[11px] text-slate-500">
-                            <span>Threshold</span>
+                            <span>Color Threshold</span>
                             <span className="font-semibold text-slate-700">{refineColorThreshold}</span>
                           </div>
                           <input
@@ -9427,45 +8937,18 @@ Return ONLY valid JSON in the format:
                             max="300"
                             step="2"
                             value={refineColorThreshold}
-                            onChange={(event) => {
-                              pendingSettingsPreviewRef.current = true;
-                              setRefineColorThreshold(Number(event.target.value));
-                            }}
-                            onMouseUp={handleSettingsPreviewCommit}
-                            onTouchEnd={handleSettingsPreviewCommit}
+                            onChange={(event) => setRefineColorThreshold(Number(event.target.value))}
                             className="mt-2 w-full accent-slate-700"
                           />
-                        </div>
-                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                          <div className="flex items-center justify-between text-[11px] text-slate-500">
-                            <span>Iterations</span>
-                            <span className="font-semibold text-slate-700">{refineColorIterations}</span>
+                          <div className="mt-1 text-[10px] text-slate-400">
+                            Controls how tolerant the fill tools are when matching nearby colors.
                           </div>
-                          <input
-                            type="range"
-                            min="2"
-                            max="8"
-                            step="1"
-                            value={refineColorIterations}
-                            onChange={(event) => {
-                              pendingSettingsPreviewRef.current = true;
-                              setRefineColorIterations(Number(event.target.value));
-                            }}
-                            onMouseUp={handleSettingsPreviewCommit}
-                            onTouchEnd={handleSettingsPreviewCommit}
-                            className="mt-2 w-full accent-slate-700"
-                          />
                         </div>
                       </div>
                     )}
                   </div>
                   {refineColorSetError && (
                     <div className="text-[11px] text-rose-600">{refineColorSetError}</div>
-                  )}
-                  {detectedRefineRectangles.length > 0 && (
-                    <div className="text-[11px] text-slate-500">
-                      Detected {detectedRefineRectangles.length} obvious rectangular color blocks.
-                    </div>
                   )}
                   {isApplyingBucketFill && (
                     <div className="text-[11px] text-slate-500">Detecting region and recoloring...</div>
@@ -9478,9 +8961,6 @@ Return ONLY valid JSON in the format:
                   >
                     {isSavingRefinePreview ? 'Saving Fill Result...' : 'Save Fill Result'}
                   </button>
-                  {isPreviewingRefineColorSet && (
-                    <div className="text-[11px] text-slate-500">Rendering color set preview...</div>
-                  )}
                 </div>
                 <button
                   onClick={handleRefinePoster}
