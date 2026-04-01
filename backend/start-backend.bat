@@ -8,7 +8,4 @@ if not exist "%VENV_DIR%" (
 )
 
 call "%VENV_DIR%\\Scripts\\activate.bat"
-set MOCK_AI_MODE=1
-set MOCK_AI_DELAY_MS=5000
-set MOCK_AI_ERROR_RATE=0.02
 python "%~dp0main.py"

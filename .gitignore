@@ -14,3 +14,7 @@ backend/db/
 *.log
 .DS_Store
 Thumbs.db
+loadtest-results/
+scripts/__pycache__/
+frontend/.env.backup-*
+frontend/.env.local.backup-*
