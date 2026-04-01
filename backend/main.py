@@ -4,6 +4,7 @@ import sqlite3
 import json
 import base64
 import hashlib
+import random
 import secrets
 import uuid
 import shutil
@@ -77,6 +78,9 @@ FRONTEND_ORIGINS = [
 POLO_API_URL = os.getenv("POLO_API_URL", "https://open.cherryin.net/v1/chat/completions")
 POLO_API_KEY = os.getenv("POLO_API_KEY", "")
 POLO_TIMEOUT_SECONDS = int(os.getenv("POLO_TIMEOUT_SECONDS", "180"))
+MOCK_AI_MODE = os.getenv("MOCK_AI_MODE", "0").strip().lower() in {"1", "true", "yes", "on"}
+MOCK_AI_DELAY_MS = max(0, int(os.getenv("MOCK_AI_DELAY_MS", "0")))
+MOCK_AI_ERROR_RATE = min(1.0, max(0.0, float(os.getenv("MOCK_AI_ERROR_RATE", "0"))))
 IMAGE_EDIT_PROVIDER = os.getenv("IMAGE_EDIT_PROVIDER", "traditional").strip().lower()
 VOD_SECRET_ID = os.getenv("VOD_SECRET_ID", "")
 VOD_SECRET_KEY = os.getenv("VOD_SECRET_KEY", "")
@@ -1711,6 +1715,59 @@ def normalize_image_response(image_url: str, provider: str) -> Dict[str, Any]:
   }
 
 
+def run_mock_ai_delay() -> None:
+  if MOCK_AI_DELAY_MS > 0:
+    time.sleep(MOCK_AI_DELAY_MS / 1000)
+
+
+def maybe_raise_mock_ai_error() -> None:
+  if MOCK_AI_ERROR_RATE > 0 and random.random() < MOCK_AI_ERROR_RATE:
+    raise RuntimeError("Mock AI simulated failure")
+
+
+def build_mock_image_url(prompt: str) -> str:
+  label = (prompt or "mock image").strip()[:48] or "mock image"
+  svg = f"""
+  <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+    <defs>
+      <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#0f766e" />
+        <stop offset="100%" stop-color="#164e63" />
+      </linearGradient>
+    </defs>
+    <rect width="1024" height="1024" fill="url(#bg)" />
+    <text x="80" y="460" fill="#ecfeff" font-family="Arial, sans-serif" font-size="44">Mock AI Image</text>
+    <text x="80" y="540" fill="#ccfbf1" font-family="Arial, sans-serif" font-size="28">{label}</text>
+  </svg>
+  """.strip()
+  encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+  return f"data:image/svg+xml;base64,{encoded}"
+
+
+def build_mock_chat_response(payload: Dict[str, Any]) -> Dict[str, Any]:
+  prompt, images = extract_prompt_and_images_from_chat_payload(payload)
+  model = str(payload.get("model", "mock-model")).strip() or "mock-model"
+  text = (
+    f"[mock-ai] model={model}; delay_ms={MOCK_AI_DELAY_MS}; "
+    f"images={len(images)}; prompt={prompt or 'n/a'}"
+  )
+  return {
+    "choices": [
+      {
+        "message": {
+          "content": text
+        }
+      }
+    ],
+    "_meta": {
+      "provider": "mock",
+      "mock": True,
+      "delayMs": MOCK_AI_DELAY_MS,
+      "errorRate": MOCK_AI_ERROR_RATE
+    }
+  }
+
+
 def parse_data_url(data_url: str) -> tuple[bytes, str, str]:
   if not data_url.startswith("data:") or "," not in data_url:
     raise HTTPException(status_code=400, detail="Only data URLs are supported for image edit requests")
@@ -1999,6 +2056,11 @@ def handle_image_model_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
   if not prompt:
     raise HTTPException(status_code=400, detail="Image request is missing prompt")
 
+  if MOCK_AI_MODE:
+    run_mock_ai_delay()
+    maybe_raise_mock_ai_error()
+    return normalize_image_response(build_mock_image_url(prompt), "mock")
+
   provider = IMAGE_EDIT_PROVIDER
   if provider == "vod":
     image_url = call_vod_image_api(prompt, images)
@@ -2012,6 +2074,14 @@ def ai_image_edit(request: ImageEditRequest, user: sqlite3.Row = Depends(require
   prompt = request.prompt.strip()
   if not prompt:
     raise HTTPException(status_code=400, detail="Prompt is required")
+
+  if MOCK_AI_MODE:
+    run_mock_ai_delay()
+    maybe_raise_mock_ai_error()
+    return JSONResponse({
+      "imageUrl": build_mock_image_url(prompt),
+      "provider": "mock"
+    })
 
   provider = IMAGE_EDIT_PROVIDER
   if provider == "vod":
@@ -2029,6 +2099,11 @@ def ai_image_edit(request: ImageEditRequest, user: sqlite3.Row = Depends(require
 def ai_chat(payload: Dict[str, Any], user: sqlite3.Row = Depends(require_current_user)):
   if is_image_model_payload(payload):
     return JSONResponse(content=handle_image_model_payload(payload))
+
+  if MOCK_AI_MODE:
+    run_mock_ai_delay()
+    maybe_raise_mock_ai_error()
+    return JSONResponse(content=build_mock_chat_response(payload))
 
   if not POLO_API_KEY:
     raise HTTPException(status_code=500, detail="POLO_API_KEY not configured on server")
@@ -2103,6 +2178,18 @@ def execute_ai_task(task_id: str):
       )
       conn.commit()
       print(f"[info] AI task {task_id} completed successfully")
+      return
+
+    if MOCK_AI_MODE:
+      run_mock_ai_delay()
+      maybe_raise_mock_ai_error()
+      data = build_mock_chat_response(payload)
+      cursor.execute(
+        "UPDATE ai_tasks SET status = 'completed', result = ?, completed_at = ? WHERE id = ?",
+        (json.dumps(data), datetime.now(timezone.utc).isoformat(), task_id)
+      )
+      conn.commit()
+      print(f"[info] AI task {task_id} completed successfully (mock)")
       return
 
     if not POLO_API_KEY:
