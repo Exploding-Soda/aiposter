@@ -49,11 +49,12 @@ PREVIEW_PADDING = 40
 
 # Database configuration
 BACKEND_DIR = Path(__file__).parent
-DB_PATH = BACKEND_DIR / "projects.db"
-FILES_DIR = BACKEND_DIR / "db" / "files"
-LOGOS_DIR = BACKEND_DIR / "db" / "logos"
-REFERENCE_DIR = BACKEND_DIR / "db" / "reference"
-FONT_REFERENCE_DIR = BACKEND_DIR / "db" / "font_reference"
+APP_DATA_DIR = Path(os.getenv("APP_DATA_DIR", str(BACKEND_DIR))).resolve()
+DB_PATH = Path(os.getenv("DB_PATH", str(APP_DATA_DIR / "projects.db"))).resolve()
+FILES_DIR = Path(os.getenv("FILES_DIR", str(APP_DATA_DIR / "db" / "files"))).resolve()
+LOGOS_DIR = Path(os.getenv("LOGOS_DIR", str(APP_DATA_DIR / "db" / "logos"))).resolve()
+REFERENCE_DIR = Path(os.getenv("REFERENCE_DIR", str(APP_DATA_DIR / "db" / "reference"))).resolve()
+FONT_REFERENCE_DIR = Path(os.getenv("FONT_REFERENCE_DIR", str(APP_DATA_DIR / "db" / "font_reference"))).resolve()
 
 # Auth configuration
 ACCESS_TOKEN_TTL_MINUTES = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "15"))
@@ -223,6 +224,7 @@ app.add_middleware(
 
 def init_database():
   """Initialize SQLite database and create tables if they don't exist."""
+  DB_PATH.parent.mkdir(parents=True, exist_ok=True)
   # Create files directory for storing images
   FILES_DIR.mkdir(parents=True, exist_ok=True)
   LOGOS_DIR.mkdir(parents=True, exist_ok=True)
@@ -2971,4 +2973,4 @@ def get_file_options(project_id: str, filename: str):
 if __name__ == "__main__":
   import uvicorn
 
-  uvicorn.run(app, host="0.0.0.0", port=8001)
+  uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("BACKEND_PORT", "8001")))
