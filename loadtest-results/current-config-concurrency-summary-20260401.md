@@ -34,14 +34,26 @@
 | 900 | Fail | 0.00% | 0.00% | 0 | 0 | n/a | 4090 ms | In the test window, tasks no longer complete; this is beyond the usable limit. |
 | 1000 | Fail | 0.00% | 0.00% | 0 | 0 | n/a | 3440 ms | Server still accepts traffic, but work does not finish in time. |
 
+## Note on E2E Success Rate
+
+This load test enabled mock failure injection with `MOCK_AI_ERROR_RATE=0.02`.
+That means each mock task had an approximately `2%` chance of being intentionally marked as failed during execution, so the `E2E success rate` in this report is not expected to stay at `100%`.
+
+As a result, a lower `E2E success rate` in this report may come from two sources:
+
+1. intentionally injected failures in the mock environment;
+2. tasks not finishing within the test window under higher concurrency due to queueing.
+
+Therefore, the `E2E success rate` in this report should not be interpreted as the system's intrinsic error rate.
+It should be understood as the percentage of tasks that fully completed under the current mock settings and test window.
+
 ## Interpretation
 
 - If your goal is **system survival**, the current config can be described as:
   `safe through 850`, `fails by 900`.
-- If your goal is **reasonable user experience**, the threshold is much lower:
-  around `10-20` concurrency still feels acceptable.
-- Around `50` concurrency and above, the system still works, but user wait time becomes very obvious.
-- At `100+` concurrency, this starts to look like a queueing system rather than an interactive experience.
+- If your goal is **a more reasonable user experience**, the threshold is much lower:
+
+  at `50` concurrency and above, the system still works, but users may already start to notice the wait time.
 
 ## Source Runs
 
