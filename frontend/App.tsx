@@ -4,7 +4,7 @@ import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, Mo
 import { AnimatePresence, motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { AppStatus, PosterDraft, PlanningStep, Artboard, Asset, Selection, AssetType, Project, TextLayout, TextStyleMap, Connection, ReferenceStyleStrength } from './types';
+import { AppStatus, PosterDraft, PlanningStep, Artboard, Asset, Selection, AssetType, Project, TextLayout, TextStyleMap, Connection, ReferenceStyleStrength, LogoPlacement, ServerConfig, LogoHandlingMode } from './types';
 import { planPosters, generatePosterImage, generatePosterNoTextImage, generatePosterMergedImage, refinePoster, chatWithModel, ChatMessage, editPosterWithMarkupAsync, generatePosterResolutionFromImage, generatePosterImageAsync, getAITaskStatus, extractImageFromTaskResult, getPendingAITasks, AITaskStatus, generateImageFromPrompt } from './services/geminiService';
 import { AuthUser, fetchWithAuth, getAccessToken, loginUser, logoutUser, refreshAccessToken, registerUser } from './services/authService';
 import PosterCard from './components/PosterCard';
@@ -95,6 +95,66 @@ const pickLogoForModel = (preferred: string | null, fallback: string | null) => 
   if (fallback && fallback.startsWith('data:image/')) return fallback;
   return preferred ?? fallback ?? null;
 };
+const DEFAULT_SERVER_CONFIG: ServerConfig = {
+  logoHandlingMode: 'model'
+};
+const normalizeLogoHandlingMode = (value?: string | null): LogoHandlingMode => (
+  value === 'paste' ? 'paste' : 'model'
+);
+const buildDefaultLogoPlacement = (): LogoPlacement => ({
+  x: 0.72,
+  y: 0.06,
+  width: 0.2,
+  height: 0.12
+});
+const clampLogoPlacement = (placement?: LogoPlacement | null): LogoPlacement => {
+  const next = placement || buildDefaultLogoPlacement();
+  const width = Math.min(0.5, Math.max(0.08, next.width || 0.2));
+  const height = Math.min(0.4, Math.max(0.05, next.height || 0.12));
+  const x = Math.min(1 - width, Math.max(0, next.x || 0));
+  const y = Math.min(1 - height, Math.max(0, next.y || 0));
+  return { x, y, width, height };
+};
+const cloneLogoPlacement = (placement?: LogoPlacement | null): LogoPlacement => ({
+  ...clampLogoPlacement(placement)
+});
+
+const loadImageElement = (src: string): Promise<HTMLImageElement> => (
+  new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Failed to load image.'));
+    image.src = src;
+  })
+);
+
+const compositePosterWithLogo = async (
+  baseImageUrl: string,
+  logoUrl?: string | null,
+  placement?: LogoPlacement | null
+): Promise<string> => {
+  if (!baseImageUrl || !logoUrl) return baseImageUrl;
+  const [baseImage, logoImage] = await Promise.all([
+    loadImageElement(baseImageUrl),
+    loadImageElement(logoUrl)
+  ]);
+  const nextPlacement = clampLogoPlacement(placement);
+  const canvas = document.createElement('canvas');
+  const width = baseImage.naturalWidth || baseImage.width;
+  const height = baseImage.naturalHeight || baseImage.height;
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context || !width || !height) return baseImageUrl;
+  context.drawImage(baseImage, 0, 0, width, height);
+  const drawWidth = Math.max(1, Math.round(width * nextPlacement.width));
+  const drawHeight = Math.max(1, Math.round(height * nextPlacement.height));
+  const drawX = Math.round(width * nextPlacement.x);
+  const drawY = Math.round(height * nextPlacement.y);
+  context.drawImage(logoImage, drawX, drawY, drawWidth, drawHeight);
+  return canvas.toDataURL('image/png');
+};
+const COPY_PASTE_LOGO_SPACE_PROMPT = 'Keep the poster composition natural and not overly crowded. Ensure that at least one of the four corners remains free of text overlays so there is a clean corner available for placing a logo later.';
 
 type RgbColor = { r: number; g: number; b: number };
 const hexToRgbColor = (hex: string): RgbColor | null => {
@@ -818,6 +878,10 @@ const App: React.FC = () => {
   const [authForm, setAuthForm] = useState({ username: '', password: '' });
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
+  const [serverConfig, setServerConfig] = useState<ServerConfig>(DEFAULT_SERVER_CONFIG);
+  const [serverConfigLoading, setServerConfigLoading] = useState(false);
+  const [serverConfigSaving, setServerConfigSaving] = useState(false);
+  const [serverConfigError, setServerConfigError] = useState('');
 
   const [artboards, setArtboards] = useState<Artboard[]>([]);
   const [selection, setSelection] = useState<Selection>({ artboardId: null, assetId: null });
@@ -950,6 +1014,9 @@ const App: React.FC = () => {
   const [refineReferenceImage, setRefineReferenceImage] = useState<string | null>(null);
   const [posterFeedback, setPosterFeedback] = useState('');
   const [refineSolutionCount, setRefineSolutionCount] = useState(1);
+  const [refineLogoPlacement, setRefineLogoPlacement] = useState<LogoPlacement>(buildDefaultLogoPlacement());
+  const [isLogoLayerDragging, setIsLogoLayerDragging] = useState(false);
+  const logoLayerDragRef = useRef<{ pointerId: number; startX: number; startY: number; origin: LogoPlacement } | null>(null);
   const [selectedRefineResolutions, setSelectedRefineResolutions] = useState<Set<string>>(new Set());
   const [isPosterModalOpen, setIsPosterModalOpen] = useState(false);
   const [isPosterModalClosing, setIsPosterModalClosing] = useState(false);
@@ -1595,7 +1662,19 @@ const App: React.FC = () => {
   const boardHeight = activeProject?.height ?? DEFAULT_BOARD_HEIGHT;
   const activePosterArtboard = artboards.find(ab => ab.id === activePosterId);
   const activePoster = activePosterArtboard?.posterData;
-  const currentRefinePosterImageUrl = refinePreviewImageUrl || activePoster?.imageUrlMerged || activePoster?.imageUrl || '';
+  const activeLogoPlacement = cloneLogoPlacement(activePoster?.logoPlacement);
+  const isPasteLogoMode = serverConfig.logoHandlingMode === 'paste';
+  const currentRefineModelImageUrl = refinePreviewImageUrl || activePoster?.imageUrl || activePoster?.imageUrlMerged || '';
+  const currentRefinePosterImageUrl = isPasteLogoMode
+    ? (refinePreviewImageUrl || activePoster?.imageUrl || activePoster?.imageUrlMerged || '')
+    : (refinePreviewImageUrl || activePoster?.imageUrlMerged || activePoster?.imageUrl || '');
+  const shouldShowRefineLogoLayer = isPasteLogoMode && Boolean(activePoster?.logoUrl);
+  const isRefineLogoPlacementDirty = shouldShowRefineLogoLayer && (
+    Math.abs(refineLogoPlacement.x - activeLogoPlacement.x) > 0.0001 ||
+    Math.abs(refineLogoPlacement.y - activeLogoPlacement.y) > 0.0001 ||
+    Math.abs(refineLogoPlacement.width - activeLogoPlacement.width) > 0.0001 ||
+    Math.abs(refineLogoPlacement.height - activeLogoPlacement.height) > 0.0001
+  );
   const selectedRefineColorGroup = primaryColorGroups.find((group) => group.id === selectedRefineColorGroupId) || null;
   const isUsingRefinePreviewHistory = isRefineBucketMode || Boolean(refinePreviewImageUrl);
   const pushRefinePreviewHistory = useCallback((nextPreviewUrl: string | null) => {
@@ -1726,14 +1805,20 @@ const App: React.FC = () => {
             if (result.status === 'completed') {
               const imageUrl = extractImageFromTaskResult(result);
               if (imageUrl) {
-                const normalizedImageUrl = normalizeSecureImageUrl(imageUrl);
+                const nextImages = await buildPosterImagesWithLogoMode(
+                  imageUrl,
+                  ab.posterData?.logoUrl,
+                  ab.posterData?.logoPlacement
+                );
                 setArtboards(prev => prev.map(a => {
                   if (a.id !== posterId) return a;
                   return {
                     ...a,
                     posterData: {
                       ...a.posterData!,
-                      imageUrl: normalizedImageUrl,
+                      imageUrl: nextImages.imageUrl,
+                      imageUrlMerged: nextImages.imageUrlMerged,
+                      logoPlacement: nextImages.logoPlacement,
                       imageUrlNoText: undefined,
                       textLayout: a.posterData?.textLayout || buildDefaultTextLayout(),
                       status: 'completed',
@@ -1845,6 +1930,9 @@ const App: React.FC = () => {
     setIsLoadingSuggestions(false);
     setIdeaLoadingLabel('Warming Up');
     setSelectedSuggestions(new Set());
+    setRefineLogoPlacement(cloneLogoPlacement(activePoster.logoPlacement));
+    logoLayerDragRef.current = null;
+    setIsLogoLayerDragging(false);
     annotationHistoryRef.current = [];
     annotationRedoRef.current = [];
     isAnnotationRestoringRef.current = false;
@@ -3931,6 +4019,44 @@ const App: React.FC = () => {
     }
   };
 
+  const getLogoForGeneration = useCallback((logo: string | null, fallback: string | null = null) => {
+    if (serverConfig.logoHandlingMode === 'paste') {
+      return null;
+    }
+    return pickLogoForModel(logo, fallback);
+  }, [serverConfig.logoHandlingMode]);
+
+  const buildPosterImagesWithLogoMode = useCallback(async (
+    baseImageUrl: string,
+    logoUrl?: string | null,
+    placement?: LogoPlacement | null
+  ) => {
+    const normalizedBaseImageUrl = normalizeSecureImageUrl(baseImageUrl);
+    const nextPlacement = cloneLogoPlacement(placement);
+    if (serverConfig.logoHandlingMode !== 'paste' || !logoUrl) {
+      return {
+        imageUrl: normalizedBaseImageUrl,
+        imageUrlMerged: normalizedBaseImageUrl,
+        logoPlacement: nextPlacement
+      };
+    }
+    try {
+      const mergedImageUrl = await compositePosterWithLogo(normalizedBaseImageUrl, logoUrl, nextPlacement);
+      return {
+        imageUrl: normalizedBaseImageUrl,
+        imageUrlMerged: mergedImageUrl,
+        logoPlacement: nextPlacement
+      };
+    } catch (err) {
+      console.warn('Failed to composite logo layer', err);
+      return {
+        imageUrl: normalizedBaseImageUrl,
+        imageUrlMerged: normalizedBaseImageUrl,
+        logoPlacement: nextPlacement
+      };
+    }
+  }, [serverConfig.logoHandlingMode]);
+
   const buildAlphabetPreviewDataUrl = async (fontName: string): Promise<string | null> => {
     try {
       const previewUrl = buildAlphabetPreviewUrl(fontName);
@@ -4728,6 +4854,56 @@ const App: React.FC = () => {
     }
   };
 
+  const fetchServerConfig = useCallback(async () => {
+    if (!authUser) {
+      setServerConfig(DEFAULT_SERVER_CONFIG);
+      return;
+    }
+    setServerConfigLoading(true);
+    setServerConfigError('');
+    try {
+      const response = await fetchWithAuth(`${BACKEND_API}/server-config`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load server config';
+        throw new Error(message);
+      }
+      setServerConfig({
+        logoHandlingMode: normalizeLogoHandlingMode(data.logoHandlingMode)
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load server config';
+      setServerConfigError(message);
+    } finally {
+      setServerConfigLoading(false);
+    }
+  }, [authUser]);
+
+  const saveServerConfig = useCallback(async (nextMode: LogoHandlingMode) => {
+    setServerConfigSaving(true);
+    setServerConfigError('');
+    try {
+      const response = await fetchWithAuth(`${BACKEND_API}/admin/server-config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ logoHandlingMode: nextMode })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to save server config';
+        throw new Error(message);
+      }
+      setServerConfig({
+        logoHandlingMode: normalizeLogoHandlingMode(data.logoHandlingMode || nextMode)
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to save server config';
+      setServerConfigError(message);
+    } finally {
+      setServerConfigSaving(false);
+    }
+  }, []);
+
   const fetchAdminDbTables = useCallback(async () => {
     setAdminDbLoading(true);
     setAdminDbError('');
@@ -5154,6 +5330,50 @@ const App: React.FC = () => {
     if (x < 0 || y < 0 || x > imageWidth || y > imageHeight) return null;
     return { x, y };
   }, [annotatorImage, getAnnotatorTransform]);
+
+  const handleLogoLayerPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!shouldShowRefineLogoLayer) return;
+    const container = annotatorRef.current;
+    if (!container) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    logoLayerDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: cloneLogoPlacement(refineLogoPlacement)
+    };
+    setIsLogoLayerDragging(true);
+  }, [refineLogoPlacement, shouldShowRefineLogoLayer]);
+
+  const handleLogoLayerPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const dragState = logoLayerDragRef.current;
+    const container = annotatorRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId || !container) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = container.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const dx = (event.clientX - dragState.startX) / (rect.width * annotationZoom);
+    const dy = (event.clientY - dragState.startY) / (rect.height * annotationZoom);
+    setRefineLogoPlacement(clampLogoPlacement({
+      ...dragState.origin,
+      x: dragState.origin.x + dx,
+      y: dragState.origin.y + dy
+    }));
+  }, [annotationZoom]);
+
+  const handleLogoLayerPointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const dragState = logoLayerDragRef.current;
+    if (dragState?.pointerId === event.pointerId) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.releasePointerCapture(event.pointerId);
+      logoLayerDragRef.current = null;
+      setIsLogoLayerDragging(false);
+    }
+  }, []);
 
   useEffect(() => {
     const canvas = annotatorCanvasRef.current;
@@ -5583,7 +5803,7 @@ Return ONLY valid JSON in the format:
     }
   }, [applyRefinePreviewState, currentRefinePosterImageUrl, pushRefinePreviewHistory, refineWholePosterThreshold, selectedRefineColorGroup]);
 
-  const handleSaveRefinePreview = useCallback(() => {
+  const handleSaveRefinePreview = useCallback(async () => {
     if (!activePosterId || !refinePreviewImageUrl) {
       setRefineColorSetError('No filled preview to save yet.');
       return;
@@ -5599,6 +5819,11 @@ Return ONLY valid JSON in the format:
     setRefineColorSetError('');
     setIsSavingRefinePreview(true);
     try {
+      const nextImages = await buildPosterImagesWithLogoMode(
+        refinePreviewImageUrl,
+        currentPoster.logoUrl,
+        currentPoster.logoPlacement
+      );
       const derivedId = createDerivedArtboard(currentArtboard, {
         ...currentPoster,
         status: 'completed'
@@ -5612,8 +5837,9 @@ Return ONLY valid JSON in the format:
         posterData: {
           ...ab.posterData!,
           accentColor: selectedRefineColorGroup?.colors[0] || ab.posterData!.accentColor,
-          imageUrl: refinePreviewImageUrl,
-          imageUrlMerged: refinePreviewImageUrl,
+          logoPlacement: nextImages.logoPlacement,
+          imageUrl: nextImages.imageUrl,
+          imageUrlMerged: nextImages.imageUrlMerged,
           imageUrlNoText: undefined,
           status: 'completed',
           taskId: undefined
@@ -5627,8 +5853,65 @@ Return ONLY valid JSON in the format:
     activePosterId,
     artboards,
     createDerivedArtboard,
+    buildPosterImagesWithLogoMode,
+    handleClosePosterModal,
     refinePreviewImageUrl,
     selectedRefineColorGroup,
+    updatePosterArtboard
+  ]);
+
+  const handleSaveLogoLayer = useCallback(async () => {
+    if (!activePosterId) return;
+    const currentArtboard = artboards.find((ab) => ab.id === activePosterId);
+    const currentPoster = currentArtboard?.posterData;
+    if (!currentArtboard || !currentPoster?.logoUrl) return;
+
+    setIsSavingRefinePreview(true);
+    try {
+      const baseImageUrl = currentPoster.imageUrl || currentPoster.imageUrlMerged;
+      if (!baseImageUrl) {
+        throw new Error('Poster image is missing.');
+      }
+      const nextPlacement = cloneLogoPlacement(refineLogoPlacement);
+      const nextImages = await buildPosterImagesWithLogoMode(
+        baseImageUrl,
+        currentPoster.logoUrl,
+        nextPlacement
+      );
+      const derivedId = createDerivedArtboard(currentArtboard, {
+        ...currentPoster,
+        status: 'completed'
+      }, {
+        x: currentArtboard.x + currentArtboard.width + ARTBOARD_GAP,
+        nameSuffix: 'Logo Layer'
+      });
+
+      updatePosterArtboard(derivedId, (ab) => ({
+        ...ab,
+        posterData: {
+          ...ab.posterData!,
+          logoPlacement: nextImages.logoPlacement,
+          imageUrl: nextImages.imageUrl,
+          imageUrlMerged: nextImages.imageUrlMerged,
+          imageUrlNoText: undefined,
+          status: 'completed',
+          taskId: undefined
+        }
+      }));
+      handleClosePosterModal();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to save logo layer.';
+      setRefineColorSetError(message);
+    } finally {
+      setIsSavingRefinePreview(false);
+    }
+  }, [
+    activePosterId,
+    artboards,
+    buildPosterImagesWithLogoMode,
+    createDerivedArtboard,
+    handleClosePosterModal,
+    refineLogoPlacement,
     updatePosterArtboard
   ]);
 
@@ -5638,7 +5921,7 @@ Return ONLY valid JSON in the format:
     const feedback = posterFeedback.trim();
     const currentArtboard = artboards.find(ab => ab.id === activePosterId);
     if (!currentArtboard?.posterData) return;
-    const originalImageUrl = currentRefinePosterImageUrl || currentArtboard.posterData.imageUrlMerged || currentArtboard.posterData.imageUrl;
+    const originalImageUrl = currentRefineModelImageUrl || currentArtboard.posterData.imageUrl || currentArtboard.posterData.imageUrlMerged;
     const annotationPrompt = buildAnnotationPrompt() || 'Apply the requested changes inside the numbered boxes/arrows.';
     const useMarkup = annotations.length > 0 && Boolean(originalImageUrl);
     console.log('[refine] submit', {
@@ -5666,6 +5949,7 @@ Return ONLY valid JSON in the format:
               ...currentArtboard.posterData,
               imageUrl: originalImageUrl,
               imageUrlMerged: originalImageUrl,
+              logoPlacement: cloneLogoPlacement(refineLogoPlacement),
               status: 'generating'
             };
             const derivedId = createDerivedArtboard(currentArtboard, derivedPosterData, {
@@ -5697,12 +5981,18 @@ Return ONLY valid JSON in the format:
                   throw new Error('No image in result');
                 }
                 console.log('[refine] edit response', { editedUrl, variation: index + 1 });
+                const nextImages = await buildPosterImagesWithLogoMode(
+                  editedUrl,
+                  currentArtboard.posterData.logoUrl,
+                  refineLogoPlacement
+                );
                 updatePosterArtboard(derivedId, (ab) => ({
                   ...ab,
                   posterData: {
                     ...ab.posterData!,
-                    imageUrlMerged: normalizeSecureImageUrl(editedUrl),
-                    imageUrl: normalizeSecureImageUrl(editedUrl),
+                    logoPlacement: nextImages.logoPlacement,
+                    imageUrlMerged: nextImages.imageUrlMerged,
+                    imageUrl: nextImages.imageUrl,
                     status: 'completed',
                     taskId: undefined
                   }
@@ -5721,19 +6011,22 @@ Return ONLY valid JSON in the format:
       }
 
       const resolvedLogoImage = await resolveLogoImageForModel();
-      const logoForPoster = pickLogoForModel(resolvedLogoImage, currentArtboard.posterData.logoUrl ?? null);
+      const logoAssetForPoster = resolvedLogoImage ?? currentArtboard.posterData.logoUrl ?? null;
+      const logoForPoster = getLogoForGeneration(resolvedLogoImage, currentArtboard.posterData.logoUrl ?? null);
       const fontReferenceUrl = await resolveFontReferenceUrl(fontReferenceImage);
       const serverFontReferenceUrl = await resolveServerFontPreviewUrl(selectedServerFont);
-      const currentPosterImageUrl = currentRefinePosterImageUrl || currentArtboard.posterData.imageUrlMerged || currentArtboard.posterData.imageUrl || null;
+      const currentPosterImageUrl = currentRefineModelImageUrl || currentArtboard.posterData.imageUrl || currentArtboard.posterData.imageUrlMerged || null;
       let targetPoster: PlanningStep = {
         ...editablePoster,
-        logoUrl: logoForPoster ?? undefined
+        logoUrl: logoAssetForPoster ?? undefined,
+        logoPlacement: cloneLogoPlacement(refineLogoPlacement)
       };
       if (feedback) {
         const refined = await refinePoster(editablePoster, feedback);
         targetPoster = {
           ...refined,
-          logoUrl: logoForPoster ?? undefined
+          logoUrl: logoAssetForPoster ?? undefined,
+          logoPlacement: cloneLogoPlacement(refineLogoPlacement)
         };
       }
 
@@ -5772,7 +6065,8 @@ Return ONLY valid JSON in the format:
               ...ab.posterData!,
               ...targetPoster,
               taskId,
-              logoUrl: logoForPoster ?? undefined
+              logoUrl: logoAssetForPoster ?? undefined,
+              logoPlacement: cloneLogoPlacement(refineLogoPlacement)
             }
           }));
 
@@ -5782,15 +6076,20 @@ Return ONLY valid JSON in the format:
             if (result.status === 'completed') {
               const imageUrl = extractImageFromTaskResult(result);
               if (imageUrl) {
-                const normalizedImageUrl = normalizeSecureImageUrl(imageUrl);
+                const nextImages = await buildPosterImagesWithLogoMode(
+                  imageUrl,
+                  logoAssetForPoster ?? undefined,
+                  refineLogoPlacement
+                );
                 updatePosterArtboard(baseDerivedId, (ab) => ({
                   ...ab,
                   posterData: {
                     ...ab.posterData!,
                     ...targetPoster,
-                    logoUrl: logoForPoster ?? undefined,
-                    imageUrl: normalizedImageUrl,
-                    imageUrlMerged: normalizedImageUrl,
+                    logoUrl: logoAssetForPoster ?? undefined,
+                    logoPlacement: nextImages.logoPlacement,
+                    imageUrl: nextImages.imageUrl,
+                    imageUrlMerged: nextImages.imageUrlMerged,
                     imageUrlNoText: undefined,
                     textLayout: nextLayout,
                     textStyles: editableStyles || ab.posterData?.textStyles,
@@ -5849,7 +6148,8 @@ Return ONLY valid JSON in the format:
         throw new Error('Missing poster image for resolution generation.');
       }
       const resolvedLogoImage = await resolveLogoImageForModel();
-      const logoForPoster = pickLogoForModel(resolvedLogoImage, currentArtboard.posterData.logoUrl ?? null);
+      const logoAssetForPoster = resolvedLogoImage ?? currentArtboard.posterData.logoUrl ?? null;
+      const logoForPoster = getLogoForGeneration(resolvedLogoImage, currentArtboard.posterData.logoUrl ?? null);
       const basePoster: PlanningStep = {
         topBanner: currentArtboard.posterData.topBanner || '',
         headline: currentArtboard.posterData.headline || '',
@@ -5861,7 +6161,8 @@ Return ONLY valid JSON in the format:
         },
         accentColor: currentArtboard.posterData.accentColor || '',
         visualPrompt: currentArtboard.posterData.visualPrompt || '',
-        logoUrl: logoForPoster ?? undefined
+        logoUrl: logoAssetForPoster ?? undefined,
+        logoPlacement: cloneLogoPlacement(currentArtboard.posterData.logoPlacement)
       };
 
       const nextLayout = editableLayout
@@ -5891,15 +6192,20 @@ Return ONLY valid JSON in the format:
           posterImageUrl,
           { width: option.width, height: option.height }
         );
-        const normalizedImageUrl = normalizeSecureImageUrl(imageUrl);
+        const nextImages = await buildPosterImagesWithLogoMode(
+          imageUrl,
+          logoAssetForPoster ?? undefined,
+          currentArtboard.posterData.logoPlacement
+        );
         updatePosterArtboard(id, (ab) => ({
           ...ab,
           posterData: {
             ...ab.posterData!,
             ...basePoster,
-            logoUrl: logoForPoster ?? undefined,
-            imageUrl: normalizedImageUrl,
-            imageUrlMerged: normalizedImageUrl,
+            logoUrl: logoAssetForPoster ?? undefined,
+            logoPlacement: nextImages.logoPlacement,
+            imageUrl: nextImages.imageUrl,
+            imageUrlMerged: nextImages.imageUrlMerged,
             imageUrlNoText: undefined,
             textLayout: nextLayout,
             textStyles: editableStyles || ab.posterData?.textStyles,
@@ -5923,12 +6229,19 @@ Return ONLY valid JSON in the format:
     const currentStyleImages = [...styleImages];
     const currentRuleIds = [...selectedRuleIds];
     const currentLogoImage = await resolveLogoImageForModel();
+    const logoForGeneration = getLogoForGeneration(currentLogoImage ?? null, null);
     const currentFont = selectedServerFont;
     const currentFontReferenceImage = fontReferenceImage;
     const currentRulesPrompt = buildSelectedRulesPrompt(currentRuleIds);
+    const logoSpacePrompt = serverConfig.logoHandlingMode === 'paste' && currentLogoImage
+      ? COPY_PASTE_LOGO_SPACE_PROMPT
+      : '';
     const themedPrompt = currentRulesPrompt
       ? `${currentRulesPrompt}\n\nUser prompt:\n${currentTheme}`
       : currentTheme;
+    const generationPrompt = logoSpacePrompt
+      ? `${themedPrompt}\n\nAdditional composition requirement:\n${logoSpacePrompt}`
+      : themedPrompt;
 
     // Clear generator inputs immediately after submission
     resetGeneratorForm();
@@ -6113,6 +6426,7 @@ Return ONLY valid JSON in the format:
       accentColor: '#6b7280',
       visualPrompt: '',
       logoUrl: currentLogoImage ?? undefined,
+      logoPlacement: buildDefaultLogoPlacement(),
       status: 'planning' as const
     }));
 
@@ -6162,7 +6476,7 @@ Return ONLY valid JSON in the format:
     // Run the generation in background (don't await, allow parallel submissions)
     void (async () => {
       try {
-        const plans = await planPosters(themedPrompt, currentCount, currentStyleImages, currentLogoImage, selectedReferenceStyleStrength);
+        const plans = await planPosters(generationPrompt, currentCount, currentStyleImages, logoForGeneration, selectedReferenceStyleStrength);
         const fontReferenceUrl = await resolveFontReferenceUrl(currentFontReferenceImage);
         const serverFontReferenceUrl = await resolveServerFontPreviewUrl(currentFont);
 
@@ -6178,6 +6492,7 @@ Return ONLY valid JSON in the format:
                 ...ab.posterData!,
                 ...plan,
                 logoUrl: currentLogoImage ?? undefined,
+                logoPlacement: cloneLogoPlacement(ab.posterData?.logoPlacement),
                 status: 'generating'
               }
             };
@@ -6185,7 +6500,7 @@ Return ONLY valid JSON in the format:
         });
 
         // Submit async tasks and start polling
-        const logoForPoster = pickLogoForModel(currentLogoImage ?? null, null);
+        const logoForPoster = logoForGeneration;
         const taskSubmissions = await Promise.all(
           plans.map(async (plan, index) => {
             const posterId = placeholderPosters[index].id;
@@ -6198,8 +6513,8 @@ Return ONLY valid JSON in the format:
                 fontReferenceUrl,
                 serverFontReferenceUrl,
                 undefined,
-                themedPrompt,
-                undefined
+                generationPrompt,
+                logoSpacePrompt || undefined
               );
               // Store taskId in posterData for recovery after refresh
               setArtboards(prev => prev.map(ab => {
@@ -6236,14 +6551,20 @@ Return ONLY valid JSON in the format:
                 if (result.status === 'completed') {
                   const imageUrl = extractImageFromTaskResult(result);
                   if (imageUrl) {
-                    const normalizedImageUrl = normalizeSecureImageUrl(imageUrl);
+                    const nextImages = await buildPosterImagesWithLogoMode(
+                      imageUrl,
+                      currentLogoImage ?? undefined,
+                      buildDefaultLogoPlacement()
+                    );
                     setArtboards(prev => prev.map(ab => {
                       if (ab.id !== posterId) return ab;
                       return {
                         ...ab,
                         posterData: {
                           ...ab.posterData!,
-                          imageUrl: normalizedImageUrl,
+                          imageUrl: nextImages.imageUrl,
+                          imageUrlMerged: nextImages.imageUrlMerged,
+                          logoPlacement: nextImages.logoPlacement,
                           imageUrlNoText: undefined,
                           textLayout: buildDefaultTextLayout(),
                           status: 'completed',
@@ -6344,12 +6665,13 @@ Return ONLY valid JSON in the format:
   // Check if we're on the board route
   const isOnBoardRoute = route.startsWith('/board/');
   const isAdminRoute = route.startsWith('/admin');
+  const isServerConfigRoute = route === '/server-config';
   const adminSubroute = isAdminRoute ? route.replace('/admin', '') || '/' : '';
   const isLandingRoute = route === '/landing';
   const isLoginRoute = route === '/login';
   const isPersonalSpaceRoute = route === '/personal-space';
   const isOptionRoute = route === '/option';
-  const isDashboardRoute = !isOnBoardRoute && !isAdminRoute && !isLandingRoute && !isLoginRoute && !isPersonalSpaceRoute && !isOptionRoute;
+  const isDashboardRoute = !isOnBoardRoute && !isAdminRoute && !isServerConfigRoute && !isLandingRoute && !isLoginRoute && !isPersonalSpaceRoute && !isOptionRoute;
 
   useEffect(() => {
     if (!isOnBoardRoute) return;
@@ -6437,6 +6759,11 @@ Return ONLY valid JSON in the format:
       setAuthError('');
     }
   }, [isLoginRoute, authMode]);
+
+  useEffect(() => {
+    if (!authUser) return;
+    void fetchServerConfig();
+  }, [authUser, fetchServerConfig]);
 
   useEffect(() => {
     if (!authUser?.is_admin) return;
@@ -6591,7 +6918,7 @@ Return ONLY valid JSON in the format:
     );
   }
 
-  if (isAdminRoute) {
+  if (isAdminRoute || isServerConfigRoute) {
     if (!authUser.is_admin) {
       handleNavigate('/');
       return null;
@@ -6631,6 +6958,12 @@ Return ONLY valid JSON in the format:
               >
                 Playground
               </button>
+              <button
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-colors ${isServerConfigRoute ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
+                onClick={() => handleNavigate('/server-config')}
+              >
+                Server Config
+              </button>
             </nav>
           </div>
           {renderSidebarAccountSection()}
@@ -6638,7 +6971,59 @@ Return ONLY valid JSON in the format:
 
         <main className="flex-1 overflow-y-auto px-6 py-8 lg:px-12 lg:py-12">
           <div className="max-w-4xl mx-auto">
-            {adminSubroute === '/playground' ? (
+            {isServerConfigRoute ? (
+              <div className="space-y-8">
+                <div>
+                  <h1 className="text-3xl font-bold text-gray-900 mb-2">Server Config</h1>
+                  <p className="text-gray-500 font-medium">Control how logos are handled during poster generation and refinement.</p>
+                </div>
+                <div className="bg-white border border-gray-100 rounded-3xl p-8 shadow-sm space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <button
+                      type="button"
+                      onClick={() => void saveServerConfig('model')}
+                      disabled={serverConfigSaving}
+                      className={`rounded-2xl border px-5 py-5 text-left transition-colors ${
+                        serverConfig.logoHandlingMode === 'model'
+                          ? 'border-gray-900 bg-gray-900 text-white'
+                          : 'border-gray-200 bg-white text-gray-800 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="text-sm font-semibold">Send To Model</div>
+                      <div className={`mt-2 text-xs leading-6 ${serverConfig.logoHandlingMode === 'model' ? 'text-gray-200' : 'text-gray-500'}`}>
+                        The selected logo is sent as an image reference to the image model and described in the prompt as placement guidance.
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void saveServerConfig('paste')}
+                      disabled={serverConfigSaving}
+                      className={`rounded-2xl border px-5 py-5 text-left transition-colors ${
+                        serverConfig.logoHandlingMode === 'paste'
+                          ? 'border-gray-900 bg-gray-900 text-white'
+                          : 'border-gray-200 bg-white text-gray-800 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="text-sm font-semibold">Copy And Paste</div>
+                      <div className={`mt-2 text-xs leading-6 ${serverConfig.logoHandlingMode === 'paste' ? 'text-gray-200' : 'text-gray-500'}`}>
+                        The logo is kept out of the image model request. Users position it manually in Refine Poster as an independent layer.
+                      </div>
+                    </button>
+                  </div>
+                  <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3">
+                    <div className="text-[11px] font-bold uppercase tracking-widest text-gray-400">Current Mode</div>
+                    <div className="mt-2 text-sm font-semibold text-gray-900">{serverConfig.logoHandlingMode === 'paste' ? 'Copy And Paste' : 'Send To Model'}</div>
+                    <div className="mt-1 text-xs text-gray-500">Stored in `backend/.env` as `LOGO_HANDLING_MODE`.</div>
+                  </div>
+                  {(serverConfigLoading || serverConfigSaving) && (
+                    <p className="text-sm text-gray-500">{serverConfigSaving ? 'Saving config...' : 'Loading config...'}</p>
+                  )}
+                  {serverConfigError && (
+                    <p className="text-sm text-red-600">{serverConfigError}</p>
+                  )}
+                </div>
+              </div>
+            ) : adminSubroute === '/playground' ? (
               <div className="space-y-8">
                 <div>
                   <h1 className="text-3xl font-bold text-gray-900 mb-2">Model Playground</h1>
@@ -8438,6 +8823,39 @@ Return ONLY valid JSON in the format:
                       setAnnotatorLoaded(false);
                     }}
                   />
+                  {shouldShowRefineLogoLayer && activePoster?.logoUrl && (
+                    <div
+                      className={`absolute left-0 top-0 z-10 ${isLogoLayerDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+                      style={{
+                        width: `${refineLogoPlacement.width * 100}%`,
+                        height: `${refineLogoPlacement.height * 100}%`,
+                        left: `${refineLogoPlacement.x * 100}%`,
+                        top: `${refineLogoPlacement.y * 100}%`,
+                        transform: (() => {
+                          const transform = getAnnotatorTransform();
+                          if (!transform) return undefined;
+                          return `translate(${transform.offsetX}px, ${transform.offsetY}px) scale(${annotationZoom})`;
+                        })(),
+                        transformOrigin: '0 0'
+                      }}
+                      onPointerDown={handleLogoLayerPointerDown}
+                      onPointerMove={handleLogoLayerPointerMove}
+                      onPointerUp={handleLogoLayerPointerUp}
+                      onPointerCancel={handleLogoLayerPointerUp}
+                    >
+                      <div className="relative h-full w-full rounded-xl border border-sky-400/70 bg-sky-50/10 shadow-[0_0_0_1px_rgba(56,189,248,0.35)] backdrop-blur-[1px]">
+                        <img
+                          src={activePoster.logoUrl}
+                          alt="Logo Layer"
+                          className="h-full w-full object-contain pointer-events-none select-none"
+                          draggable={false}
+                        />
+                        <div className="absolute left-2 top-2 rounded-full bg-sky-500/90 px-2 py-1 text-[9px] font-bold uppercase tracking-widest text-white">
+                          Logo
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   <div className="absolute left-3 right-3 top-3 z-10 flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white/95 px-2 py-1 shadow-md backdrop-blur">
                     <button
                       type="button"
@@ -8820,6 +9238,53 @@ Return ONLY valid JSON in the format:
                       onClick={handleOpenResolutionModal}
                     >
                       More Resolutions
+                    </button>
+                  </div>
+                )}
+                {shouldShowRefineLogoLayer && activePoster?.logoUrl && (
+                  <div className="space-y-3 rounded-2xl border border-sky-200 bg-sky-50/60 p-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-sky-600">Logo Layer</div>
+                        <div className="mt-1 text-[11px] text-slate-500">Drag the logo on the poster and fine-tune its size here.</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setRefineLogoPlacement(cloneLogoPlacement(activePoster.logoPlacement))}
+                        className="text-[10px] font-bold uppercase tracking-widest text-slate-500 hover:text-slate-800"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                    <div className="rounded-xl border border-sky-100 bg-white px-3 py-2">
+                      <div className="flex items-center justify-between text-[11px] text-slate-500">
+                        <span>Width</span>
+                        <span className="font-semibold text-slate-700">{Math.round(refineLogoPlacement.width * 100)}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="8"
+                        max="40"
+                        step="1"
+                        value={Math.round(refineLogoPlacement.width * 100)}
+                        onChange={(event) => {
+                          const width = Number(event.target.value) / 100;
+                          setRefineLogoPlacement((prev) => clampLogoPlacement({
+                            ...prev,
+                            width,
+                            height: Math.max(0.05, width * 0.6)
+                          }));
+                        }}
+                        className="mt-2 w-full accent-sky-600"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSaveLogoLayer}
+                      disabled={!isRefineLogoPlacementDirty || isSavingRefinePreview}
+                      className="w-full rounded-xl border border-sky-200 bg-white py-2 text-[11px] font-bold uppercase tracking-widest text-slate-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isSavingRefinePreview ? 'Saving Logo Layer...' : 'Save Logo Layer'}
                     </button>
                   </div>
                 )}

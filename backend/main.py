@@ -49,6 +49,7 @@ PREVIEW_PADDING = 40
 
 # Database configuration
 BACKEND_DIR = Path(__file__).parent
+ENV_FILE_PATH = BACKEND_DIR / ".env"
 APP_DATA_DIR = Path(os.getenv("APP_DATA_DIR", str(BACKEND_DIR))).resolve()
 DB_PATH = Path(os.getenv("DB_PATH", str(APP_DATA_DIR / "projects.db"))).resolve()
 FILES_DIR = Path(os.getenv("FILES_DIR", str(APP_DATA_DIR / "db" / "files"))).resolve()
@@ -94,6 +95,17 @@ VOD_MODEL_VERSION = os.getenv("VOD_MODEL_VERSION", "3.1")
 VOD_TASK_POLL_INTERVAL_SECONDS = float(os.getenv("VOD_TASK_POLL_INTERVAL_SECONDS", "2"))
 VOD_TASK_TIMEOUT_SECONDS = int(os.getenv("VOD_TASK_TIMEOUT_SECONDS", "180"))
 SQLITE_TIMEOUT_SECONDS = float(os.getenv("SQLITE_TIMEOUT_SECONDS", "30"))
+VALID_LOGO_HANDLING_MODES = {"model", "paste"}
+
+
+def normalize_logo_handling_mode(value: Any) -> str:
+  normalized = str(value or "model").strip().lower()
+  if normalized not in VALID_LOGO_HANDLING_MODES:
+    return "model"
+  return normalized
+
+
+LOGO_HANDLING_MODE = normalize_logo_handling_mode(os.getenv("LOGO_HANDLING_MODE", "model"))
 
 password_hasher = PasswordHasher()
 
@@ -206,6 +218,10 @@ class AITaskStatusResponse(BaseModel):
 class ImageEditRequest(BaseModel):
   prompt: str
   images: List[str] = []
+
+
+class ServerConfigUpdateRequest(BaseModel):
+  logoHandlingMode: str
 
 
 # Thread pool for background AI tasks
@@ -1020,6 +1036,43 @@ def clear_refresh_cookie(response: Response):
     path="/"
   )
 
+
+def serialize_server_config() -> Dict[str, Any]:
+  return {
+    "logoHandlingMode": LOGO_HANDLING_MODE
+  }
+
+
+def persist_env_value(key: str, value: str) -> None:
+  lines: list[str] = []
+  if ENV_FILE_PATH.exists():
+    lines = ENV_FILE_PATH.read_text(encoding="utf-8").splitlines()
+
+  updated = False
+  next_lines: list[str] = []
+  for line in lines:
+    stripped = line.strip()
+    if stripped.startswith(f"{key}=") or stripped.startswith(f"export {key}="):
+      prefix = "export " if stripped.startswith("export ") else ""
+      next_lines.append(f"{prefix}{key}={value}")
+      updated = True
+    else:
+      next_lines.append(line)
+
+  if not updated:
+    next_lines.append(f"{key}={value}")
+
+  ENV_FILE_PATH.write_text("\n".join(next_lines) + "\n", encoding="utf-8")
+
+
+def update_logo_handling_mode(value: Any) -> str:
+  global LOGO_HANDLING_MODE
+  normalized = normalize_logo_handling_mode(value)
+  LOGO_HANDLING_MODE = normalized
+  os.environ["LOGO_HANDLING_MODE"] = normalized
+  persist_env_value("LOGO_HANDLING_MODE", normalized)
+  return normalized
+
 @app.on_event("startup")
 def on_startup():
   init_database()
@@ -1669,6 +1722,28 @@ def admin_register(payload: Dict[str, Any], user: sqlite3.Row = Depends(require_
   return JSONResponse({
     "username": created["username"],
     "password": password
+  })
+
+
+@app.get("/admin/server-config")
+def admin_get_server_config(_: sqlite3.Row = Depends(require_admin_user)):
+  return JSONResponse(serialize_server_config())
+
+
+@app.get("/server-config")
+def get_server_config(_: sqlite3.Row = Depends(require_current_user)):
+  return JSONResponse(serialize_server_config())
+
+
+@app.put("/admin/server-config")
+def admin_update_server_config(
+  payload: ServerConfigUpdateRequest,
+  _: sqlite3.Row = Depends(require_admin_user)
+):
+  mode = update_logo_handling_mode(payload.logoHandlingMode)
+  return JSONResponse({
+    "success": True,
+    "logoHandlingMode": mode
   })
 
 

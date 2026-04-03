@@ -1,4 +1,11 @@
 
+export interface LogoPlacement {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface PosterDraft {
   id: string;
   topBanner: string; // 顶部条文字
@@ -12,6 +19,7 @@ export interface PosterDraft {
   accentColor: string; // 强调色 (如：#7c2d12)
   visualPrompt: string;
   logoUrl?: string;
+  logoPlacement?: LogoPlacement;
   imageUrl?: string;
   imageUrlNoText?: string;
   imageUrlMerged?: string;
@@ -34,6 +42,7 @@ export interface PlanningStep {
   accentColor: string;
   visualPrompt: string;
   logoUrl?: string;
+  logoPlacement?: LogoPlacement;
 }
 
 export interface TextBox {
@@ -99,6 +108,12 @@ export interface Project {
 }
 
 export type ReferenceStyleStrength = 'low' | 'medium' | 'high';
+
+export type LogoHandlingMode = 'model' | 'paste';
+
+export interface ServerConfig {
+  logoHandlingMode: LogoHandlingMode;
+}
 
 export type AssetType = 'text' | 'image' | 'note';
 
