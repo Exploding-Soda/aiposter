@@ -977,6 +977,8 @@ const App: React.FC = () => {
   const [isRefineBucketMode, setIsRefineBucketMode] = useState(false);
   const [isApplyingBucketFill, setIsApplyingBucketFill] = useState(false);
   const [isDetectingRefineRegions, setIsDetectingRefineRegions] = useState(false);
+  const [refineRegionDetectProgress, setRefineRegionDetectProgress] = useState(0);
+  const [isRefineRegionDetectDone, setIsRefineRegionDetectDone] = useState(false);
   const [refineRegionDetectError, setRefineRegionDetectError] = useState('');
   const [isSavingRefinePreview, setIsSavingRefinePreview] = useState(false);
   const [canUndoRefinePreview, setCanUndoRefinePreview] = useState(false);
@@ -1666,6 +1668,9 @@ const App: React.FC = () => {
     setActivePosterId(artboardId);
     setPosterFeedback('');
     setRefineColorSetError('');
+    setRefineRegionDetectError('');
+    setRefineRegionDetectProgress(0);
+    setIsRefineRegionDetectDone(false);
     setRefinePreviewImageUrl(null);
     setIsRefineBucketMode(false);
     setIsRefineLogoSelected(false);
@@ -5787,6 +5792,32 @@ const App: React.FC = () => {
     return () => clearInterval(intervalId);
   }, [isLoadingSuggestions]);
 
+  useEffect(() => {
+    if (!isDetectingRefineRegions) {
+      setRefineRegionDetectProgress(0);
+      return;
+    }
+
+    let intervalId: number | null = null;
+    const startTimeoutId = window.setTimeout(() => {
+      setRefineRegionDetectProgress(3);
+      intervalId = window.setInterval(() => {
+        setRefineRegionDetectProgress((prev) => {
+          if (prev >= 80) return 80;
+          const nextStep = 0.8 + Math.random() * 2.2;
+          return Math.min(80, prev + nextStep);
+        });
+      }, 500);
+    }, 450);
+
+    return () => {
+      window.clearTimeout(startTimeoutId);
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [isDetectingRefineRegions]);
+
   const handleFetchFeedbackIdeas = async () => {
     if (!activePoster) return;
     if (isLoadingSuggestions) return;
@@ -5824,7 +5855,7 @@ Return ONLY valid JSON in the format:
   };
 
   const handleDetectRefineColorRegions = useCallback(async () => {
-    if (isDetectingRefineRegions) return;
+    if (isDetectingRefineRegions || isRefineRegionDetectDone) return;
     const posterImage = currentRefinePosterImageUrl;
     const imageWidth = annotatorImage?.naturalWidth || annotatorImage?.width || 0;
     const imageHeight = annotatorImage?.naturalHeight || annotatorImage?.height || 0;
@@ -5840,6 +5871,7 @@ Return ONLY valid JSON in the format:
     }
 
     setIsDetectingRefineRegions(true);
+    setIsRefineRegionDetectDone(false);
     setRefineRegionDetectError('');
     setRefineColorSetError('');
 
@@ -5891,6 +5923,9 @@ Rules:
         throw new Error('Model returned no valid boxes.');
       }
 
+      setIsDetectingRefineRegions(false);
+      setIsRefineRegionDetectDone(true);
+
       let workingPreview = posterImage;
       for (const box of boxes) {
         const rect = {
@@ -5922,6 +5957,7 @@ Rules:
     annotatorImage,
     applyRefinePreviewState,
     currentRefinePosterImageUrl,
+    isRefineRegionDetectDone,
     isDetectingRefineRegions,
     pushRefinePreviewHistory,
     refineColorThreshold,
@@ -9635,14 +9671,6 @@ Rules:
                     <div className="flex items-center justify-between gap-3">
                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Color Set</label>
                       <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={handleDetectRefineColorRegions}
-                          disabled={isDetectingRefineRegions || !currentRefinePosterImageUrl}
-                          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {isDetectingRefineRegions ? 'Testing...' : 'Coord Test'}
-                        </button>
                         {primaryColorGroupsLoading && (
                           <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Loading</span>
                         )}
@@ -9700,32 +9728,6 @@ Rules:
                         </button>
                       </div>
                     ) : null}
-                    <button
-                      type="button"
-                      onClick={handleReplaceWholePosterWithPalette}
-                      disabled={!selectedRefineColorGroup?.colors.length || !currentRefinePosterImageUrl || isReplacingWholePoster}
-                      className="w-full rounded-xl border border-slate-200 bg-white py-2 text-[11px] font-bold uppercase tracking-widest text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {isReplacingWholePoster ? 'Replacing Whole Poster...' : 'Replace Whole Poster'}
-                    </button>
-                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                      <div className="flex items-center justify-between text-[11px] text-slate-500">
-                        <span>Whole Poster Threshold</span>
-                        <span className="font-semibold text-slate-700">{refineWholePosterThreshold}</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="24"
-                        max="300"
-                        step="2"
-                        value={refineWholePosterThreshold}
-                        onChange={(event) => setRefineWholePosterThreshold(Number(event.target.value))}
-                        className="mt-2 w-full accent-slate-700"
-                      />
-                      <div className="mt-1 text-[10px] text-slate-400">
-                        Controls how far each poster pixel can snap to the nearest color in the selected set.
-                      </div>
-                    </div>
                     <div className="rounded-xl border border-slate-200 bg-white">
                       <button
                         type="button"
@@ -9772,6 +9774,36 @@ Rules:
                     {isApplyingBucketFill && (
                       <div className="text-[11px] text-slate-500">Detecting region and recoloring...</div>
                     )}
+                    <button
+                      type="button"
+                      onClick={handleDetectRefineColorRegions}
+                      disabled={isDetectingRefineRegions || isRefineRegionDetectDone || !currentRefinePosterImageUrl}
+                      className={`relative w-full overflow-hidden rounded-xl py-2.5 text-[11px] font-bold uppercase tracking-widest text-white transition disabled:cursor-not-allowed ${
+                        isRefineRegionDetectDone ? 'bg-emerald-600' : 'bg-slate-900 hover:bg-slate-800'
+                      }`}
+                    >
+                      {isDetectingRefineRegions && refineRegionDetectProgress > 0 && (
+                        <>
+                          <span className="absolute inset-0 bg-slate-800" />
+                          <span
+                            className="absolute inset-y-0 left-0 bg-sky-500/80 transition-[width] duration-300"
+                            style={{ width: `${refineRegionDetectProgress}%` }}
+                          />
+                        </>
+                      )}
+                      <span className="relative flex items-center justify-between px-3">
+                        <span>
+                          {isRefineRegionDetectDone
+                            ? 'Done!'
+                            : isDetectingRefineRegions
+                              ? 'Calibrating Colors...'
+                              : 'Auto Color Tune'}
+                        </span>
+                        {isDetectingRefineRegions && refineRegionDetectProgress > 0 && (
+                          <span>{Math.round(refineRegionDetectProgress)}%</span>
+                        )}
+                      </span>
+                    </button>
                     <button
                       type="button"
                       onClick={handleSaveRefinePreview}
