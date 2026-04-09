@@ -5441,6 +5441,32 @@ const App: React.FC = () => {
     return { x, y };
   }, [annotatorImage, getAnnotatorTransform]);
 
+  const handleAnnotatorWheel = useCallback((event: React.WheelEvent<HTMLCanvasElement>) => {
+    event.preventDefault();
+    const container = annotatorRef.current;
+    const transform = getAnnotatorTransform();
+    if (!container || !transform) return;
+
+    const rect = container.getBoundingClientRect();
+    const localX = event.clientX - rect.left;
+    const localY = event.clientY - rect.top;
+    const currentZoom = annotationZoom;
+    const nextZoom = Math.min(3, Math.max(0.5, currentZoom + (event.deltaY < 0 ? 0.1 : -0.1)));
+
+    if (Math.abs(nextZoom - currentZoom) < 0.0001) return;
+
+    const imageX = (localX - transform.offsetX) / transform.scale;
+    const imageY = (localY - transform.offsetY) / transform.scale;
+    const baseScale = transform.scale / currentZoom;
+    const nextScale = baseScale * nextZoom;
+
+    setAnnotationZoom(nextZoom);
+    setAnnotationPan({
+      x: localX - imageX * nextScale,
+      y: localY - imageY * nextScale,
+    });
+  }, [annotationZoom, getAnnotatorTransform]);
+
   const handleLogoLayerPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!hasRefineLogoLayer) return;
     const container = annotatorRef.current;
@@ -9144,13 +9170,8 @@ Return ONLY valid JSON in the format:
                   />
                   {hasRefineLogoLayer && activePoster?.logoUrl && (
                     <div
-                      data-refine-logo-layer="true"
-                      className={`absolute left-0 top-0 z-10 ${isLogoLayerDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+                      className="absolute left-0 top-0 z-10 h-full w-full pointer-events-none"
                       style={{
-                        width: `${refineLogoPlacement.width * 100}%`,
-                        height: `${refineLogoPlacement.height * 100}%`,
-                        left: `${refineLogoPlacement.x * 100}%`,
-                        top: `${refineLogoPlacement.y * 100}%`,
                         transform: (() => {
                           const transform = getAnnotatorTransform();
                           if (!transform) return undefined;
@@ -9158,12 +9179,21 @@ Return ONLY valid JSON in the format:
                         })(),
                         transformOrigin: '0 0'
                       }}
-                      onPointerDown={handleLogoLayerPointerDown}
-                      onPointerMove={handleLogoLayerPointerMove}
-                      onPointerUp={handleLogoLayerPointerUp}
-                      onPointerCancel={handleLogoLayerPointerUp}
                     >
-                      <div className="relative h-full w-full">
+                      <div
+                        data-refine-logo-layer="true"
+                        className={`absolute pointer-events-auto ${isLogoLayerDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+                        style={{
+                          width: `${refineLogoPlacement.width * 100}%`,
+                          height: `${refineLogoPlacement.height * 100}%`,
+                          left: `${refineLogoPlacement.x * 100}%`,
+                          top: `${refineLogoPlacement.y * 100}%`,
+                        }}
+                        onPointerDown={handleLogoLayerPointerDown}
+                        onPointerMove={handleLogoLayerPointerMove}
+                        onPointerUp={handleLogoLayerPointerUp}
+                        onPointerCancel={handleLogoLayerPointerUp}
+                      >
                         <img
                           src={activePoster.logoUrl}
                           alt="Logo Layer"
@@ -9211,14 +9241,7 @@ Return ONLY valid JSON in the format:
                       if (!isAnnotatorReady) return;
                       handleAnnotatorMouseUp();
                     }}
-                    onWheel={(event) => {
-                      event.preventDefault();
-                      const delta = -event.deltaY;
-                      setAnnotationZoom((prev) => {
-                        const next = prev + (delta > 0 ? 0.1 : -0.1);
-                        return Math.min(3, Math.max(0.5, next));
-                      });
-                    }}
+                    onWheel={handleAnnotatorWheel}
                   />
                 </div>
               </div>
