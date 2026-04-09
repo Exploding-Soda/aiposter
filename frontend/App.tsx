@@ -37,6 +37,14 @@ const DASHBOARD_ONBOARDING_STORAGE_KEY = 'poster-onboarding-dashboard-v1';
 const BOARD_GENERATOR_ONBOARDING_STORAGE_KEY = 'poster-onboarding-board-generator-v1';
 const BACKEND_API = import.meta.env.VITE_BACKEND_API || 'http://localhost:8001';
 const FONT_PREVIEW_API = import.meta.env.VITE_FONT_PREVIEW_API || BACKEND_API;
+const resolveProjectImageUrl = (value?: string | null): string => {
+  if (!value) return '';
+  if (value.startsWith('file://db/files/')) {
+    const path = value.replace('file://db/files/', '');
+    return normalizeSecureImageUrl(`${BACKEND_API}/files/${path}`);
+  }
+  return normalizeSecureImageUrl(value);
+};
 const FONT_ALPHABET_PREVIEW_TEXT = [
   'Aa Bb Cc Dd Ee Ff',
   'Gg Hh Ii Jj Kk Ll',
@@ -122,6 +130,7 @@ const cloneLogoPlacement = (placement?: LogoPlacement | null): LogoPlacement => 
 const loadImageElement = (src: string): Promise<HTMLImageElement> => (
   new Promise((resolve, reject) => {
     const image = new Image();
+    image.crossOrigin = 'anonymous';
     image.onload = () => resolve(image);
     image.onerror = () => reject(new Error('Failed to load image.'));
     image.src = src;
@@ -2001,6 +2010,55 @@ const App: React.FC = () => {
     annotationHistoryRef.current = [...annotationHistoryRef.current, snapshot].slice(-50);
     annotationRedoRef.current = [];
   }, [annotations, isPosterModalOpen]);
+
+  useEffect(() => {
+    if (artboards.length === 0) return;
+    let cancelled = false;
+
+    void (async () => {
+      const sizeUpdates = await Promise.all(
+        artboards.map(async (artboard) => {
+          if (!artboard.posterData) return null;
+          const posterImageUrl = resolveProjectImageUrl(artboard.posterData.imageUrlMerged || artboard.posterData.imageUrl);
+          if (!posterImageUrl) return null;
+          try {
+            const image = await loadImageElement(posterImageUrl);
+            const imageWidth = image.naturalWidth || image.width;
+            const imageHeight = image.naturalHeight || image.height;
+            if (!imageWidth || !imageHeight) return null;
+            const fitted = fitSizeToBox(imageWidth, imageHeight, boardWidth, boardHeight);
+            const nextWidth = Math.round(fitted.width);
+            const nextHeight = Math.round(fitted.height);
+            if (Math.abs(nextWidth - artboard.width) < 1 && Math.abs(nextHeight - artboard.height) < 1) {
+              return null;
+            }
+            return { id: artboard.id, width: nextWidth, height: nextHeight };
+          } catch (error) {
+            console.warn('Failed to resolve poster aspect ratio for artboard', artboard.id, error);
+            return null;
+          }
+        })
+      );
+
+      if (cancelled) return;
+      const updates = sizeUpdates.filter((item): item is { id: string; width: number; height: number } => Boolean(item));
+      if (updates.length === 0) return;
+      const updateMap = new Map(updates.map((item) => [item.id, item]));
+      setArtboards((prev) => prev.map((artboard) => {
+        const next = updateMap.get(artboard.id);
+        if (!next) return artboard;
+        return {
+          ...artboard,
+          width: next.width,
+          height: next.height
+        };
+      }));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [artboards, boardWidth, boardHeight]);
 
   useEffect(() => {
     if (!activeProjectId) return;
@@ -3977,7 +4035,11 @@ const App: React.FC = () => {
   };
 
   const fetchAuthedImageAsDataUrl = async (url: string): Promise<string> => {
-    const response = await fetchWithAuth(url);
+    const normalizedUrl = normalizeSecureImageUrl(url);
+    const isBackendUrl = normalizedUrl.startsWith(BACKEND_API);
+    const response = isBackendUrl
+      ? await fetchWithAuth(normalizedUrl)
+      : await fetch(normalizedUrl, { credentials: 'omit' });
     if (!response.ok) {
       throw new Error(`Failed to fetch image: ${response.status}`);
     }
@@ -4036,8 +4098,9 @@ const App: React.FC = () => {
     placement?: LogoPlacement | null
   ) => {
     const normalizedBaseImageUrl = normalizeSecureImageUrl(baseImageUrl);
+    const normalizedLogoUrl = normalizeSecureImageUrl(logoUrl);
     const nextPlacement = cloneLogoPlacement(placement);
-    if (serverConfig.logoHandlingMode !== 'paste' || !logoUrl) {
+    if (serverConfig.logoHandlingMode !== 'paste' || !normalizedLogoUrl) {
       return {
         imageUrl: normalizedBaseImageUrl,
         imageUrlMerged: normalizedBaseImageUrl,
@@ -4045,7 +4108,13 @@ const App: React.FC = () => {
       };
     }
     try {
-      const mergedImageUrl = await compositePosterWithLogo(normalizedBaseImageUrl, logoUrl, nextPlacement);
+      const compositingBaseImageUrl = normalizedBaseImageUrl.startsWith('data:image/')
+        ? normalizedBaseImageUrl
+        : await fetchAuthedImageAsDataUrl(normalizedBaseImageUrl);
+      const compositingLogoUrl = normalizedLogoUrl.startsWith('data:image/')
+        ? normalizedLogoUrl
+        : await fetchAuthedImageAsDataUrl(normalizedLogoUrl);
+      const mergedImageUrl = await compositePosterWithLogo(compositingBaseImageUrl, compositingLogoUrl, nextPlacement);
       return {
         imageUrl: normalizedBaseImageUrl,
         imageUrlMerged: mergedImageUrl,
@@ -4821,7 +4890,7 @@ const App: React.FC = () => {
     const artboard = artboards.find(ab => ab.id === assetContextMenu.artboardId);
     if (!artboard?.posterData) return null;
     const imageUrl = artboard.posterData.imageUrlMerged || artboard.posterData.imageUrl;
-    return imageUrl ? { id: artboard.id, imageUrl } : null;
+    return imageUrl ? { id: artboard.id, imageUrl, poster: artboard.posterData } : null;
   }, [assetContextMenu, artboards]);
 
   const contextDeleteLabel = assetContextMenu?.scope === 'canvas' && multiSelectedCanvasAssets.includes(assetContextMenu.assetId)
@@ -4834,11 +4903,28 @@ const App: React.FC = () => {
     try {
       const poster = getContextPoster();
       if (poster) {
-        const ext = extensionFromUrl(poster.imageUrl) || 'png';
-        if (poster.imageUrl.startsWith('data:image/')) {
-          triggerDownload(poster.imageUrl, `poster-${poster.id}.${ext}`);
+        const downloadUrl = isPasteLogoMode && poster.poster.logoUrl
+          ? await (async () => {
+            const baseImageUrl = resolveProjectImageUrl(poster.poster.imageUrl || poster.imageUrl);
+            const logoUrl = resolveProjectImageUrl(poster.poster.logoUrl);
+            const compositingBaseImageUrl = baseImageUrl.startsWith('data:image/')
+              ? baseImageUrl
+              : await fetchAuthedImageAsDataUrl(baseImageUrl);
+            const compositingLogoUrl = logoUrl.startsWith('data:image/')
+              ? logoUrl
+              : await fetchAuthedImageAsDataUrl(logoUrl);
+            return await compositePosterWithLogo(
+              compositingBaseImageUrl,
+              compositingLogoUrl,
+              poster.poster.logoPlacement
+            );
+          })()
+          : resolveProjectImageUrl(poster.imageUrl);
+        const ext = extensionFromUrl(downloadUrl) || 'png';
+        if (downloadUrl.startsWith('data:image/')) {
+          triggerDownload(downloadUrl, `poster-${poster.id}.${ext}`);
         } else {
-          const response = await fetch(poster.imageUrl);
+          const response = await fetch(downloadUrl);
           if (!response.ok) {
             throw new Error(`Failed to download image: ${response.status}`);
           }
@@ -5876,34 +5962,68 @@ Return ONLY valid JSON in the format:
     try {
       const baseImageUrl = currentPoster.imageUrl || currentPoster.imageUrlMerged;
       const nextPlacement = cloneLogoPlacement(refineLogoPlacement);
+      let nextArtboards: Artboard[] = artboards;
       if (!baseImageUrl) {
-        updatePosterArtboard(currentArtboard.id, (ab) => ({
-          ...ab,
-          posterData: {
-            ...ab.posterData!,
-            logoPlacement: nextPlacement
-          }
-        }));
-        return;
-      }
-      const nextImages = await buildPosterImagesWithLogoMode(
-        baseImageUrl,
-        currentPoster.logoUrl,
-        nextPlacement
-      );
+        nextArtboards = artboards.map((ab) => (
+          ab.id === currentArtboard.id
+            ? {
+              ...ab,
+              posterData: {
+                ...ab.posterData!,
+                logoPlacement: nextPlacement
+              }
+            }
+            : ab
+        ));
+      } else {
+        const nextImages = await buildPosterImagesWithLogoMode(
+          baseImageUrl,
+          currentPoster.logoUrl,
+          nextPlacement
+        );
 
-      updatePosterArtboard(currentArtboard.id, (ab) => ({
-        ...ab,
-        posterData: {
-          ...ab.posterData!,
-          logoPlacement: nextImages.logoPlacement,
-          imageUrl: nextImages.imageUrl,
-          imageUrlMerged: nextImages.imageUrlMerged,
-          imageUrlNoText: undefined,
-          status: 'completed',
-          taskId: undefined
-        }
-      }));
+        nextArtboards = artboards.map((ab) => (
+          ab.id === currentArtboard.id
+            ? {
+              ...ab,
+              posterData: {
+                ...ab.posterData!,
+                logoPlacement: nextImages.logoPlacement,
+                imageUrl: nextImages.imageUrl,
+                imageUrlMerged: nextImages.imageUrlMerged,
+                imageUrlNoText: undefined,
+                status: 'completed',
+                taskId: undefined
+              }
+            }
+            : ab
+        ));
+      }
+      setArtboards(nextArtboards);
+      artboardsRef.current = nextArtboards;
+      if (activeProjectId && activeProject) {
+        const snapshot: Project = {
+          ...activeProject,
+          artboards: nextArtboards,
+          canvasAssets,
+          connections,
+          styleImages,
+          logoImage,
+          fontReferenceImage,
+          selectedReferenceStyleId,
+          selectedReferenceStyleStrength,
+          selectedRuleIds,
+          selectedLogoAssetId,
+          selectedFontReferenceId,
+          view: {
+            x: viewOffset.x,
+            y: viewOffset.y,
+            zoom
+          },
+          updatedAt: Date.now()
+        };
+        void saveProjectToBackend(activeProjectId, snapshot);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save logo layer.';
       setRefineColorSetError(message);
@@ -5911,13 +6031,28 @@ Return ONLY valid JSON in the format:
       setIsSavingRefinePreview(false);
     }
   }, [
+    activeProject,
     activePosterId,
+    activeProjectId,
     artboards,
     buildPosterImagesWithLogoMode,
+    canvasAssets,
+    connections,
+    fontReferenceImage,
     isRefineLogoPlacementDirty,
     isSavingRefinePreview,
+    logoImage,
     refineLogoPlacement,
-    updatePosterArtboard
+    saveProjectToBackend,
+    selectedFontReferenceId,
+    selectedLogoAssetId,
+    selectedReferenceStyleId,
+    selectedReferenceStyleStrength,
+    selectedRuleIds,
+    styleImages,
+    viewOffset.x,
+    viewOffset.y,
+    zoom,
   ]);
 
   const handleRefinePosterContentPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
@@ -7913,6 +8048,7 @@ Return ONLY valid JSON in the format:
                 canvasScale={zoom}
                 isSelected={selection.artboardId === ab.id || multiSelectedArtboards.includes(ab.id)}
                 isFadingIn={fadeInArtboardIds.has(ab.id)}
+                isPasteLogoMode={isPasteLogoMode}
                 selectedAssetId={selection.assetId}
                 onSelect={(assetId, event) => {
                   if (event.ctrlKey) {
@@ -9258,7 +9394,7 @@ Return ONLY valid JSON in the format:
                   </div>
                 )}
                 {isRefineLogoLayerSelected && activePoster?.logoUrl && (
-                  <div className="space-y-3 rounded-2xl border border-sky-200 bg-sky-50/60 p-3">
+                  <div data-refine-logo-layer="true" className="space-y-3 rounded-2xl border border-sky-200 bg-sky-50/60 p-3">
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="text-[10px] font-bold uppercase tracking-widest text-sky-600">Logo Layer</div>
@@ -9729,7 +9865,7 @@ const ToolButton: React.FC<{ icon: React.ReactNode; onClick: () => void; disable
   </button>
 );
 
-const ArtboardComponent: React.FC<ArtboardProps> = ({ artboard, canvasScale, isSelected, isFadingIn, selectedAssetId, onSelect, onDragArtboard, onResizeArtboard, onDragAsset, onResizeAsset, onUpdateAssetContent, onOpenPoster, onOpenAssetContextMenu, onOpenPosterContextMenu }) => {
+const ArtboardComponent: React.FC<ArtboardProps> = ({ artboard, canvasScale, isSelected, isFadingIn, selectedAssetId, onSelect, onDragArtboard, onResizeArtboard, onDragAsset, onResizeAsset, onUpdateAssetContent, onOpenPoster, onOpenAssetContextMenu, onOpenPosterContextMenu, isPasteLogoMode }) => {
   const isDraggingArtboard = useRef(false);
   const isResizingArtboard = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
@@ -9825,7 +9961,12 @@ const ArtboardComponent: React.FC<ArtboardProps> = ({ artboard, canvasScale, isS
             onClick={(e) => { e.stopPropagation(); onSelect(null, e); onOpenPoster(artboard.id); }}
             onContextMenu={(e) => onOpenPosterContextMenu(e)}
           >
-            <PosterCard poster={artboard.posterData!} onEdit={() => onOpenPoster(artboard.id)} isLarge />
+            <PosterCard
+              poster={artboard.posterData!}
+              onEdit={() => onOpenPoster(artboard.id)}
+              isLarge
+              isPasteLogoMode={isPasteLogoMode}
+            />
           </button>
         ) : (
           artboard.assets.map(asset => (
@@ -9861,6 +10002,7 @@ interface ArtboardProps {
   canvasScale: number;
   isSelected: boolean;
   isFadingIn: boolean;
+  isPasteLogoMode: boolean;
   selectedAssetId: string | null;
   onSelect: (assetId: string | null, event: React.MouseEvent) => void;
   onDragArtboard: (dx: number, dy: number) => void;
