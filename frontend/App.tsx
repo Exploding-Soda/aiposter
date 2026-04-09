@@ -8952,12 +8952,12 @@ Return ONLY valid JSON in the format:
               className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_320px]"
               style={isExtraWideRefinePoster ? { alignItems: 'start' } : undefined}
             >
-              <div className="min-w-0 space-y-3">
+              <div className="min-w-0 space-y-3 md:flex md:min-h-[70vh] md:flex-col">
                 <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">
                   <span>Original</span>
                   <span className="text-[9px] font-medium text-slate-400">Draw boxes or arrows to annotate</span>
                 </div>
-                <div className="flex min-w-0 flex-col gap-3 md:flex-row md:items-start md:justify-center">
+                <div className="flex min-w-0 flex-col gap-3 md:flex-1 md:flex-row md:items-center md:justify-center">
                   <div className="shrink-0 flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white/95 px-2 py-1 shadow-md backdrop-blur md:sticky md:top-3 md:w-[68px] md:flex-col md:items-stretch">
                     <button
                       type="button"
