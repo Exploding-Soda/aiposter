@@ -7,26 +7,16 @@ export type ChatMessage = {
   images?: string[];
 };
 
-const isExternalImageUrl = (value: string): boolean => {
-  if (!/^https?:\/\//i.test(value)) return false;
-  try {
-    const url = new URL(value);
-    const backendUrl = new URL(BACKEND_API);
-    if (url.origin === backendUrl.origin) return false;
-    if (typeof window !== "undefined" && url.origin === window.location.origin) {
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 const ensureDataUrl = async (value: string): Promise<string> => {
   if (value.startsWith("data:image/")) return value;
-  const response = isExternalImageUrl(value)
-    ? await fetch(value, { credentials: "omit" })
-    : await fetchWithAuth(value);
+  const normalizedValue = value.trim();
+  const isHttpUrl = /^https?:\/\//i.test(normalizedValue);
+  const shouldUseAuthFetch = isHttpUrl
+    ? normalizedValue.startsWith(BACKEND_API)
+    : true;
+  const response = shouldUseAuthFetch
+    ? await fetchWithAuth(normalizedValue)
+    : await fetch(normalizedValue, { credentials: "omit" });
   if (!response.ok) {
     throw new Error(`Failed to fetch image for chat: ${response.status}`);
   }
@@ -861,7 +851,7 @@ export const generatePosterResolutionFromImage = async (
 ): Promise<string> => {
   const dataUrl = await ensureDataUrl(posterImageUrl);
   return callImageEditApi(
-    `Resize the provided image to ${targetSize.width}x${targetSize.height}. Do not change any content, text, colors, or composition. Only scale to fit; do not crop. If aspect ratio differs, add neutral padding to preserve the full image.`,
+    `Adapt the provided poster to ${targetSize.width}x${targetSize.height}. Preserve the original style, branding, text, imagery, and overall design intent, but intelligently recompose and resize the layout so the poster feels natively designed for the new aspect ratio. Reflow spacing, scale elements, and reposition content as needed to fit the new canvas cleanly. Do not add neutral padding or letterboxing. Do not crop away important content, text, logo, or key visual elements.`,
     [dataUrl],
   );
 };

@@ -1711,6 +1711,24 @@ const App: React.FC = () => {
     }
     return 9 / 16;
   })();
+  const isWideRefinePoster = annotatorAspectRatio >= 0.8;
+  const isExtraWideRefinePoster = annotatorAspectRatio >= 1.15;
+  const isMediumWideRefinePoster = annotatorAspectRatio >= 0.95;
+  const refinePosterPreviewMaxHeight = isExtraWideRefinePoster
+    ? 'min(58vh, 500px)'
+    : isMediumWideRefinePoster
+      ? 'min(64vh, 620px)'
+      : isWideRefinePoster
+        ? 'min(68vh, 700px)'
+        : '70vh';
+  const refinePosterPreviewWidth = isWideRefinePoster
+    ? `min(100%, calc(100vw - 32rem), calc(${refinePosterPreviewMaxHeight} * ${annotatorAspectRatio}))`
+    : `min(100%, calc(${refinePosterPreviewMaxHeight} * ${annotatorAspectRatio}))`;
+  const refinePosterModalMaxWidth = isExtraWideRefinePoster
+    ? 'min(97vw, 1560px)'
+    : isWideRefinePoster
+      ? 'min(96vw, 1440px)'
+      : 'min(96vw, 1280px)';
 
   useEffect(() => {
     artboardsRef.current = artboards;
@@ -6292,7 +6310,7 @@ Return ONLY valid JSON in the format:
     setIsGeneratingResolutions(true);
 
     try {
-      const posterImageUrl = currentArtboard.posterData.imageUrlMerged || currentArtboard.posterData.imageUrl;
+      const posterImageUrl = currentArtboard.posterData.imageUrl || currentArtboard.posterData.imageUrlMerged;
       if (!posterImageUrl) {
         throw new Error('Missing poster image for resolution generation.');
       }
@@ -8911,7 +8929,8 @@ Return ONLY valid JSON in the format:
           onClick={handleClosePosterModal}
         >
           <div
-            className={`bg-white rounded-3xl w-full max-w-5xl shadow-2xl p-8 max-h-[90vh] overflow-y-auto transition-transform duration-200 ${isPosterModalClosing ? 'scale-[0.98]' : 'scale-100'}`}
+            className={`bg-white rounded-3xl w-full shadow-2xl p-8 max-h-[90vh] overflow-y-auto transition-transform duration-200 ${isPosterModalClosing ? 'scale-[0.98]' : 'scale-100'}`}
+            style={{ maxWidth: refinePosterModalMaxWidth }}
             onClick={(e) => e.stopPropagation()}
             onPointerDown={handleRefinePosterContentPointerDown}
           >
@@ -8927,7 +8946,10 @@ Return ONLY valid JSON in the format:
                 Close
               </button>
             </div>
-            <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_320px]">
+            <div
+              className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_320px]"
+              style={isExtraWideRefinePoster ? { alignItems: 'start' } : undefined}
+            >
               <div className="min-w-0 space-y-3">
                 <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">
                   <span>Original</span>
@@ -9038,11 +9060,11 @@ Return ONLY valid JSON in the format:
                   </div>
                   <div
                     ref={annotatorRef}
-                    className="relative mx-auto shrink-0 rounded-3xl border border-slate-200 bg-white overflow-hidden"
+                    className="relative mx-auto shrink rounded-3xl border border-slate-200 bg-white overflow-hidden"
                     style={{
-                      width: `min(100%, calc(70vh * ${annotatorAspectRatio}))`,
+                      width: refinePosterPreviewWidth,
                       height: 'auto',
-                      maxHeight: '70vh',
+                      maxHeight: refinePosterPreviewMaxHeight,
                       aspectRatio: annotatorAspectRatio
                     }}
                   >
