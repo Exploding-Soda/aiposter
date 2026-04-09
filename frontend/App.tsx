@@ -9456,6 +9456,7 @@ Return ONLY valid JSON in the format:
                     </div>
                   </div>
                 )}
+                {isRefineBucketMode && (
                   <div className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
                     <div className="flex items-center justify-between gap-3">
                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Color Set</label>
@@ -9463,138 +9464,139 @@ Return ONLY valid JSON in the format:
                         {primaryColorGroupsLoading && (
                           <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Loading</span>
                         )}
+                      </div>
                     </div>
-                  </div>
-                  <select
-                    value={selectedRefineColorGroupId ?? ''}
-                    onChange={(event) => {
-                      setSelectedRefineColorGroupId(event.target.value || null);
-                      setRefineColorSetError('');
-                    }}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 outline-none focus:border-slate-400"
-                    disabled={primaryColorGroupsLoading || primaryColorGroups.length === 0}
-                  >
-                    {primaryColorGroups.length === 0 ? (
-                      <option value="">No color sets available</option>
-                    ) : (
-                      primaryColorGroups.map((group) => (
-                        <option key={group.id} value={group.id}>
-                          {group.name?.trim() || 'Color Set'}{group.colors.length ? ` (${group.colors.length})` : ' (Empty)'}
-                        </option>
-                      ))
-                    )}
-                  </select>
-                  {selectedRefineColorGroup && (
-                    <div className="flex items-center gap-2">
-                      {selectedRefineColorGroup.colors.length > 0 ? selectedRefineColorGroup.colors.map((color, index) => (
-                        <div
-                          key={`${selectedRefineColorGroup.id}-${color}-${index}`}
-                          className="h-7 flex-1 rounded-lg border border-black/5"
-                          style={{ backgroundColor: color }}
-                          title={color}
-                          aria-label={color}
-                        />
-                      )) : (
-                        <div className="text-[11px] text-slate-400">Empty color set</div>
-                      )}
-                    </div>
-                  )}
-                  {selectedRefineColorGroup?.colors.length ? (
-                    <div className="flex items-center justify-between text-[11px] text-slate-500">
-                      <span>
-                        Click fills the connected region from the sampled color. Drag still remaps the whole rectangle with the current color set.
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          pushRefinePreviewHistory(null);
-                          applyRefinePreviewState(null);
-                        }}
-                        disabled={!refinePreviewImageUrl}
-                        className="font-semibold text-slate-600 disabled:opacity-40"
-                      >
-                        Reset Preview
-                      </button>
-                    </div>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={handleReplaceWholePosterWithPalette}
-                    disabled={!selectedRefineColorGroup?.colors.length || !currentRefinePosterImageUrl || isReplacingWholePoster}
-                    className="w-full rounded-xl border border-slate-200 bg-white py-2 text-[11px] font-bold uppercase tracking-widest text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {isReplacingWholePoster ? 'Replacing Whole Poster...' : 'Replace Whole Poster'}
-                  </button>
-                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                    <div className="flex items-center justify-between text-[11px] text-slate-500">
-                      <span>Whole Poster Threshold</span>
-                      <span className="font-semibold text-slate-700">{refineWholePosterThreshold}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="24"
-                      max="300"
-                      step="2"
-                      value={refineWholePosterThreshold}
-                      onChange={(event) => setRefineWholePosterThreshold(Number(event.target.value))}
-                      className="mt-2 w-full accent-slate-700"
-                    />
-                    <div className="mt-1 text-[10px] text-slate-400">
-                      Controls how far each poster pixel can snap to the nearest color in the selected set.
-                    </div>
-                  </div>
-                  <div className="rounded-xl border border-slate-200 bg-white">
-                    <button
-                      type="button"
-                      onClick={() => setIsRefineColorSettingsOpen((prev) => !prev)}
-                      className="flex w-full items-center justify-between px-3 py-2 text-[11px] font-semibold text-slate-600"
+                    <select
+                      value={selectedRefineColorGroupId ?? ''}
+                      onChange={(event) => {
+                        setSelectedRefineColorGroupId(event.target.value || null);
+                        setRefineColorSetError('');
+                      }}
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 outline-none focus:border-slate-400"
+                      disabled={primaryColorGroupsLoading || primaryColorGroups.length === 0}
                     >
-                      <span>
-                        Color Threshold
-                        <span className="ml-2 font-normal text-slate-400">
-                          {refineColorThreshold}
-                        </span>
-                      </span>
-                      <ChevronDown className={`h-4 w-4 transition-transform ${isRefineColorSettingsOpen ? 'rotate-180' : ''}`} />
-                    </button>
-                    {isRefineColorSettingsOpen && (
-                      <div className="space-y-2 border-t border-slate-200 px-3 py-2">
-                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                          <div className="flex items-center justify-between text-[11px] text-slate-500">
-                            <span>Color Threshold</span>
-                            <span className="font-semibold text-slate-700">{refineColorThreshold}</span>
-                          </div>
-                          <input
-                            type="range"
-                            min="24"
-                            max="300"
-                            step="2"
-                            value={refineColorThreshold}
-                            onChange={(event) => setRefineColorThreshold(Number(event.target.value))}
-                            className="mt-2 w-full accent-slate-700"
+                      {primaryColorGroups.length === 0 ? (
+                        <option value="">No color sets available</option>
+                      ) : (
+                        primaryColorGroups.map((group) => (
+                          <option key={group.id} value={group.id}>
+                            {group.name?.trim() || 'Color Set'}{group.colors.length ? ` (${group.colors.length})` : ' (Empty)'}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                    {selectedRefineColorGroup && (
+                      <div className="flex items-center gap-2">
+                        {selectedRefineColorGroup.colors.length > 0 ? selectedRefineColorGroup.colors.map((color, index) => (
+                          <div
+                            key={`${selectedRefineColorGroup.id}-${color}-${index}`}
+                            className="h-7 flex-1 rounded-lg border border-black/5"
+                            style={{ backgroundColor: color }}
+                            title={color}
+                            aria-label={color}
                           />
-                          <div className="mt-1 text-[10px] text-slate-400">
-                            Controls how tolerant the fill tools are when matching nearby colors.
-                          </div>
-                        </div>
+                        )) : (
+                          <div className="text-[11px] text-slate-400">Empty color set</div>
+                        )}
                       </div>
                     )}
+                    {selectedRefineColorGroup?.colors.length ? (
+                      <div className="flex items-center justify-between text-[11px] text-slate-500">
+                        <span>
+                          Click fills the connected region from the sampled color. Drag still remaps the whole rectangle with the current color set.
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            pushRefinePreviewHistory(null);
+                            applyRefinePreviewState(null);
+                          }}
+                          disabled={!refinePreviewImageUrl}
+                          className="font-semibold text-slate-600 disabled:opacity-40"
+                        >
+                          Reset Preview
+                        </button>
+                      </div>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={handleReplaceWholePosterWithPalette}
+                      disabled={!selectedRefineColorGroup?.colors.length || !currentRefinePosterImageUrl || isReplacingWholePoster}
+                      className="w-full rounded-xl border border-slate-200 bg-white py-2 text-[11px] font-bold uppercase tracking-widest text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isReplacingWholePoster ? 'Replacing Whole Poster...' : 'Replace Whole Poster'}
+                    </button>
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                      <div className="flex items-center justify-between text-[11px] text-slate-500">
+                        <span>Whole Poster Threshold</span>
+                        <span className="font-semibold text-slate-700">{refineWholePosterThreshold}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="24"
+                        max="300"
+                        step="2"
+                        value={refineWholePosterThreshold}
+                        onChange={(event) => setRefineWholePosterThreshold(Number(event.target.value))}
+                        className="mt-2 w-full accent-slate-700"
+                      />
+                      <div className="mt-1 text-[10px] text-slate-400">
+                        Controls how far each poster pixel can snap to the nearest color in the selected set.
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 bg-white">
+                      <button
+                        type="button"
+                        onClick={() => setIsRefineColorSettingsOpen((prev) => !prev)}
+                        className="flex w-full items-center justify-between px-3 py-2 text-[11px] font-semibold text-slate-600"
+                      >
+                        <span>
+                          Color Threshold
+                          <span className="ml-2 font-normal text-slate-400">
+                            {refineColorThreshold}
+                          </span>
+                        </span>
+                        <ChevronDown className={`h-4 w-4 transition-transform ${isRefineColorSettingsOpen ? 'rotate-180' : ''}`} />
+                      </button>
+                      {isRefineColorSettingsOpen && (
+                        <div className="space-y-2 border-t border-slate-200 px-3 py-2">
+                          <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                            <div className="flex items-center justify-between text-[11px] text-slate-500">
+                              <span>Color Threshold</span>
+                              <span className="font-semibold text-slate-700">{refineColorThreshold}</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="24"
+                              max="300"
+                              step="2"
+                              value={refineColorThreshold}
+                              onChange={(event) => setRefineColorThreshold(Number(event.target.value))}
+                              className="mt-2 w-full accent-slate-700"
+                            />
+                            <div className="mt-1 text-[10px] text-slate-400">
+                              Controls how tolerant the fill tools are when matching nearby colors.
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    {refineColorSetError && (
+                      <div className="text-[11px] text-rose-600">{refineColorSetError}</div>
+                    )}
+                    {isApplyingBucketFill && (
+                      <div className="text-[11px] text-slate-500">Detecting region and recoloring...</div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleSaveRefinePreview}
+                      disabled={!refinePreviewImageUrl || isSavingRefinePreview}
+                      className="w-full rounded-xl border border-slate-200 bg-white py-2 text-[11px] font-bold uppercase tracking-widest text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isSavingRefinePreview ? 'Saving Fill Result...' : 'Save Fill Result'}
+                    </button>
                   </div>
-                  {refineColorSetError && (
-                    <div className="text-[11px] text-rose-600">{refineColorSetError}</div>
-                  )}
-                  {isApplyingBucketFill && (
-                    <div className="text-[11px] text-slate-500">Detecting region and recoloring...</div>
-                  )}
-                  <button
-                    type="button"
-                    onClick={handleSaveRefinePreview}
-                    disabled={!refinePreviewImageUrl || isSavingRefinePreview}
-                    className="w-full rounded-xl border border-slate-200 bg-white py-2 text-[11px] font-bold uppercase tracking-widest text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {isSavingRefinePreview ? 'Saving Fill Result...' : 'Save Fill Result'}
-                  </button>
-                  </div>
+                )}
                 <button
                   onClick={handleRefinePoster}
                   disabled={isRefiningPoster || (annotations.length === 0 && !posterFeedback.trim())}
