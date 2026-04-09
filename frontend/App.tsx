@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AppStatus, PosterDraft, PlanningStep, Artboard, Asset, Selection, AssetType, Project, TextLayout, TextStyleMap, Connection, ReferenceStyleStrength, LogoPlacement, ServerConfig, LogoHandlingMode } from './types';
-import { planPosters, generatePosterImage, generatePosterNoTextImage, generatePosterMergedImage, refinePoster, chatWithModel, ChatMessage, editPosterWithMarkupAsync, generatePosterResolutionFromImage, generatePosterImageAsync, getAITaskStatus, extractImageFromTaskResult, getPendingAITasks, AITaskStatus, generateImageFromPrompt } from './services/geminiService';
+import { planPosters, generatePosterImage, generatePosterNoTextImage, generatePosterMergedImage, refinePoster, chatWithModel, ChatMessage, editPosterWithMarkupAsync, generatePosterResolutionFromImageAsync, generatePosterImageAsync, getAITaskStatus, extractImageFromTaskResult, getPendingAITasks, AITaskStatus, generateImageFromPrompt } from './services/geminiService';
 import { AuthUser, fetchWithAuth, getAccessToken, loginUser, logoutUser, refreshAccessToken, registerUser } from './services/authService';
 import PosterCard from './components/PosterCard';
 import LandingPage from './components/LandingPage';
@@ -6356,31 +6356,71 @@ Return ONLY valid JSON in the format:
         return { id: derivedId, option };
       });
 
-      await Promise.all(derivedIds.map(async ({ id, option }) => {
-        const imageUrl = await generatePosterResolutionFromImage(
+      const taskSubmissions = await Promise.all(derivedIds.map(async ({ id, option }) => {
+        const taskId = await generatePosterResolutionFromImageAsync(
           posterImageUrl,
           { width: option.width, height: option.height, label: option.promptLabel }
-        );
-        const nextImages = await buildPosterImagesWithLogoMode(
-          imageUrl,
-          logoAssetForPoster ?? undefined,
-          currentArtboard.posterData.logoPlacement
         );
         updatePosterArtboard(id, (ab) => ({
           ...ab,
           posterData: {
             ...ab.posterData!,
-            ...basePoster,
-            logoUrl: logoAssetForPoster ?? undefined,
-            logoPlacement: nextImages.logoPlacement,
-            imageUrl: nextImages.imageUrl,
-            imageUrlMerged: nextImages.imageUrlMerged,
-            imageUrlNoText: undefined,
-            textLayout: nextLayout,
-            textStyles: editableStyles || ab.posterData?.textStyles,
-            status: 'completed'
+            status: 'generating',
+            taskId
           }
         }));
+        return { id, option, taskId };
+      }));
+
+      await Promise.all(taskSubmissions.map(async ({ id, taskId }) => {
+        try {
+          while (true) {
+            const result = await getAITaskStatus(taskId);
+            if (result.status === 'completed') {
+              const imageUrl = extractImageFromTaskResult(result);
+              if (!imageUrl) {
+                throw new Error('Resolution task completed without an image result.');
+              }
+              const nextImages = await buildPosterImagesWithLogoMode(
+                imageUrl,
+                logoAssetForPoster ?? undefined,
+                currentArtboard.posterData.logoPlacement
+              );
+              updatePosterArtboard(id, (ab) => ({
+                ...ab,
+                posterData: {
+                  ...ab.posterData!,
+                  ...basePoster,
+                  logoUrl: logoAssetForPoster ?? undefined,
+                  logoPlacement: nextImages.logoPlacement,
+                  imageUrl: nextImages.imageUrl,
+                  imageUrlMerged: nextImages.imageUrlMerged,
+                  imageUrlNoText: undefined,
+                  textLayout: nextLayout,
+                  textStyles: editableStyles || ab.posterData?.textStyles,
+                  status: 'completed',
+                  taskId: undefined
+                }
+              }));
+              return;
+            }
+            if (result.status === 'error') {
+              throw new Error(result.error || 'Resolution task failed.');
+            }
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
+        } catch (taskError) {
+          console.error(`[resolution] task ${taskId} failed`, taskError);
+          updatePosterArtboard(id, (ab) => ({
+            ...ab,
+            posterData: {
+              ...ab.posterData!,
+              status: 'error',
+              taskId: undefined
+            }
+          }));
+          throw taskError;
+        }
       }));
     } catch (err) {
       console.error('[resolution] failed', err);
@@ -9184,6 +9224,8 @@ Return ONLY valid JSON in the format:
               </div>
               </div>
               <div className="min-w-0 space-y-4 max-h-[70vh] overflow-y-auto pr-2">
+                {!isRefineBucketMode && (
+                  <>
                 {annotations.length > 0 ? (
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
@@ -9456,6 +9498,8 @@ Return ONLY valid JSON in the format:
                     </div>
                   </div>
                 )}
+                  </>
+                )}
                 {isRefineBucketMode && (
                   <div className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
                     <div className="flex items-center justify-between gap-3">
@@ -9597,14 +9641,16 @@ Return ONLY valid JSON in the format:
                     </button>
                   </div>
                 )}
-                <button
-                  onClick={handleRefinePoster}
-                  disabled={isRefiningPoster || (annotations.length === 0 && !posterFeedback.trim())}
-                  className="w-full bg-black text-white text-xs font-bold uppercase tracking-widest py-3 rounded-xl flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  {isRefiningPoster ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                  {isRefiningPoster ? 'Refining' : 'Apply Refinement'}
-                </button>
+                {!isRefineBucketMode && (
+                  <button
+                    onClick={handleRefinePoster}
+                    disabled={isRefiningPoster || (annotations.length === 0 && !posterFeedback.trim())}
+                    className="w-full bg-black text-white text-xs font-bold uppercase tracking-widest py-3 rounded-xl flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {isRefiningPoster ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                    {isRefiningPoster ? 'Refining' : 'Apply Refinement'}
+                  </button>
+                )}
               </div>
             </div>
           </div>

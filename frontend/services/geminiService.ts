@@ -314,6 +314,32 @@ const callImageEditApi = async (
   return data.imageUrl;
 };
 
+const buildImageEditTaskPayload = (
+  prompt: string,
+  images: string[] = [],
+): Record<string, unknown> => {
+  const messageContent: Array<
+    | { type: "text"; text: string }
+    | { type: "image_url"; image_url: { url: string } }
+  > = [{ type: "text", text: prompt }];
+
+  images.forEach((url) => {
+    if (!url) return;
+    messageContent.push({ type: "image_url", image_url: { url } });
+  });
+
+  return {
+    model: "google/gemini-3.1-flash-image-preview",
+    stream: false,
+    messages: [
+      {
+        role: "user",
+        content: messageContent,
+      },
+    ],
+  };
+};
+
 export const planPosters = async (
   userInput: string,
   count: number,
@@ -857,6 +883,21 @@ export const generatePosterResolutionFromImage = async (
     `Adapt the provided poster to ${targetSize.width}x${targetSize.height}${aspectDescriptor}. Preserve the original style, branding, text, imagery, and overall design intent, but intelligently recompose and resize the layout so the poster feels natively designed for the new aspect ratio. Reflow spacing, scale elements, and reposition content as needed to fit the new canvas cleanly. Do not add neutral padding or letterboxing. Do not crop away important content, text, logo, or key visual elements.`,
     [dataUrl],
   );
+};
+
+export const generatePosterResolutionFromImageAsync = async (
+  posterImageUrl: string,
+  targetSize: { width: number; height: number; label?: string },
+): Promise<string> => {
+  const dataUrl = await ensureDataUrl(posterImageUrl);
+  const aspectDescriptor = targetSize.label
+    ? ` with a ${targetSize.label} layout`
+    : '';
+  const payload = buildImageEditTaskPayload(
+    `Adapt the provided poster to ${targetSize.width}x${targetSize.height}${aspectDescriptor}. Preserve the original style, branding, text, imagery, and overall design intent, but intelligently recompose and resize the layout so the poster feels natively designed for the new aspect ratio. Reflow spacing, scale elements, and reposition content as needed to fit the new canvas cleanly. Do not add neutral padding or letterboxing. Do not crop away important content, text, logo, or key visual elements.`,
+    [dataUrl],
+  );
+  return submitAITask(payload);
 };
 
 export const chatWithModel = async (
