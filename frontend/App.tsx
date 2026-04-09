@@ -8776,22 +8776,125 @@ Return ONLY valid JSON in the format:
                 Close
               </button>
             </div>
-            <div className="grid grid-cols-1 lg:grid-cols-[1fr,320px] gap-6">
-              <div className="space-y-3">
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="min-w-0 space-y-3">
                 <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">
                   <span>Original</span>
                   <span className="text-[9px] font-medium text-slate-400">Draw boxes or arrows to annotate</span>
                 </div>
-                <div
-                  ref={annotatorRef}
-                  className="relative mx-auto rounded-3xl border border-slate-200 bg-white overflow-hidden"
-                  style={{
-                    width: `min(100%, calc(70vh * ${annotatorAspectRatio}))`,
-                    height: 'auto',
-                    maxHeight: '70vh',
-                    aspectRatio: annotatorAspectRatio
-                  }}
-                >
+                <div className="flex min-w-0 flex-col gap-3 md:flex-row md:items-start md:justify-center">
+                  <div className="shrink-0 flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white/95 px-2 py-1 shadow-md backdrop-blur md:sticky md:top-3 md:w-[68px] md:flex-col md:items-stretch">
+                    <button
+                      type="button"
+                      className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 self-center"
+                      onClick={isUsingRefinePreviewHistory ? handleRefinePreviewUndo : handleAnnotationUndo}
+                      disabled={isUsingRefinePreviewHistory ? !canUndoRefinePreview : annotationHistoryRef.current.length < 2}
+                      title="Undo (Ctrl+Z)"
+                      aria-label="Undo"
+                    >
+                      <Undo2 className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 self-center"
+                      onClick={isUsingRefinePreviewHistory ? handleRefinePreviewRedo : handleAnnotationRedo}
+                      disabled={isUsingRefinePreviewHistory ? !canRedoRefinePreview : annotationRedoRef.current.length === 0}
+                      title="Redo (Ctrl+Y)"
+                      aria-label="Redo"
+                    >
+                      <Redo2 className="w-4 h-4" />
+                    </button>
+                    <div className="w-px h-5 bg-slate-200 md:h-px md:w-full" />
+                    <button
+                      type="button"
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center self-center ${annotationTool === 'pan' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
+                      onClick={() => {
+                        setAnnotationTool('pan');
+                        setIsRefineBucketMode(false);
+                      }}
+                      title="Pan"
+                      aria-label="Pan"
+                    >
+                      <Hand className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center self-center ${annotationTool === 'rect' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
+                      onClick={() => {
+                        setAnnotationTool('rect');
+                        setIsRefineBucketMode(false);
+                      }}
+                      title="Rectangle"
+                      aria-label="Rectangle"
+                    >
+                      <Square className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center self-center ${annotationTool === 'arrow' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
+                      onClick={() => {
+                        setAnnotationTool('arrow');
+                        setIsRefineBucketMode(false);
+                      }}
+                      title="Arrow"
+                      aria-label="Arrow"
+                    >
+                      <ArrowUpRight className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      className={`h-8 rounded-lg px-2 flex items-center justify-center gap-1 text-[10px] font-bold uppercase tracking-widest md:h-auto md:min-h-[44px] md:flex-col ${
+                        isRefineBucketMode ? 'bg-cyan-600 text-white' : 'text-slate-500 hover:bg-slate-100'
+                      }`}
+                      onClick={() => setIsRefineBucketMode((prev) => !prev)}
+                      title="Bucket recolor"
+                      aria-label="Bucket recolor"
+                    >
+                      <PaintBucket className="w-3.5 h-3.5" />
+                      Fill
+                    </button>
+                    <div className="w-px h-5 bg-slate-200 md:h-px md:w-full" />
+                    {(['red', 'green', 'purple'] as AnnotationColor[]).map(color => (
+                      <button
+                        key={color}
+                        type="button"
+                        className={`w-6 h-6 rounded-full border self-center ${annotationColor === color ? 'border-slate-900' : 'border-slate-200'}`}
+                        style={{ backgroundColor: color === 'red' ? '#ef4444' : color === 'green' ? '#22c55e' : '#a855f7' }}
+                        onClick={() => setAnnotationColor(color)}
+                        aria-label={`${color} marker`}
+                        title={`${color} marker`}
+                      />
+                    ))}
+                    <div className="w-px h-5 bg-slate-200 md:h-px md:w-full" />
+                    <button
+                      type="button"
+                      className="w-7 h-7 rounded-lg text-slate-500 hover:bg-slate-100 flex items-center justify-center self-center"
+                      onClick={() => setAnnotationZoom(z => Math.min(3, z + 0.2))}
+                      aria-label="Zoom in"
+                      title="Zoom in"
+                    >
+                      <ZoomIn className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      className="w-7 h-7 rounded-lg text-slate-500 hover:bg-slate-100 flex items-center justify-center self-center"
+                      onClick={() => setAnnotationZoom(z => Math.max(0.5, z - 0.2))}
+                      aria-label="Zoom out"
+                      title="Zoom out"
+                    >
+                      <ZoomOut className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div
+                    ref={annotatorRef}
+                    className="relative mx-auto min-w-0 flex-1 rounded-3xl border border-slate-200 bg-white overflow-hidden"
+                    style={{
+                      width: `min(100%, calc(70vh * ${annotatorAspectRatio}))`,
+                      height: 'auto',
+                      maxHeight: '70vh',
+                      aspectRatio: annotatorAspectRatio
+                    }}
+                  >
                   <img
                     src={normalizeSecureImageUrl(currentRefinePosterImageUrl)}
                     alt="Poster Preview"
@@ -8856,108 +8959,6 @@ Return ONLY valid JSON in the format:
                       </div>
                     </div>
                   )}
-                  <div className="absolute left-3 right-3 top-3 z-10 flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white/95 px-2 py-1 shadow-md backdrop-blur">
-                    <button
-                      type="button"
-                      className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100"
-                      onClick={isUsingRefinePreviewHistory ? handleRefinePreviewUndo : handleAnnotationUndo}
-                      disabled={isUsingRefinePreviewHistory ? !canUndoRefinePreview : annotationHistoryRef.current.length < 2}
-                      title="Undo (Ctrl+Z)"
-                      aria-label="Undo"
-                    >
-                      <Undo2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100"
-                      onClick={isUsingRefinePreviewHistory ? handleRefinePreviewRedo : handleAnnotationRedo}
-                      disabled={isUsingRefinePreviewHistory ? !canRedoRefinePreview : annotationRedoRef.current.length === 0}
-                      title="Redo (Ctrl+Y)"
-                      aria-label="Redo"
-                    >
-                      <Redo2 className="w-4 h-4" />
-                    </button>
-                    <div className="w-px h-5 bg-slate-200" />
-                    <button
-                      type="button"
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${annotationTool === 'pan' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
-                      onClick={() => {
-                        setAnnotationTool('pan');
-                        setIsRefineBucketMode(false);
-                      }}
-                      title="Pan"
-                      aria-label="Pan"
-                    >
-                      <Hand className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${annotationTool === 'rect' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
-                      onClick={() => {
-                        setAnnotationTool('rect');
-                        setIsRefineBucketMode(false);
-                      }}
-                      title="Rectangle"
-                      aria-label="Rectangle"
-                    >
-                      <Square className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${annotationTool === 'arrow' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
-                      onClick={() => {
-                        setAnnotationTool('arrow');
-                        setIsRefineBucketMode(false);
-                      }}
-                      title="Arrow"
-                      aria-label="Arrow"
-                    >
-                      <ArrowUpRight className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      className={`h-8 rounded-lg px-2 flex items-center justify-center gap-1 text-[10px] font-bold uppercase tracking-widest ${
-                        isRefineBucketMode ? 'bg-cyan-600 text-white' : 'text-slate-500 hover:bg-slate-100'
-                      }`}
-                      onClick={() => setIsRefineBucketMode((prev) => !prev)}
-                      title="Bucket recolor"
-                      aria-label="Bucket recolor"
-                    >
-                      <PaintBucket className="w-3.5 h-3.5" />
-                      Fill
-                    </button>
-                    <div className="w-px h-5 bg-slate-200" />
-                    {(['red', 'green', 'purple'] as AnnotationColor[]).map(color => (
-                      <button
-                        key={color}
-                        type="button"
-                        className={`w-6 h-6 rounded-full border ${annotationColor === color ? 'border-slate-900' : 'border-slate-200'}`}
-                        style={{ backgroundColor: color === 'red' ? '#ef4444' : color === 'green' ? '#22c55e' : '#a855f7' }}
-                        onClick={() => setAnnotationColor(color)}
-                        aria-label={`${color} marker`}
-                        title={`${color} marker`}
-                      />
-                    ))}
-                    <div className="w-px h-5 bg-slate-200" />
-                    <button
-                      type="button"
-                      className="w-7 h-7 rounded-lg text-slate-500 hover:bg-slate-100 flex items-center justify-center"
-                      onClick={() => setAnnotationZoom(z => Math.min(3, z + 0.2))}
-                      aria-label="Zoom in"
-                      title="Zoom in"
-                    >
-                      <ZoomIn className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      className="w-7 h-7 rounded-lg text-slate-500 hover:bg-slate-100 flex items-center justify-center"
-                      onClick={() => setAnnotationZoom(z => Math.max(0.5, z - 0.2))}
-                      aria-label="Zoom out"
-                      title="Zoom out"
-                    >
-                      <ZoomOut className="w-4 h-4" />
-                    </button>
-                  </div>
                   <canvas
                     ref={annotatorCanvasRef}
                     className={`absolute left-0 top-0 pointer-events-auto ${
@@ -9007,7 +9008,8 @@ Return ONLY valid JSON in the format:
                   />
                 </div>
               </div>
-              <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
+              </div>
+              <div className="min-w-0 space-y-4 max-h-[70vh] overflow-y-auto pr-2">
                 {annotations.length > 0 ? (
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
@@ -9426,7 +9428,7 @@ Return ONLY valid JSON in the format:
                   >
                     {isSavingRefinePreview ? 'Saving Fill Result...' : 'Save Fill Result'}
                   </button>
-                </div>
+                  </div>
                 <button
                   onClick={handleRefinePoster}
                   disabled={isRefiningPoster || (annotations.length === 0 && !posterFeedback.trim())}
