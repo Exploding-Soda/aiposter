@@ -847,11 +847,14 @@ export const editPosterWithMarkupAsync = async (
 
 export const generatePosterResolutionFromImage = async (
   posterImageUrl: string,
-  targetSize: { width: number; height: number },
+  targetSize: { width: number; height: number; label?: string },
 ): Promise<string> => {
   const dataUrl = await ensureDataUrl(posterImageUrl);
+  const aspectDescriptor = targetSize.label
+    ? ` with a ${targetSize.label} layout`
+    : '';
   return callImageEditApi(
-    `Adapt the provided poster to ${targetSize.width}x${targetSize.height}. Preserve the original style, branding, text, imagery, and overall design intent, but intelligently recompose and resize the layout so the poster feels natively designed for the new aspect ratio. Reflow spacing, scale elements, and reposition content as needed to fit the new canvas cleanly. Do not add neutral padding or letterboxing. Do not crop away important content, text, logo, or key visual elements.`,
+    `Adapt the provided poster to ${targetSize.width}x${targetSize.height}${aspectDescriptor}. Preserve the original style, branding, text, imagery, and overall design intent, but intelligently recompose and resize the layout so the poster feels natively designed for the new aspect ratio. Reflow spacing, scale elements, and reposition content as needed to fit the new canvas cleanly. Do not add neutral padding or letterboxing. Do not crop away important content, text, logo, or key visual elements.`,
     [dataUrl],
   );
 };
