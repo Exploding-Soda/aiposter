@@ -5380,12 +5380,6 @@ const App: React.FC = () => {
     }
   }, []);
 
-  const handleRefinePosterContentPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    const target = event.target as HTMLElement | null;
-    if (target?.closest('[data-refine-logo-layer="true"]')) return;
-    setIsRefineLogoSelected(false);
-  }, []);
-
   useEffect(() => {
     const canvas = annotatorCanvasRef.current;
     const transform = getAnnotatorTransform();
@@ -5871,33 +5865,34 @@ Return ONLY valid JSON in the format:
     updatePosterArtboard
   ]);
 
-  const handleSaveLogoLayer = useCallback(async () => {
+  const persistRefineLogoPlacement = useCallback(async () => {
     if (!activePosterId) return;
     const currentArtboard = artboards.find((ab) => ab.id === activePosterId);
     const currentPoster = currentArtboard?.posterData;
     if (!currentArtboard || !currentPoster?.logoUrl) return;
+    if (!isRefineLogoPlacementDirty || isSavingRefinePreview) return;
 
     setIsSavingRefinePreview(true);
     try {
       const baseImageUrl = currentPoster.imageUrl || currentPoster.imageUrlMerged;
-      if (!baseImageUrl) {
-        throw new Error('Poster image is missing.');
-      }
       const nextPlacement = cloneLogoPlacement(refineLogoPlacement);
+      if (!baseImageUrl) {
+        updatePosterArtboard(currentArtboard.id, (ab) => ({
+          ...ab,
+          posterData: {
+            ...ab.posterData!,
+            logoPlacement: nextPlacement
+          }
+        }));
+        return;
+      }
       const nextImages = await buildPosterImagesWithLogoMode(
         baseImageUrl,
         currentPoster.logoUrl,
         nextPlacement
       );
-      const derivedId = createDerivedArtboard(currentArtboard, {
-        ...currentPoster,
-        status: 'completed'
-      }, {
-        x: currentArtboard.x + currentArtboard.width + ARTBOARD_GAP,
-        nameSuffix: 'Logo Layer'
-      });
 
-      updatePosterArtboard(derivedId, (ab) => ({
+      updatePosterArtboard(currentArtboard.id, (ab) => ({
         ...ab,
         posterData: {
           ...ab.posterData!,
@@ -5909,7 +5904,6 @@ Return ONLY valid JSON in the format:
           taskId: undefined
         }
       }));
-      handleClosePosterModal();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save logo layer.';
       setRefineColorSetError(message);
@@ -5920,11 +5914,20 @@ Return ONLY valid JSON in the format:
     activePosterId,
     artboards,
     buildPosterImagesWithLogoMode,
-    createDerivedArtboard,
-    handleClosePosterModal,
+    isRefineLogoPlacementDirty,
+    isSavingRefinePreview,
     refineLogoPlacement,
     updatePosterArtboard
   ]);
+
+  const handleRefinePosterContentPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('[data-refine-logo-layer="true"]')) return;
+    if (isRefineLogoLayerSelected) {
+      void persistRefineLogoPlacement();
+    }
+    setIsRefineLogoSelected(false);
+  }, [isRefineLogoLayerSelected, persistRefineLogoPlacement]);
 
   const handleRefinePoster = async () => {
     if (!activePosterId) return;
@@ -9291,14 +9294,6 @@ Return ONLY valid JSON in the format:
                         className="mt-2 w-full accent-sky-600"
                       />
                     </div>
-                    <button
-                      type="button"
-                      onClick={handleSaveLogoLayer}
-                      disabled={!isRefineLogoPlacementDirty || isSavingRefinePreview}
-                      className="w-full rounded-xl border border-sky-200 bg-white py-2 text-[11px] font-bold uppercase tracking-widest text-slate-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {isSavingRefinePreview ? 'Saving Logo Layer...' : 'Save Logo Layer'}
-                    </button>
                   </div>
                 )}
                   <div className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
