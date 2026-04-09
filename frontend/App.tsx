@@ -8887,7 +8887,7 @@ Return ONLY valid JSON in the format:
                   </div>
                   <div
                     ref={annotatorRef}
-                    className="relative mx-auto min-w-0 flex-1 rounded-3xl border border-slate-200 bg-white overflow-hidden"
+                    className="relative mx-auto shrink-0 rounded-3xl border border-slate-200 bg-white overflow-hidden"
                     style={{
                       width: `min(100%, calc(70vh * ${annotatorAspectRatio}))`,
                       height: 'auto',
@@ -8898,11 +8898,12 @@ Return ONLY valid JSON in the format:
                   <img
                     src={normalizeSecureImageUrl(currentRefinePosterImageUrl)}
                     alt="Poster Preview"
-                    className="absolute left-0 top-0 w-full h-full pointer-events-none"
+                    className="absolute left-0 top-0 pointer-events-none"
                     draggable={false}
                     style={{
                       width: '100%',
                       height: '100%',
+                      objectFit: 'contain',
                       transform: (() => {
                         const transform = getAnnotatorTransform();
                         if (!transform) return undefined;
