@@ -1015,6 +1015,7 @@ const App: React.FC = () => {
   const [posterFeedback, setPosterFeedback] = useState('');
   const [refineSolutionCount, setRefineSolutionCount] = useState(1);
   const [refineLogoPlacement, setRefineLogoPlacement] = useState<LogoPlacement>(buildDefaultLogoPlacement());
+  const [isRefineLogoSelected, setIsRefineLogoSelected] = useState(false);
   const [isLogoLayerDragging, setIsLogoLayerDragging] = useState(false);
   const logoLayerDragRef = useRef<{ pointerId: number; startX: number; startY: number; origin: LogoPlacement } | null>(null);
   const [selectedRefineResolutions, setSelectedRefineResolutions] = useState<Set<string>>(new Set());
@@ -1654,6 +1655,7 @@ const App: React.FC = () => {
     setRefineColorSetError('');
     setRefinePreviewImageUrl(null);
     setIsRefineBucketMode(false);
+    setIsRefineLogoSelected(false);
     setIsPosterModalOpen(true);
   }, []);
 
@@ -1668,8 +1670,9 @@ const App: React.FC = () => {
   const currentRefinePosterImageUrl = isPasteLogoMode
     ? (refinePreviewImageUrl || activePoster?.imageUrl || activePoster?.imageUrlMerged || '')
     : (refinePreviewImageUrl || activePoster?.imageUrlMerged || activePoster?.imageUrl || '');
-  const shouldShowRefineLogoLayer = isPasteLogoMode && Boolean(activePoster?.logoUrl);
-  const isRefineLogoPlacementDirty = shouldShowRefineLogoLayer && (
+  const hasRefineLogoLayer = isPasteLogoMode && Boolean(activePoster?.logoUrl);
+  const isRefineLogoLayerSelected = hasRefineLogoLayer && isRefineLogoSelected;
+  const isRefineLogoPlacementDirty = hasRefineLogoLayer && (
     Math.abs(refineLogoPlacement.x - activeLogoPlacement.x) > 0.0001 ||
     Math.abs(refineLogoPlacement.y - activeLogoPlacement.y) > 0.0001 ||
     Math.abs(refineLogoPlacement.width - activeLogoPlacement.width) > 0.0001 ||
@@ -3276,6 +3279,7 @@ const App: React.FC = () => {
       setIsPosterModalClosing(false);
       setRefinePreviewImageUrl(null);
       setIsRefineBucketMode(false);
+      setIsRefineLogoSelected(false);
     }, 180);
   };
 
@@ -5332,11 +5336,12 @@ const App: React.FC = () => {
   }, [annotatorImage, getAnnotatorTransform]);
 
   const handleLogoLayerPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (!shouldShowRefineLogoLayer) return;
+    if (!hasRefineLogoLayer) return;
     const container = annotatorRef.current;
     if (!container) return;
     event.preventDefault();
     event.stopPropagation();
+    setIsRefineLogoSelected(true);
     event.currentTarget.setPointerCapture(event.pointerId);
     logoLayerDragRef.current = {
       pointerId: event.pointerId,
@@ -5345,7 +5350,7 @@ const App: React.FC = () => {
       origin: cloneLogoPlacement(refineLogoPlacement)
     };
     setIsLogoLayerDragging(true);
-  }, [refineLogoPlacement, shouldShowRefineLogoLayer]);
+  }, [hasRefineLogoLayer, refineLogoPlacement]);
 
   const handleLogoLayerPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const dragState = logoLayerDragRef.current;
@@ -5373,6 +5378,12 @@ const App: React.FC = () => {
       logoLayerDragRef.current = null;
       setIsLogoLayerDragging(false);
     }
+  }, []);
+
+  const handleRefinePosterContentPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('[data-refine-logo-layer="true"]')) return;
+    setIsRefineLogoSelected(false);
   }, []);
 
   useEffect(() => {
@@ -8763,6 +8774,7 @@ Return ONLY valid JSON in the format:
           <div
             className={`bg-white rounded-3xl w-full max-w-5xl shadow-2xl p-8 max-h-[90vh] overflow-y-auto transition-transform duration-200 ${isPosterModalClosing ? 'scale-[0.98]' : 'scale-100'}`}
             onClick={(e) => e.stopPropagation()}
+            onPointerDown={handleRefinePosterContentPointerDown}
           >
             <div className="flex items-center justify-between mb-6">
               <div>
@@ -8927,8 +8939,9 @@ Return ONLY valid JSON in the format:
                       setAnnotatorLoaded(false);
                     }}
                   />
-                  {shouldShowRefineLogoLayer && activePoster?.logoUrl && (
+                  {hasRefineLogoLayer && activePoster?.logoUrl && (
                     <div
+                      data-refine-logo-layer="true"
                       className={`absolute left-0 top-0 z-10 ${isLogoLayerDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
                       style={{
                         width: `${refineLogoPlacement.width * 100}%`,
@@ -8947,16 +8960,13 @@ Return ONLY valid JSON in the format:
                       onPointerUp={handleLogoLayerPointerUp}
                       onPointerCancel={handleLogoLayerPointerUp}
                     >
-                      <div className="relative h-full w-full rounded-xl border border-sky-400/70 bg-sky-50/10 shadow-[0_0_0_1px_rgba(56,189,248,0.35)] backdrop-blur-[1px]">
+                      <div className="relative h-full w-full">
                         <img
                           src={activePoster.logoUrl}
                           alt="Logo Layer"
                           className="h-full w-full object-contain pointer-events-none select-none"
                           draggable={false}
                         />
-                        <div className="absolute left-2 top-2 rounded-full bg-sky-500/90 px-2 py-1 text-[9px] font-bold uppercase tracking-widest text-white">
-                          Logo
-                        </div>
                       </div>
                     </div>
                   )}
@@ -9244,7 +9254,7 @@ Return ONLY valid JSON in the format:
                     </button>
                   </div>
                 )}
-                {shouldShowRefineLogoLayer && activePoster?.logoUrl && (
+                {isRefineLogoLayerSelected && activePoster?.logoUrl && (
                   <div className="space-y-3 rounded-2xl border border-sky-200 bg-sky-50/60 p-3">
                     <div className="flex items-center justify-between">
                       <div>
