@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, MousePointer2, GripHorizontal, Hand, Sparkles, Loader2, ArrowLeft, Search, Bold, Italic, Underline, Download, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, MessageCircle, Pencil, Square, ArrowUpRight, ImagePlus, Home, Info, Lock, PaintBucket, ChevronDown } from 'lucide-react';
+import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, MousePointer2, GripHorizontal, Hand, Sparkles, Loader2, ArrowLeft, Search, Bold, Italic, Underline, Download, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, MessageCircle, Pencil, Square, ArrowUpRight, ImagePlus, Home, Info, Lock, Palette, ChevronDown } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -976,6 +976,8 @@ const App: React.FC = () => {
   const [refinePreviewImageUrl, setRefinePreviewImageUrl] = useState<string | null>(null);
   const [isRefineBucketMode, setIsRefineBucketMode] = useState(false);
   const [isApplyingBucketFill, setIsApplyingBucketFill] = useState(false);
+  const [isDetectingRefineRegions, setIsDetectingRefineRegions] = useState(false);
+  const [refineRegionDetectError, setRefineRegionDetectError] = useState('');
   const [isSavingRefinePreview, setIsSavingRefinePreview] = useState(false);
   const [canUndoRefinePreview, setCanUndoRefinePreview] = useState(false);
   const [canRedoRefinePreview, setCanRedoRefinePreview] = useState(false);
@@ -5821,6 +5823,111 @@ Return ONLY valid JSON in the format:
     }
   };
 
+  const handleDetectRefineColorRegions = useCallback(async () => {
+    if (isDetectingRefineRegions) return;
+    const posterImage = currentRefinePosterImageUrl;
+    const imageWidth = annotatorImage?.naturalWidth || annotatorImage?.width || 0;
+    const imageHeight = annotatorImage?.naturalHeight || annotatorImage?.height || 0;
+
+    if (!selectedRefineColorGroup || selectedRefineColorGroup.colors.length === 0) {
+      setRefineColorSetError('Choose a color set first.');
+      return;
+    }
+
+    if (!posterImage || !imageWidth || !imageHeight) {
+      setRefineRegionDetectError('Poster preview is not ready yet.');
+      return;
+    }
+
+    setIsDetectingRefineRegions(true);
+    setRefineRegionDetectError('');
+    setRefineColorSetError('');
+
+    try {
+      const prompt = `Analyze this poster image and identify the major regions that contain either large dominant color blocks or text groupings.
+Return ONLY valid JSON in this exact format:
+{"boxes":[{"label":"text","x":12,"y":18,"width":30,"height":16}]}
+
+Rules:
+- x, y, width, height must be integers in percentages from 0 to 100
+- return 2 to 8 boxes total
+- focus only on visually significant regions
+- labels should be short, such as "text", "headline text", "color block", or "background color block"
+- do not include explanations or markdown`;
+
+      const response = await chatWithModel([
+        {
+          role: 'user',
+          content: prompt,
+          images: [posterImage]
+        }
+      ]);
+      const trimmed = response.trim();
+      const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) as {
+        boxes?: Array<{ label?: string; x?: number; y?: number; width?: number; height?: number }>;
+      } : null;
+
+      const boxes = (parsed?.boxes || [])
+        .map((box) => {
+          const x = Math.max(0, Math.min(100, Number(box.x)));
+          const y = Math.max(0, Math.min(100, Number(box.y)));
+          const width = Math.max(1, Math.min(100 - x, Number(box.width)));
+          const height = Math.max(1, Math.min(100 - y, Number(box.height)));
+          if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+            return null;
+          }
+          return {
+            label: String(box.label || 'region').trim() || 'region',
+            x,
+            y,
+            width,
+            height
+          };
+        })
+        .filter((box): box is { label: string; x: number; y: number; width: number; height: number } => Boolean(box));
+
+      if (boxes.length === 0) {
+        throw new Error('Model returned no valid boxes.');
+      }
+
+      let workingPreview = posterImage;
+      for (const box of boxes) {
+        const rect = {
+          x: (box.x / 100) * imageWidth,
+          y: (box.y / 100) * imageHeight,
+          width: (box.width / 100) * imageWidth,
+          height: (box.height / 100) * imageHeight
+        };
+        workingPreview = await recolorRectRegionByPalette(
+          workingPreview,
+          rect,
+          selectedRefineColorGroup.colors,
+          refineColorThreshold
+        );
+      }
+
+      setAnnotations([]);
+      setAnnotationNotes({});
+      annotationIdRef.current = 1;
+      pushRefinePreviewHistory(workingPreview);
+      applyRefinePreviewState(workingPreview);
+    } catch (error) {
+      console.error('[refine] region detect failed', error);
+      setRefineRegionDetectError(error instanceof Error ? error.message : 'Failed to detect poster regions.');
+    } finally {
+      setIsDetectingRefineRegions(false);
+    }
+  }, [
+    annotatorImage,
+    applyRefinePreviewState,
+    currentRefinePosterImageUrl,
+    isDetectingRefineRegions,
+    pushRefinePreviewHistory,
+    refineColorThreshold,
+    selectedRefineColorGroup
+  ]);
+
   const createDerivedArtboard = useCallback((
     source: Artboard,
     posterData: PosterDraft,
@@ -9088,11 +9195,11 @@ Return ONLY valid JSON in the format:
                         isRefineBucketMode ? 'bg-cyan-600 text-white' : 'text-slate-500 hover:bg-slate-100'
                       }`}
                       onClick={() => setIsRefineBucketMode((prev) => !prev)}
-                      title="Bucket recolor"
-                      aria-label="Bucket recolor"
+                      title="Color tune"
+                      aria-label="Color tune"
                     >
-                      <PaintBucket className="w-3.5 h-3.5" />
-                      Fill
+                      <Palette className="w-3.5 h-3.5" />
+                      Color
                     </button>
                     <div className="w-px h-5 bg-slate-200 md:h-px md:w-full" />
                     {(['red', 'green', 'purple'] as AnnotationColor[]).map(color => (
@@ -9528,6 +9635,14 @@ Return ONLY valid JSON in the format:
                     <div className="flex items-center justify-between gap-3">
                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Color Set</label>
                       <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleDetectRefineColorRegions}
+                          disabled={isDetectingRefineRegions || !currentRefinePosterImageUrl}
+                          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {isDetectingRefineRegions ? 'Testing...' : 'Coord Test'}
+                        </button>
                         {primaryColorGroupsLoading && (
                           <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Loading</span>
                         )}
@@ -9650,6 +9765,9 @@ Return ONLY valid JSON in the format:
                     </div>
                     {refineColorSetError && (
                       <div className="text-[11px] text-rose-600">{refineColorSetError}</div>
+                    )}
+                    {refineRegionDetectError && (
+                      <div className="text-[11px] text-rose-600">{refineRegionDetectError}</div>
                     )}
                     {isApplyingBucketFill && (
                       <div className="text-[11px] text-slate-500">Detecting region and recoloring...</div>
