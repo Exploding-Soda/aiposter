@@ -667,6 +667,62 @@ def save_base64_image(base64_data: str, project_id: str, image_type: str) -> str
   return f"db/files/{project_id}/{filename}"
 
 
+def detect_image_extension_from_bytes(image_bytes: bytes, content_type: Optional[str] = None) -> str:
+  normalized_type = (content_type or "").split(";")[0].strip().lower()
+  if normalized_type in {"image/jpeg", "image/jpg"}:
+    return "jpg"
+  if normalized_type == "image/webp":
+    return "webp"
+  if normalized_type == "image/gif":
+    return "gif"
+  if normalized_type == "image/bmp":
+    return "bmp"
+  if normalized_type == "image/png":
+    return "png"
+  if image_bytes.startswith(b"\xff\xd8\xff"):
+    return "jpg"
+  if image_bytes.startswith(b"RIFF") and b"WEBP" in image_bytes[:12]:
+    return "webp"
+  if image_bytes.startswith(b"GIF87a") or image_bytes.startswith(b"GIF89a"):
+    return "gif"
+  if image_bytes.startswith(b"BM"):
+    return "bmp"
+  return "png"
+
+
+def save_image_bytes(image_bytes: bytes, project_id: str, image_type: str, content_type: Optional[str] = None) -> str:
+  if not image_bytes:
+    raise ValueError("Image bytes are empty")
+
+  file_hash = hashlib.sha256(image_bytes).hexdigest()[:16]
+  image_format = detect_image_extension_from_bytes(image_bytes, content_type)
+
+  project_dir = FILES_DIR / project_id
+  project_dir.mkdir(parents=True, exist_ok=True)
+
+  filename = f"{image_type}_{file_hash}.{image_format}"
+  file_path = project_dir / filename
+  with open(file_path, 'wb') as f:
+    f.write(image_bytes)
+
+  return f"db/files/{project_id}/{filename}"
+
+
+def save_remote_image(image_url: str, project_id: str, image_type: str) -> str:
+  normalized_url = (image_url or "").strip()
+  if not normalized_url:
+    raise ValueError("Image URL is empty")
+
+  try:
+    response = httpx.get(normalized_url, timeout=60.0, follow_redirects=True)
+    response.raise_for_status()
+  except Exception as exc:
+    raise RuntimeError(f"Failed to download remote image: {exc}") from exc
+
+  content_type = response.headers.get("content-type")
+  return save_image_bytes(response.content, project_id, image_type, content_type)
+
+
 def sanitize_user_id(user_id: str) -> str:
   cleaned = "".join(ch for ch in user_id if ch.isalnum() or ch in ("_", "-"))
   return cleaned or "user"
@@ -1153,6 +1209,16 @@ def process_project_images(project_data: Dict[str, Any]) -> Dict[str, Any]:
   """
   project_id = project_data.get('id', 'unknown')
 
+  def should_cache_remote_image(value: str) -> bool:
+    if not isinstance(value, str):
+      return False
+    normalized = value.strip()
+    if not normalized:
+      return False
+    if normalized.startswith('data:') or normalized.startswith('file://'):
+      return False
+    return normalized.startswith('http://') or normalized.startswith('https://')
+
   # Process project-level style/logo images
   if isinstance(project_data.get('styleImages'), list):
     updated_styles = []
@@ -1163,6 +1229,13 @@ def process_project_images(project_data: Dict[str, Any]) -> Dict[str, Any]:
           updated_styles.append(f"file://{file_path}")
         except Exception as e:
           print(f"[warn] Failed to save style image {idx}: {e}")
+          updated_styles.append(image)
+      elif should_cache_remote_image(image):
+        try:
+          file_path = save_remote_image(image, project_id, f'style_{idx}')
+          updated_styles.append(f"file://{file_path}")
+        except Exception as e:
+          print(f"[warn] Failed to cache remote style image {idx}: {e}")
           updated_styles.append(image)
       else:
         updated_styles.append(image)
@@ -1175,6 +1248,12 @@ def process_project_images(project_data: Dict[str, Any]) -> Dict[str, Any]:
       project_data['logoImage'] = f"file://{file_path}"
     except Exception as e:
       print(f"[warn] Failed to save project logo: {e}")
+  elif should_cache_remote_image(logo_image):
+    try:
+      file_path = save_remote_image(logo_image, project_id, 'logo')
+      project_data['logoImage'] = f"file://{file_path}"
+    except Exception as e:
+      print(f"[warn] Failed to cache remote project logo: {e}")
 
   # Process artboards
   if 'artboards' in project_data:
@@ -1190,6 +1269,12 @@ def process_project_images(project_data: Dict[str, Any]) -> Dict[str, Any]:
               asset['content'] = f"file://{file_path}"
             except Exception as e:
               print(f"[warn] Failed to save asset image: {e}")
+          elif asset.get('type') == 'image' and should_cache_remote_image(asset.get('content', '')):
+            try:
+              file_path = save_remote_image(asset['content'], project_id, f'asset_{artboard_id}_{i}')
+              asset['content'] = f"file://{file_path}"
+            except Exception as e:
+              print(f"[warn] Failed to cache remote asset image: {e}")
 
       # Process poster data
       if 'posterData' in artboard:
@@ -1204,6 +1289,12 @@ def process_project_images(project_data: Dict[str, Any]) -> Dict[str, Any]:
               poster[field] = f"file://{file_path}"
             except Exception as e:
               print(f"[warn] Failed to save {field}: {e}")
+          elif field in poster and should_cache_remote_image(poster[field]):
+            try:
+              file_path = save_remote_image(poster[field], project_id, f'{field}_{artboard_id}')
+              poster[field] = f"file://{file_path}"
+            except Exception as e:
+              print(f"[warn] Failed to cache remote {field}: {e}")
 
   # Process canvas assets (e.g., images placed on the canvas outside artboards)
   if 'canvasAssets' in project_data:
@@ -1214,6 +1305,12 @@ def process_project_images(project_data: Dict[str, Any]) -> Dict[str, Any]:
           asset['content'] = f"file://{file_path}"
         except Exception as e:
           print(f"[warn] Failed to save canvas asset image: {e}")
+      elif asset.get('type') == 'image' and should_cache_remote_image(asset.get('content', '')):
+        try:
+          file_path = save_remote_image(asset['content'], project_id, f'canvas_asset_{i}')
+          asset['content'] = f"file://{file_path}"
+        except Exception as e:
+          print(f"[warn] Failed to cache remote canvas asset image: {e}")
 
   return project_data
 
