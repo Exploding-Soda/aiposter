@@ -84,7 +84,26 @@ const isValidHexColor = (value: string) => /^#[0-9A-F]{6}$/i.test(value);
 
 const PERSONAL_SPACE_ONBOARDING_STORAGE_KEY = 'poster-onboarding-personal-space-v1';
 
-const PersonalSpacePage: React.FC = () => {
+type PersonalSpacePageProps = {
+  mode?: 'user' | 'template';
+  templateId?: string | null;
+  title?: string;
+  subtitle?: string;
+};
+
+const PersonalSpacePage: React.FC<PersonalSpacePageProps> = ({
+  mode = 'user',
+  templateId = null,
+  title,
+  subtitle
+}) => {
+  const apiBase = import.meta.env.VITE_BACKEND_API || 'http://localhost:8001';
+  const isTemplateMode = mode === 'template';
+  const buildEndpoint = (path: string) => (
+    isTemplateMode
+      ? `${apiBase}/admin/ps-templates/${templateId}${path}`
+      : `${apiBase}${path}`
+  );
   const [referenceStyles, setReferenceStyles] = useState<ReferenceStyleItem[]>([]);
   const [referenceLoading, setReferenceLoading] = useState(true);
   const [referenceError, setReferenceError] = useState('');
@@ -140,7 +159,7 @@ const PersonalSpacePage: React.FC = () => {
     setLogosError('');
     try {
       const response = await fetchWithAuth(
-        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/logos`
+        buildEndpoint('/logos')
       );
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -161,7 +180,7 @@ const PersonalSpacePage: React.FC = () => {
     setReferenceError('');
     try {
       const response = await fetchWithAuth(
-        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/reference-styles`
+        buildEndpoint('/reference-styles')
       );
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -182,7 +201,7 @@ const PersonalSpacePage: React.FC = () => {
     setFontReferenceError('');
     try {
       const response = await fetchWithAuth(
-        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/font-references`
+        buildEndpoint('/font-references')
       );
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -203,7 +222,7 @@ const PersonalSpacePage: React.FC = () => {
     setPrimaryColorsError('');
     try {
       const response = await fetchWithAuth(
-        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/primary-colors`
+        buildEndpoint('/primary-colors')
       );
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -224,7 +243,7 @@ const PersonalSpacePage: React.FC = () => {
     setRulesError('');
     try {
       const response = await fetchWithAuth(
-        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/design-guidance`
+        buildEndpoint('/design-guidance')
       );
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -241,12 +260,15 @@ const PersonalSpacePage: React.FC = () => {
   };
 
   useEffect(() => {
+    if (isTemplateMode && !templateId) {
+      return;
+    }
     void loadReferenceStyles();
     void loadRules();
     void loadPrimaryColors();
     void loadFontReferences();
     void loadLogos();
-  }, []);
+  }, [templateId, isTemplateMode]);
 
   useEffect(() => {
     if (!isPrimaryColorEditorOpen) {
@@ -281,7 +303,7 @@ const PersonalSpacePage: React.FC = () => {
     setIsReferenceUploading(true);
     setReferenceUploadProgress(0);
     try {
-      const url = `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/reference-styles/upload`;
+      const url = buildEndpoint('/reference-styles/upload');
       await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', url);
@@ -332,7 +354,7 @@ const PersonalSpacePage: React.FC = () => {
     setIsFontReferenceUploading(true);
     setFontReferenceUploadProgress(0);
     try {
-      const url = `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/font-references/upload`;
+      const url = buildEndpoint('/font-references/upload');
       await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', url);
@@ -382,7 +404,7 @@ const PersonalSpacePage: React.FC = () => {
     setReferenceDeleting(item.id);
     try {
       const response = await fetchWithAuth(
-        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/reference-styles/${item.id}`,
+        buildEndpoint(`/reference-styles/${item.id}`),
         { method: 'DELETE' }
       );
       if (!response.ok) {
@@ -405,7 +427,7 @@ const PersonalSpacePage: React.FC = () => {
     setFontReferenceDeleting(item.id);
     try {
       const response = await fetchWithAuth(
-        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/font-references/${item.id}`,
+        buildEndpoint(`/font-references/${item.id}`),
         { method: 'DELETE' }
       );
       if (!response.ok) {
@@ -423,24 +445,21 @@ const PersonalSpacePage: React.FC = () => {
   };
 
   const handleOpenReferencePreview = (item: ReferenceStyleItem) => {
-    const baseUrl = import.meta.env.VITE_BACKEND_API || 'http://localhost:8001';
-    setPreviewImageUrl(`${baseUrl}/reference/${item.file_path}`);
+    setPreviewImageUrl(isTemplateMode ? buildEndpoint(`/reference-styles/file/${item.id}`) : `${apiBase}/reference/${item.file_path}`);
     setPreviewImageName(item.original_name);
     setPreviewImageSize(null);
     setIsPreviewClosing(false);
   };
 
   const handleOpenLogoPreview = (logo: LogoItem) => {
-    const baseUrl = import.meta.env.VITE_BACKEND_API || 'http://localhost:8001';
-    setPreviewImageUrl(`${baseUrl}${logo.webp}`);
+    setPreviewImageUrl(`${apiBase}${logo.webp}`);
     setPreviewImageName(logo.filename || 'Logo');
     setPreviewImageSize(null);
     setIsPreviewClosing(false);
   };
 
   const handleOpenFontReferencePreview = (item: FontReferenceItem) => {
-    const baseUrl = import.meta.env.VITE_BACKEND_API || 'http://localhost:8001';
-    setPreviewImageUrl(`${baseUrl}/font-reference/${item.file_path}`);
+    setPreviewImageUrl(isTemplateMode ? buildEndpoint(`/font-references/file/${item.id}`) : `${apiBase}/font-reference/${item.file_path}`);
     setPreviewImageName(item.original_name);
     setPreviewImageSize(null);
     setIsPreviewClosing(false);
@@ -477,7 +496,7 @@ const PersonalSpacePage: React.FC = () => {
     setIsLogoUploading(true);
     setLogoUploadProgress(0);
     try {
-      const url = `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/logos/upload`;
+      const url = buildEndpoint('/logos/upload');
       const token = getAccessToken();
       const response = await new Promise<Response>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
@@ -517,7 +536,7 @@ const PersonalSpacePage: React.FC = () => {
     setLogoDeleting(logo.filename);
     try {
       const response = await fetchWithAuth(
-        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/logos/${encodeURIComponent(logo.filename)}`,
+        buildEndpoint(`/logos/${encodeURIComponent(logo.filename)}`),
         { method: 'DELETE' }
       );
       if (!response.ok) {
@@ -548,7 +567,7 @@ const PersonalSpacePage: React.FC = () => {
     setIsPrimaryColorSaving(true);
     try {
       const response = await fetchWithAuth(
-        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/primary-colors${groupId ? `/${groupId}` : ''}`,
+        buildEndpoint(`/primary-colors${groupId ? `/${groupId}` : ''}`),
         {
           method: groupId ? 'PUT' : 'POST',
           headers: {
@@ -620,7 +639,7 @@ const PersonalSpacePage: React.FC = () => {
     setPrimaryColorDeleting(item.id);
     try {
       const response = await fetchWithAuth(
-        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/primary-colors/${item.id}`,
+        buildEndpoint(`/primary-colors/${item.id}`),
         { method: 'DELETE' }
       );
       if (!response.ok) {
@@ -673,7 +692,7 @@ const PersonalSpacePage: React.FC = () => {
     setIsSavingRule(true);
     try {
       const response = await fetchWithAuth(
-        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/design-guidance`,
+        buildEndpoint('/design-guidance'),
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -706,7 +725,7 @@ const PersonalSpacePage: React.FC = () => {
     setRuleDeleting(item.id);
     try {
       const response = await fetchWithAuth(
-        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/design-guidance/${item.id}`,
+        buildEndpoint(`/design-guidance/${item.id}`),
         { method: 'DELETE' }
       );
       const data = await response.json().catch(() => ({}));
@@ -750,7 +769,7 @@ const PersonalSpacePage: React.FC = () => {
     setIsPrimaryColorSaving(true);
     try {
       const response = await fetchWithAuth(
-        `${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/primary-colors`,
+        buildEndpoint('/primary-colors'),
         {
           method: 'POST',
           headers: {
@@ -938,8 +957,8 @@ const PersonalSpacePage: React.FC = () => {
     <div className="max-w-6xl mx-auto space-y-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Personal Space</h1>
-          <p className="mt-2 text-sm text-gray-500">Manage the references and logo assets that shape your poster system.</p>
+          <h1 className="text-3xl font-bold text-gray-900">{title || (isTemplateMode ? 'Personal Space Template' : 'Personal Space')}</h1>
+          <p className="mt-2 text-sm text-gray-500">{subtitle || (isTemplateMode ? 'Edit the reusable reference assets, rules, colors, and logos stored in this template.' : 'Manage the references and logo assets that shape your poster system.')}</p>
         </div>
         <button
           type="button"
@@ -1029,7 +1048,11 @@ const PersonalSpacePage: React.FC = () => {
                         aria-label={`Preview ${item.original_name}`}
                       >
                         <img
-                          src={`${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/reference/${item.thumbnail_path || item.file_path}`}
+                          src={
+                            isTemplateMode
+                              ? buildEndpoint(`/reference-styles/file/${item.id}`)
+                              : `${apiBase}/reference/${item.thumbnail_path || item.file_path}`
+                          }
                           alt={item.original_name}
                           className="w-full h-full object-cover transition-transform group-hover:scale-110"
                         />
@@ -1481,7 +1504,11 @@ const PersonalSpacePage: React.FC = () => {
                         aria-label={`Preview ${item.original_name}`}
                       >
                         <img
-                          src={`${import.meta.env.VITE_BACKEND_API || 'http://localhost:8001'}/font-reference/${item.thumbnail_path || item.file_path}`}
+                          src={
+                            isTemplateMode
+                              ? buildEndpoint(`/font-references/file/${item.id}`)
+                              : `${apiBase}/font-reference/${item.thumbnail_path || item.file_path}`
+                          }
                           alt={item.original_name}
                           className="w-full h-full object-cover transition-transform group-hover:scale-110"
                         />

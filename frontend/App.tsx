@@ -808,6 +808,15 @@ type RuleItem = {
   source: string;
   created_at: string;
 };
+type PersonalSpaceTemplateItem = {
+  id: string;
+  name: string;
+  description?: string | null;
+  source_user_id: string;
+  created_by_user_id: string;
+  created_at: string;
+  updated_at: string;
+};
 
 const rectsOverlap = (a: Rect, b: Rect, padding = 0) => (
   !(a.right + padding <= b.left || a.left - padding >= b.right || a.bottom + padding <= b.top || a.top - padding >= b.bottom)
@@ -1094,6 +1103,16 @@ const App: React.FC = () => {
   const [adminCopyStatus, setAdminCopyStatus] = useState<'idle' | 'copied'>('idle');
   const [adminUsernameInput, setAdminUsernameInput] = useState('');
   const [adminRegisterError, setAdminRegisterError] = useState('');
+  const [adminTemplateItems, setAdminTemplateItems] = useState<PersonalSpaceTemplateItem[]>([]);
+  const [adminTemplateLoading, setAdminTemplateLoading] = useState(false);
+  const [adminTemplateError, setAdminTemplateError] = useState('');
+  const [adminSelectedTemplateId, setAdminSelectedTemplateId] = useState<string | null>(null);
+  const [adminTemplateNameInput, setAdminTemplateNameInput] = useState('');
+  const [adminTemplateDescriptionInput, setAdminTemplateDescriptionInput] = useState('');
+  const [adminTemplateSaving, setAdminTemplateSaving] = useState(false);
+  const [adminTemplateDeletingId, setAdminTemplateDeletingId] = useState<string | null>(null);
+  const [adminRegisterSelectedTemplateId, setAdminRegisterSelectedTemplateId] = useState<string | null>(null);
+  const [isAdminTemplatePickerOpen, setIsAdminTemplatePickerOpen] = useState(false);
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [passwordChangeForm, setPasswordChangeForm] = useState({ current: '', next: '', confirm: '' });
   const [passwordChangeError, setPasswordChangeError] = useState('');
@@ -3276,6 +3295,129 @@ const App: React.FC = () => {
     }
   };
 
+  const fetchAdminTemplates = useCallback(async () => {
+    setAdminTemplateLoading(true);
+    setAdminTemplateError('');
+    try {
+      const response = await fetchWithAuth(`${BACKEND_API}/admin/ps-templates`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to load templates';
+        throw new Error(message);
+      }
+      const items = Array.isArray(data.items) ? data.items as PersonalSpaceTemplateItem[] : [];
+      setAdminTemplateItems(items);
+      setAdminSelectedTemplateId((prev) => {
+        if (prev && items.some((item) => item.id === prev)) return prev;
+        return items[0]?.id ?? null;
+      });
+      setAdminRegisterSelectedTemplateId((prev) => {
+        if (prev && items.some((item) => item.id === prev)) return prev;
+        return null;
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load templates';
+      setAdminTemplateError(message);
+    } finally {
+      setAdminTemplateLoading(false);
+    }
+  }, []);
+
+  const selectedAdminTemplate = adminTemplateItems.find((item) => item.id === adminSelectedTemplateId) || null;
+  const selectedRegisterTemplate = adminTemplateItems.find((item) => item.id === adminRegisterSelectedTemplateId) || null;
+
+  const handleCreateAdminTemplate = async () => {
+    const name = adminTemplateNameInput.trim();
+    if (!name) {
+      setAdminTemplateError('Template name is required');
+      return;
+    }
+    setAdminTemplateSaving(true);
+    setAdminTemplateError('');
+    try {
+      const response = await fetchWithAuth(`${BACKEND_API}/admin/ps-templates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          description: adminTemplateDescriptionInput.trim()
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to create template';
+        throw new Error(message);
+      }
+      const nextItem = data.item as PersonalSpaceTemplateItem;
+      setAdminTemplateItems((prev) => [nextItem, ...prev]);
+      setAdminSelectedTemplateId(nextItem.id);
+      setAdminTemplateNameInput('');
+      setAdminTemplateDescriptionInput('');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create template';
+      setAdminTemplateError(message);
+    } finally {
+      setAdminTemplateSaving(false);
+    }
+  };
+
+  const handleUpdateAdminTemplate = async () => {
+    if (!selectedAdminTemplate) return;
+    const name = adminTemplateNameInput.trim();
+    if (!name) {
+      setAdminTemplateError('Template name is required');
+      return;
+    }
+    setAdminTemplateSaving(true);
+    setAdminTemplateError('');
+    try {
+      const response = await fetchWithAuth(`${BACKEND_API}/admin/ps-templates/${selectedAdminTemplate.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          description: adminTemplateDescriptionInput.trim()
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to update template';
+        throw new Error(message);
+      }
+      const nextItem = data.item as PersonalSpaceTemplateItem;
+      setAdminTemplateItems((prev) => prev.map((item) => (item.id === nextItem.id ? nextItem : item)));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update template';
+      setAdminTemplateError(message);
+    } finally {
+      setAdminTemplateSaving(false);
+    }
+  };
+
+  const handleDeleteAdminTemplate = async (templateId: string) => {
+    if (!window.confirm('Delete this template and all copied assets?')) return;
+    setAdminTemplateDeletingId(templateId);
+    setAdminTemplateError('');
+    try {
+      const response = await fetchWithAuth(`${BACKEND_API}/admin/ps-templates/${templateId}`, {
+        method: 'DELETE'
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = typeof data?.detail === 'string' ? data.detail : 'Failed to delete template';
+        throw new Error(message);
+      }
+      setAdminTemplateItems((prev) => prev.filter((item) => item.id !== templateId));
+      setAdminSelectedTemplateId((prev) => (prev === templateId ? null : prev));
+      setAdminRegisterSelectedTemplateId((prev) => (prev === templateId ? null : prev));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to delete template';
+      setAdminTemplateError(message);
+    } finally {
+      setAdminTemplateDeletingId(null);
+    }
+  };
+
   const handleAdminRegister = async () => {
     const username = adminUsernameInput.trim();
     if (!username) {
@@ -3288,7 +3430,7 @@ const App: React.FC = () => {
       const response = await fetchWithAuth(`${BACKEND_API}/admin/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username })
+        body: JSON.stringify({ username, templateId: adminRegisterSelectedTemplateId })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -7151,6 +7293,22 @@ Rules:
 
   useEffect(() => {
     if (!authUser?.is_admin) return;
+    if (adminSubroute !== '/register' && adminSubroute !== '/ps-template') return;
+    void fetchAdminTemplates();
+  }, [authUser, adminSubroute, fetchAdminTemplates]);
+
+  useEffect(() => {
+    if (!selectedAdminTemplate) {
+      setAdminTemplateNameInput('');
+      setAdminTemplateDescriptionInput('');
+      return;
+    }
+    setAdminTemplateNameInput(selectedAdminTemplate.name || '');
+    setAdminTemplateDescriptionInput(selectedAdminTemplate.description || '');
+  }, [selectedAdminTemplate]);
+
+  useEffect(() => {
+    if (!authUser?.is_admin) return;
     if (adminSubroute !== '/database') return;
     if (!adminDbTable) return;
     void fetchAdminDbSchema(adminDbTable);
@@ -7331,6 +7489,12 @@ Rules:
                 Register
               </button>
               <button
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-colors ${adminSubroute === '/ps-template' ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
+                onClick={() => handleNavigate('/admin/ps-template')}
+              >
+                PS Template
+              </button>
+              <button
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-colors ${adminSubroute === '/playground' ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
                 onClick={() => handleNavigate('/admin/playground')}
               >
@@ -7497,6 +7661,26 @@ Rules:
                       className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
                     />
                   </div>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <label className="text-xs font-semibold text-gray-500">Personal Space Template</label>
+                      <button
+                        type="button"
+                        onClick={() => setIsAdminTemplatePickerOpen(true)}
+                        className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold text-gray-700"
+                      >
+                        Choose Template
+                      </button>
+                    </div>
+                    <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
+                      <div className="text-sm font-semibold text-gray-900">
+                        {selectedRegisterTemplate?.name || 'No template selected'}
+                      </div>
+                      <div className="mt-1 text-xs text-gray-500">
+                        {selectedRegisterTemplate?.description || 'Create the account with an empty personal space, or choose a reusable template to copy all personal-space assets into the new account.'}
+                      </div>
+                    </div>
+                  </div>
                   <div className="flex flex-wrap items-center gap-3">
                     <button
                       type="button"
@@ -7529,6 +7713,98 @@ Rules:
                       <div className="text-sm font-semibold text-gray-900 mt-2">
                         {adminGeneratedUser?.password || '—'}
                       </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : adminSubroute === '/ps-template' ? (
+              <div className="space-y-8">
+                <div>
+                  <h1 className="text-3xl font-bold text-gray-900 mb-2">Personal Space Templates</h1>
+                  <p className="text-gray-500 font-medium">Create reusable templates by deep-copying your current personal space, then edit them independently.</p>
+                </div>
+                <div className="bg-white border border-gray-100 rounded-3xl p-8 shadow-sm space-y-5">
+                  <div className="grid grid-cols-1 md:grid-cols-[1.4fr_1fr] gap-4">
+                    <input
+                      type="text"
+                      value={adminTemplateNameInput}
+                      onChange={(event) => setAdminTemplateNameInput(event.target.value)}
+                      placeholder="Template name"
+                      className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                    />
+                    <input
+                      type="text"
+                      value={adminTemplateDescriptionInput}
+                      onChange={(event) => setAdminTemplateDescriptionInput(event.target.value)}
+                      placeholder="Optional description"
+                      className="w-full rounded-xl border border-gray-200 px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900"
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleCreateAdminTemplate}
+                      disabled={adminTemplateSaving}
+                      className="px-5 py-2.5 rounded-xl bg-black text-white text-sm font-semibold disabled:opacity-60"
+                    >
+                      {adminTemplateSaving ? 'Creating...' : 'Create From My Personal Space'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleUpdateAdminTemplate}
+                      disabled={!selectedAdminTemplate || adminTemplateSaving}
+                      className="px-5 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-700 disabled:opacity-50"
+                    >
+                      Save Metadata
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => selectedAdminTemplate && handleDeleteAdminTemplate(selectedAdminTemplate.id)}
+                      disabled={!selectedAdminTemplate || adminTemplateDeletingId === selectedAdminTemplate?.id}
+                      className="px-5 py-2.5 rounded-xl border border-red-200 text-sm font-semibold text-red-600 disabled:opacity-50"
+                    >
+                      {adminTemplateDeletingId === selectedAdminTemplate?.id ? 'Deleting...' : 'Delete Template'}
+                    </button>
+                  </div>
+                  {(adminTemplateError || adminTemplateLoading) && (
+                    <p className={`text-sm ${adminTemplateError ? 'text-red-600' : 'text-gray-500'}`}>
+                      {adminTemplateError || 'Loading templates...'}
+                    </p>
+                  )}
+                  <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-6">
+                    <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 space-y-2 max-h-[440px] overflow-y-auto">
+                      {adminTemplateItems.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => setAdminSelectedTemplateId(item.id)}
+                          className={`w-full text-left rounded-2xl border px-4 py-3 transition-colors ${adminSelectedTemplateId === item.id ? 'border-gray-900 bg-gray-900 text-white' : 'border-gray-200 bg-white text-gray-800 hover:bg-gray-100'}`}
+                        >
+                          <div className="text-sm font-semibold">{item.name}</div>
+                          <div className={`mt-1 text-xs ${adminSelectedTemplateId === item.id ? 'text-gray-200' : 'text-gray-500'}`}>
+                            {item.description || 'No description'}
+                          </div>
+                        </button>
+                      ))}
+                      {!adminTemplateLoading && adminTemplateItems.length === 0 && (
+                        <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-4 py-5 text-sm text-gray-500">
+                          No templates yet. Create one from your current personal space.
+                        </div>
+                      )}
+                    </div>
+                    <div className="rounded-3xl border border-gray-100 bg-[#fbfbfc] p-2">
+                      {selectedAdminTemplate ? (
+                        <PersonalSpacePage
+                          mode="template"
+                          templateId={selectedAdminTemplate.id}
+                          title={selectedAdminTemplate.name}
+                          subtitle={selectedAdminTemplate.description || 'This template is fully independent. Uploads, rules, colors, and logos saved here will be copied into new accounts when selected during admin registration.'}
+                        />
+                      ) : (
+                        <div className="min-h-[240px] flex items-center justify-center text-sm text-gray-500">
+                          Select a template to manage its content.
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -7698,6 +7974,61 @@ Rules:
             )}
           </div>
         </main>
+        {isAdminTemplatePickerOpen && (
+          <div className="fixed inset-0 z-[78] flex items-center justify-center bg-black/40 backdrop-blur-sm p-6">
+            <div className="w-full max-w-2xl bg-white rounded-3xl shadow-xl border border-gray-100 p-6 space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-widest text-gray-400">Select Template</div>
+                  <div className="text-lg font-bold text-gray-900">Copy a personal space template into the new account</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsAdminTemplatePickerOpen(false)}
+                  className="text-sm font-semibold text-gray-500 hover:text-gray-900"
+                >
+                  Close
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setAdminRegisterSelectedTemplateId(null);
+                  setIsAdminTemplatePickerOpen(false);
+                }}
+                className={`w-full text-left rounded-2xl border px-4 py-3 ${!adminRegisterSelectedTemplateId ? 'border-gray-900 bg-gray-900 text-white' : 'border-gray-200 text-gray-700'}`}
+              >
+                <div className="text-sm font-semibold">No template</div>
+                <div className={`mt-1 text-xs ${!adminRegisterSelectedTemplateId ? 'text-gray-200' : 'text-gray-500'}`}>
+                  Create the account with an empty personal space.
+                </div>
+              </button>
+              <div className="max-h-[420px] overflow-y-auto space-y-3">
+                {adminTemplateItems.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      setAdminRegisterSelectedTemplateId(item.id);
+                      setIsAdminTemplatePickerOpen(false);
+                    }}
+                    className={`w-full text-left rounded-2xl border px-4 py-3 ${adminRegisterSelectedTemplateId === item.id ? 'border-gray-900 bg-gray-900 text-white' : 'border-gray-200 text-gray-800 hover:bg-gray-50'}`}
+                  >
+                    <div className="text-sm font-semibold">{item.name}</div>
+                    <div className={`mt-1 text-xs ${adminRegisterSelectedTemplateId === item.id ? 'text-gray-200' : 'text-gray-500'}`}>
+                      {item.description || 'No description'}
+                    </div>
+                  </button>
+                ))}
+                {!adminTemplateLoading && adminTemplateItems.length === 0 && (
+                  <div className="rounded-2xl border border-dashed border-gray-200 px-4 py-6 text-sm text-gray-500 text-center">
+                    No templates available yet.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         {adminDbEditorOpen && (
           <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 backdrop-blur-sm p-6">
             <div className="w-full max-w-2xl bg-white rounded-3xl shadow-xl border border-gray-100 p-6 space-y-4">

@@ -56,6 +56,7 @@ FILES_DIR = Path(os.getenv("FILES_DIR", str(APP_DATA_DIR / "db" / "files"))).res
 LOGOS_DIR = Path(os.getenv("LOGOS_DIR", str(APP_DATA_DIR / "db" / "logos"))).resolve()
 REFERENCE_DIR = Path(os.getenv("REFERENCE_DIR", str(APP_DATA_DIR / "db" / "reference"))).resolve()
 FONT_REFERENCE_DIR = Path(os.getenv("FONT_REFERENCE_DIR", str(APP_DATA_DIR / "db" / "font_reference"))).resolve()
+PS_TEMPLATE_DIR = Path(os.getenv("PS_TEMPLATE_DIR", str(APP_DATA_DIR / "db" / "ps_templates"))).resolve()
 
 # Auth configuration
 ACCESS_TOKEN_TTL_MINUTES = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "15"))
@@ -224,6 +225,16 @@ class ServerConfigUpdateRequest(BaseModel):
   logoHandlingMode: str
 
 
+class PersonalSpaceTemplateCreateRequest(BaseModel):
+  name: str
+  description: Optional[str] = None
+
+
+class PersonalSpaceTemplateUpdateRequest(BaseModel):
+  name: str
+  description: Optional[str] = None
+
+
 # Thread pool for background AI tasks
 ai_task_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="ai_task_")
 
@@ -246,6 +257,7 @@ def init_database():
   LOGOS_DIR.mkdir(parents=True, exist_ok=True)
   REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
   FONT_REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
+  PS_TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
 
   conn = sqlite3.connect(str(DB_PATH), timeout=SQLITE_TIMEOUT_SECONDS)
   cursor = conn.cursor()
@@ -453,6 +465,89 @@ def init_database():
     CREATE INDEX IF NOT EXISTS idx_primary_colors_user_id
     ON primary_colors(user_id)
   """)
+
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS personal_space_templates (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      source_user_id TEXT NOT NULL,
+      created_by_user_id TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(source_user_id) REFERENCES users(id),
+      FOREIGN KEY(created_by_user_id) REFERENCES users(id)
+    )
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_personal_space_templates_updated_at
+    ON personal_space_templates(updated_at DESC)
+  """)
+
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS template_design_guidance (
+      id TEXT PRIMARY KEY,
+      template_id TEXT NOT NULL,
+      description TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'text',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(template_id) REFERENCES personal_space_templates(id) ON DELETE CASCADE
+    )
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_template_design_guidance_template_id
+    ON template_design_guidance(template_id)
+  """)
+
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS template_reference_styles (
+      id TEXT PRIMARY KEY,
+      template_id TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      thumbnail_path TEXT,
+      mime_type TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(template_id) REFERENCES personal_space_templates(id) ON DELETE CASCADE
+    )
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_template_reference_styles_template_id
+    ON template_reference_styles(template_id)
+  """)
+
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS template_font_references (
+      id TEXT PRIMARY KEY,
+      template_id TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      thumbnail_path TEXT,
+      mime_type TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(template_id) REFERENCES personal_space_templates(id) ON DELETE CASCADE
+    )
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_template_font_references_template_id
+    ON template_font_references(template_id)
+  """)
+
+  cursor.execute("""
+    CREATE TABLE IF NOT EXISTS template_primary_colors (
+      id TEXT PRIMARY KEY,
+      template_id TEXT NOT NULL,
+      name TEXT,
+      color_hex TEXT NOT NULL,
+      colors_json TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(template_id) REFERENCES personal_space_templates(id) ON DELETE CASCADE
+    )
+  """)
+  cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_template_primary_colors_template_id
+    ON template_primary_colors(template_id)
+  """)
   cursor.execute("""
     CREATE INDEX IF NOT EXISTS idx_primary_colors_created_at
     ON primary_colors(created_at DESC)
@@ -575,6 +670,43 @@ def save_base64_image(base64_data: str, project_id: str, image_type: str) -> str
 def sanitize_user_id(user_id: str) -> str:
   cleaned = "".join(ch for ch in user_id if ch.isalnum() or ch in ("_", "-"))
   return cleaned or "user"
+
+
+def validate_template_name(value: str) -> str:
+  name = (value or "").strip()
+  if not name:
+    raise HTTPException(status_code=400, detail="Template name is required")
+  if len(name) > 120:
+    raise HTTPException(status_code=400, detail="Template name is too long")
+  return name
+
+
+def normalize_template_description(value: Optional[str]) -> Optional[str]:
+  description = (value or "").strip()
+  if len(description) > 1000:
+    raise HTTPException(status_code=400, detail="Template description is too long")
+  return description or None
+
+
+def get_template_root(template_id: str) -> Path:
+  safe_template_id = sanitize_user_id(template_id)
+  root = (PS_TEMPLATE_DIR / safe_template_id).resolve()
+  if not str(root).startswith(str(PS_TEMPLATE_DIR.resolve())):
+    raise HTTPException(status_code=400, detail="Invalid template path")
+  return root
+
+
+def ensure_template_subdir(template_id: str, name: str) -> Path:
+  directory = (get_template_root(template_id) / name).resolve()
+  if not str(directory).startswith(str(get_template_root(template_id))):
+    raise HTTPException(status_code=400, detail="Invalid template path")
+  directory.mkdir(parents=True, exist_ok=True)
+  return directory
+
+
+def safe_copy_file(src: Path, dest: Path) -> None:
+  dest.parent.mkdir(parents=True, exist_ok=True)
+  shutil.copy2(src, dest)
 
 
 def save_logo_files(file: UploadFile, user_id: str) -> Dict[str, str]:
@@ -708,6 +840,305 @@ def save_font_reference_file(file: UploadFile, user_id: str) -> Dict[str, Option
     "thumbnail_relative_path": f"{safe_user_id}/{webp_name}",
     "mime_type": "image/png"
   }
+
+
+def save_template_reference_file(file: UploadFile, template_id: str) -> Dict[str, Optional[str]]:
+  if not file.filename:
+    raise HTTPException(status_code=400, detail="Missing filename")
+  ext = Path(file.filename).suffix.lower()
+  if ext not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+    raise HTTPException(status_code=400, detail="Unsupported image type")
+
+  user_dir = ensure_template_subdir(template_id, "reference")
+  content = file.file.read()
+  if not content:
+    raise HTTPException(status_code=400, detail="Empty file")
+
+  try:
+    image = Image.open(io.BytesIO(content))
+  except Exception:
+    raise HTTPException(status_code=400, detail="Invalid image file")
+
+  if image.mode not in ("RGB", "RGBA"):
+    if "A" in image.getbands():
+      image = image.convert("RGBA")
+    else:
+      image = image.convert("RGB")
+
+  reference_id = str(uuid.uuid4())
+  png_name = f"{reference_id}.png"
+  webp_name = f"{reference_id}.webp"
+  image.save(user_dir / png_name, format="PNG")
+  image.save(user_dir / webp_name, format="WEBP", quality=82, method=6)
+
+  return {
+    "original_name": file.filename,
+    "relative_path": png_name,
+    "thumbnail_relative_path": webp_name,
+    "mime_type": "image/png"
+  }
+
+
+def save_template_font_reference_file(file: UploadFile, template_id: str) -> Dict[str, Optional[str]]:
+  if not file.filename:
+    raise HTTPException(status_code=400, detail="Missing filename")
+  ext = Path(file.filename).suffix.lower()
+  if ext not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+    raise HTTPException(status_code=400, detail="Unsupported image type")
+
+  user_dir = ensure_template_subdir(template_id, "font_reference")
+  content = file.file.read()
+  if not content:
+    raise HTTPException(status_code=400, detail="Empty file")
+
+  try:
+    image = Image.open(io.BytesIO(content))
+  except Exception:
+    raise HTTPException(status_code=400, detail="Invalid image file")
+
+  if image.mode not in ("RGB", "RGBA"):
+    if "A" in image.getbands():
+      image = image.convert("RGBA")
+    else:
+      image = image.convert("RGB")
+
+  reference_id = str(uuid.uuid4())
+  png_name = f"{reference_id}.png"
+  webp_name = f"{reference_id}.webp"
+  image.save(user_dir / png_name, format="PNG")
+  image.save(user_dir / webp_name, format="WEBP", quality=82, method=6)
+
+  return {
+    "original_name": file.filename,
+    "relative_path": png_name,
+    "thumbnail_relative_path": webp_name,
+    "mime_type": "image/png"
+  }
+
+
+def save_template_logo_files(file: UploadFile, template_id: str) -> Dict[str, str]:
+  if not file.filename:
+    raise HTTPException(status_code=400, detail="Missing filename")
+  ext = Path(file.filename).suffix.lower()
+  if ext not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+    raise HTTPException(status_code=400, detail="Unsupported image type")
+
+  user_dir = ensure_template_subdir(template_id, "logos")
+  content = file.file.read()
+  if not content:
+    raise HTTPException(status_code=400, detail="Empty file")
+
+  try:
+    image = Image.open(io.BytesIO(content))
+  except Exception:
+    raise HTTPException(status_code=400, detail="Invalid image file")
+
+  if image.mode not in ("RGB", "RGBA"):
+    if "A" in image.getbands():
+      image = image.convert("RGBA")
+    else:
+      image = image.convert("RGB")
+
+  logo_id = str(uuid.uuid4())
+  png_name = f"{logo_id}.png"
+  webp_name = f"{logo_id}.webp"
+  image.save(user_dir / png_name, format="PNG")
+  image.save(user_dir / webp_name, format="WEBP", quality=82, method=6)
+  return {"png": png_name, "webp": webp_name}
+
+
+def require_template_exists(template_id: str) -> sqlite3.Row:
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("SELECT * FROM personal_space_templates WHERE id = ?", (template_id,))
+  row = cursor.fetchone()
+  conn.close()
+  if not row:
+    raise HTTPException(status_code=404, detail="Template not found")
+  return row
+
+
+def delete_template_storage(template_id: str) -> None:
+  root = get_template_root(template_id)
+  if root.exists() and root.is_dir():
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def clone_user_personal_space_to_template(conn: sqlite3.Connection, source_user_id: str, template_id: str) -> None:
+  cursor = conn.cursor()
+
+  cursor.execute("""
+    SELECT description, source, created_at
+    FROM design_guidance
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+  """, (source_user_id,))
+  for row in cursor.fetchall():
+    cursor.execute("""
+      INSERT INTO template_design_guidance (id, template_id, description, source, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    """, (str(uuid.uuid4()), template_id, row["description"], row["source"], row["created_at"]))
+
+  cursor.execute("""
+    SELECT name, color_hex, colors_json, created_at
+    FROM primary_colors
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+  """, (source_user_id,))
+  for row in cursor.fetchall():
+    cursor.execute("""
+      INSERT INTO template_primary_colors (id, template_id, name, color_hex, colors_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    """, (str(uuid.uuid4()), template_id, row["name"], row["color_hex"], row["colors_json"], row["created_at"]))
+
+  reference_dir = ensure_template_subdir(template_id, "reference")
+  source_reference_dir = (REFERENCE_DIR / sanitize_user_id(source_user_id)).resolve()
+  cursor.execute("""
+    SELECT original_name, file_path, thumbnail_path, mime_type, created_at
+    FROM reference_styles
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+  """, (source_user_id,))
+  for row in cursor.fetchall():
+    entry_id = str(uuid.uuid4())
+    file_name = f"{entry_id}.png"
+    thumb_name = f"{entry_id}.webp"
+    source_file = source_reference_dir / Path(row["file_path"]).name
+    if not source_file.exists() or not source_file.is_file():
+      continue
+    safe_copy_file(source_file, reference_dir / file_name)
+    source_thumb = source_reference_dir / Path(row["thumbnail_path"]).name if row["thumbnail_path"] else None
+    if source_thumb and source_thumb.exists() and source_thumb.is_file():
+      safe_copy_file(source_thumb, reference_dir / thumb_name)
+    cursor.execute("""
+      INSERT INTO template_reference_styles (id, template_id, original_name, file_path, thumbnail_path, mime_type, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (entry_id, template_id, row["original_name"], file_name, thumb_name if row["thumbnail_path"] else None, row["mime_type"], row["created_at"]))
+
+  font_reference_dir = ensure_template_subdir(template_id, "font_reference")
+  source_font_reference_dir = (FONT_REFERENCE_DIR / sanitize_user_id(source_user_id)).resolve()
+  cursor.execute("""
+    SELECT original_name, file_path, thumbnail_path, mime_type, created_at
+    FROM font_references
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+  """, (source_user_id,))
+  for row in cursor.fetchall():
+    entry_id = str(uuid.uuid4())
+    file_name = f"{entry_id}.png"
+    thumb_name = f"{entry_id}.webp"
+    source_file = source_font_reference_dir / Path(row["file_path"]).name
+    if not source_file.exists() or not source_file.is_file():
+      continue
+    safe_copy_file(source_file, font_reference_dir / file_name)
+    source_thumb = source_font_reference_dir / Path(row["thumbnail_path"]).name if row["thumbnail_path"] else None
+    if source_thumb and source_thumb.exists() and source_thumb.is_file():
+      safe_copy_file(source_thumb, font_reference_dir / thumb_name)
+    cursor.execute("""
+      INSERT INTO template_font_references (id, template_id, original_name, file_path, thumbnail_path, mime_type, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (entry_id, template_id, row["original_name"], file_name, thumb_name if row["thumbnail_path"] else None, row["mime_type"], row["created_at"]))
+
+  template_logo_dir = ensure_template_subdir(template_id, "logos")
+  source_logo_dir = (LOGOS_DIR / sanitize_user_id(source_user_id)).resolve()
+  if source_logo_dir.exists() and source_logo_dir.is_dir():
+    for entry in source_logo_dir.iterdir():
+      if not entry.is_file():
+        continue
+      safe_copy_file(entry, template_logo_dir / entry.name)
+
+
+def clone_template_personal_space_to_user(conn: sqlite3.Connection, template_id: str, target_user_id: str) -> None:
+  require_template_exists(template_id)
+  cursor = conn.cursor()
+
+  cursor.execute("""
+    SELECT description, source, created_at
+    FROM template_design_guidance
+    WHERE template_id = ?
+    ORDER BY created_at DESC
+  """, (template_id,))
+  for row in cursor.fetchall():
+    cursor.execute("""
+      INSERT INTO design_guidance (id, user_id, description, source, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    """, (str(uuid.uuid4()), target_user_id, row["description"], row["source"], row["created_at"]))
+
+  cursor.execute("""
+    SELECT name, color_hex, colors_json, created_at
+    FROM template_primary_colors
+    WHERE template_id = ?
+    ORDER BY created_at DESC
+  """, (template_id,))
+  for row in cursor.fetchall():
+    cursor.execute("""
+      INSERT INTO primary_colors (id, user_id, name, color_hex, colors_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    """, (str(uuid.uuid4()), target_user_id, row["name"], row["color_hex"], row["colors_json"], row["created_at"]))
+
+  source_reference_dir = ensure_template_subdir(template_id, "reference")
+  target_reference_dir = (REFERENCE_DIR / sanitize_user_id(target_user_id)).resolve()
+  target_reference_dir.mkdir(parents=True, exist_ok=True)
+  cursor.execute("""
+    SELECT original_name, file_path, thumbnail_path, mime_type, created_at
+    FROM template_reference_styles
+    WHERE template_id = ?
+    ORDER BY created_at DESC
+  """, (template_id,))
+  for row in cursor.fetchall():
+    entry_id = str(uuid.uuid4())
+    file_name = f"{entry_id}.png"
+    thumb_name = f"{entry_id}.webp"
+    source_file = source_reference_dir / Path(row["file_path"]).name
+    if not source_file.exists() or not source_file.is_file():
+      continue
+    safe_copy_file(source_file, target_reference_dir / file_name)
+    source_thumb = source_reference_dir / Path(row["thumbnail_path"]).name if row["thumbnail_path"] else None
+    if source_thumb and source_thumb.exists() and source_thumb.is_file():
+      safe_copy_file(source_thumb, target_reference_dir / thumb_name)
+    cursor.execute("""
+      INSERT INTO reference_styles (id, user_id, original_name, file_path, thumbnail_path, mime_type, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (entry_id, target_user_id, row["original_name"], f"{sanitize_user_id(target_user_id)}/{file_name}", f"{sanitize_user_id(target_user_id)}/{thumb_name}" if row["thumbnail_path"] else None, row["mime_type"], row["created_at"]))
+
+  source_font_dir = ensure_template_subdir(template_id, "font_reference")
+  target_font_dir = (FONT_REFERENCE_DIR / sanitize_user_id(target_user_id)).resolve()
+  target_font_dir.mkdir(parents=True, exist_ok=True)
+  cursor.execute("""
+    SELECT original_name, file_path, thumbnail_path, mime_type, created_at
+    FROM template_font_references
+    WHERE template_id = ?
+    ORDER BY created_at DESC
+  """, (template_id,))
+  for row in cursor.fetchall():
+    entry_id = str(uuid.uuid4())
+    file_name = f"{entry_id}.png"
+    thumb_name = f"{entry_id}.webp"
+    source_file = source_font_dir / Path(row["file_path"]).name
+    if not source_file.exists() or not source_file.is_file():
+      continue
+    safe_copy_file(source_file, target_font_dir / file_name)
+    source_thumb = source_font_dir / Path(row["thumbnail_path"]).name if row["thumbnail_path"] else None
+    if source_thumb and source_thumb.exists() and source_thumb.is_file():
+      safe_copy_file(source_thumb, target_font_dir / thumb_name)
+    cursor.execute("""
+      INSERT INTO font_references (id, user_id, original_name, file_path, thumbnail_path, mime_type, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (entry_id, target_user_id, row["original_name"], f"{sanitize_user_id(target_user_id)}/{file_name}", f"{sanitize_user_id(target_user_id)}/{thumb_name}" if row["thumbnail_path"] else None, row["mime_type"], row["created_at"]))
+
+  source_logo_dir = ensure_template_subdir(template_id, "logos")
+  target_logo_dir = (LOGOS_DIR / sanitize_user_id(target_user_id)).resolve()
+  target_logo_dir.mkdir(parents=True, exist_ok=True)
+  if source_logo_dir.exists() and source_logo_dir.is_dir():
+    grouped: Dict[str, List[Path]] = {}
+    for entry in source_logo_dir.iterdir():
+      if not entry.is_file():
+        continue
+      grouped.setdefault(entry.stem, []).append(entry)
+    for _, group_files in grouped.items():
+      next_stem = str(uuid.uuid4())
+      for entry in group_files:
+        safe_copy_file(entry, target_logo_dir / f"{next_stem}{entry.suffix.lower()}")
 
 
 def process_project_images(project_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1708,17 +2139,574 @@ def admin_db_delete(
   return JSONResponse({"success": True})
 
 
+@app.get("/admin/ps-templates")
+def admin_list_personal_space_templates(_: sqlite3.Row = Depends(require_admin_user)):
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT id, name, description, source_user_id, created_by_user_id, created_at, updated_at
+    FROM personal_space_templates
+    ORDER BY updated_at DESC
+  """)
+  rows = cursor.fetchall()
+  conn.close()
+  return JSONResponse({"items": [dict(row) for row in rows]})
+
+
+@app.post("/admin/ps-templates")
+def admin_create_personal_space_template(
+  payload: PersonalSpaceTemplateCreateRequest,
+  user: sqlite3.Row = Depends(require_admin_user)
+):
+  template_id = uuid.uuid4().hex
+  name = validate_template_name(payload.name)
+  description = normalize_template_description(payload.description)
+  now = datetime.now(timezone.utc).isoformat()
+
+  conn = get_db_connection()
+  try:
+    cursor = conn.cursor()
+    cursor.execute("""
+      INSERT INTO personal_space_templates (id, name, description, source_user_id, created_by_user_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (template_id, name, description, user["id"], user["id"], now, now))
+    clone_user_personal_space_to_template(conn, user["id"], template_id)
+    conn.commit()
+    cursor.execute("""
+      SELECT id, name, description, source_user_id, created_by_user_id, created_at, updated_at
+      FROM personal_space_templates
+      WHERE id = ?
+    """, (template_id,))
+    row = cursor.fetchone()
+    return JSONResponse({"item": dict(row)})
+  except Exception:
+    conn.rollback()
+    delete_template_storage(template_id)
+    raise
+  finally:
+    conn.close()
+
+
+@app.put("/admin/ps-templates/{template_id}")
+def admin_update_personal_space_template(
+  template_id: str,
+  payload: PersonalSpaceTemplateUpdateRequest,
+  _: sqlite3.Row = Depends(require_admin_user)
+):
+  require_template_exists(template_id)
+  name = validate_template_name(payload.name)
+  description = normalize_template_description(payload.description)
+  now = datetime.now(timezone.utc).isoformat()
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    UPDATE personal_space_templates
+    SET name = ?, description = ?, updated_at = ?
+    WHERE id = ?
+  """, (name, description, now, template_id))
+  conn.commit()
+  cursor.execute("""
+    SELECT id, name, description, source_user_id, created_by_user_id, created_at, updated_at
+    FROM personal_space_templates
+    WHERE id = ?
+  """, (template_id,))
+  row = cursor.fetchone()
+  conn.close()
+  return JSONResponse({"item": dict(row)})
+
+
+@app.delete("/admin/ps-templates/{template_id}")
+def admin_delete_personal_space_template(
+  template_id: str,
+  _: sqlite3.Row = Depends(require_admin_user)
+):
+  require_template_exists(template_id)
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("DELETE FROM personal_space_templates WHERE id = ?", (template_id,))
+  conn.commit()
+  conn.close()
+  delete_template_storage(template_id)
+  return JSONResponse({"ok": True})
+
+
+@app.get("/admin/ps-templates/{template_id}/design-guidance")
+def admin_list_template_design_guidance(template_id: str, _: sqlite3.Row = Depends(require_admin_user)):
+  require_template_exists(template_id)
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT id, description, source, created_at
+    FROM template_design_guidance
+    WHERE template_id = ?
+    ORDER BY created_at DESC
+  """, (template_id,))
+  rows = cursor.fetchall()
+  conn.close()
+  return JSONResponse({"items": [dict(row) for row in rows]})
+
+
+@app.post("/admin/ps-templates/{template_id}/design-guidance")
+def admin_create_template_design_guidance(
+  template_id: str,
+  payload: DesignGuidanceCreateRequest,
+  _: sqlite3.Row = Depends(require_admin_user)
+):
+  require_template_exists(template_id)
+  description = payload.description.strip()
+  if not description:
+    raise HTTPException(status_code=400, detail="Description is required")
+  if len(description) > 2000:
+    raise HTTPException(status_code=400, detail="Description is too long")
+  item_id = str(uuid.uuid4())
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    INSERT INTO template_design_guidance (id, template_id, description, source)
+    VALUES (?, ?, ?, ?)
+  """, (item_id, template_id, description, payload.source or "text"))
+  conn.commit()
+  cursor.execute("""
+    SELECT id, description, source, created_at
+    FROM template_design_guidance
+    WHERE id = ?
+  """, (item_id,))
+  row = cursor.fetchone()
+  conn.close()
+  return JSONResponse({"item": dict(row)})
+
+
+@app.delete("/admin/ps-templates/{template_id}/design-guidance/{guidance_id}")
+def admin_delete_template_design_guidance(
+  template_id: str,
+  guidance_id: str,
+  _: sqlite3.Row = Depends(require_admin_user)
+):
+  require_template_exists(template_id)
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    DELETE FROM template_design_guidance
+    WHERE id = ? AND template_id = ?
+  """, (guidance_id, template_id))
+  deleted = cursor.rowcount
+  conn.commit()
+  conn.close()
+  if deleted == 0:
+    raise HTTPException(status_code=404, detail="Design guidance not found")
+  return JSONResponse({"ok": True})
+
+
+@app.get("/admin/ps-templates/{template_id}/reference-styles")
+def admin_list_template_reference_styles(template_id: str, _: sqlite3.Row = Depends(require_admin_user)):
+  require_template_exists(template_id)
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT id, original_name, file_path, thumbnail_path, mime_type, created_at
+    FROM template_reference_styles
+    WHERE template_id = ?
+    ORDER BY created_at DESC
+  """, (template_id,))
+  rows = cursor.fetchall()
+  conn.close()
+  return JSONResponse({"items": [dict(row) for row in rows]})
+
+
+@app.post("/admin/ps-templates/{template_id}/reference-styles/upload")
+def admin_upload_template_reference_style(
+  template_id: str,
+  file: UploadFile = File(...),
+  _: sqlite3.Row = Depends(require_admin_user)
+):
+  require_template_exists(template_id)
+  saved = save_template_reference_file(file, template_id)
+  style_id = str(uuid.uuid4())
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    INSERT INTO template_reference_styles (id, template_id, original_name, file_path, thumbnail_path, mime_type)
+    VALUES (?, ?, ?, ?, ?, ?)
+  """, (style_id, template_id, saved["original_name"], saved["relative_path"], saved["thumbnail_relative_path"], saved["mime_type"]))
+  conn.commit()
+  cursor.execute("""
+    SELECT id, original_name, file_path, thumbnail_path, mime_type, created_at
+    FROM template_reference_styles
+    WHERE id = ?
+  """, (style_id,))
+  row = cursor.fetchone()
+  conn.close()
+  return JSONResponse({"item": dict(row)})
+
+
+@app.get("/admin/ps-templates/{template_id}/reference-styles/file/{style_id}")
+def admin_get_template_reference_style_file(template_id: str, style_id: str):
+  require_template_exists(template_id)
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT file_path FROM template_reference_styles
+    WHERE id = ? AND template_id = ?
+  """, (style_id, template_id))
+  row = cursor.fetchone()
+  conn.close()
+  if not row:
+    raise HTTPException(status_code=404, detail="Reference style not found")
+  file_path = (ensure_template_subdir(template_id, "reference") / Path(row["file_path"]).name).resolve()
+  if not file_path.exists() or not file_path.is_file():
+    raise HTTPException(status_code=404, detail="Reference file not found")
+  return FileResponse(file_path)
+
+
+@app.delete("/admin/ps-templates/{template_id}/reference-styles/{style_id}")
+def admin_delete_template_reference_style(template_id: str, style_id: str, _: sqlite3.Row = Depends(require_admin_user)):
+  require_template_exists(template_id)
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT file_path, thumbnail_path FROM template_reference_styles
+    WHERE id = ? AND template_id = ?
+  """, (style_id, template_id))
+  row = cursor.fetchone()
+  if not row:
+    conn.close()
+    raise HTTPException(status_code=404, detail="Reference style not found")
+  cursor.execute("""
+    DELETE FROM template_reference_styles
+    WHERE id = ? AND template_id = ?
+  """, (style_id, template_id))
+  conn.commit()
+  conn.close()
+  reference_dir = ensure_template_subdir(template_id, "reference")
+  for value in [row["file_path"], row["thumbnail_path"]]:
+    if value:
+      stored_file = (reference_dir / Path(value).name).resolve()
+      if stored_file.exists() and stored_file.is_file():
+        try:
+          stored_file.unlink()
+        except OSError:
+          pass
+  return JSONResponse({"ok": True})
+
+
+@app.get("/admin/ps-templates/{template_id}/font-references")
+def admin_list_template_font_references(template_id: str, _: sqlite3.Row = Depends(require_admin_user)):
+  require_template_exists(template_id)
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT id, original_name, file_path, thumbnail_path, mime_type, created_at
+    FROM template_font_references
+    WHERE template_id = ?
+    ORDER BY created_at DESC
+  """, (template_id,))
+  rows = cursor.fetchall()
+  conn.close()
+  return JSONResponse({"items": [dict(row) for row in rows]})
+
+
+@app.post("/admin/ps-templates/{template_id}/font-references/upload")
+def admin_upload_template_font_reference(
+  template_id: str,
+  file: UploadFile = File(...),
+  _: sqlite3.Row = Depends(require_admin_user)
+):
+  require_template_exists(template_id)
+  saved = save_template_font_reference_file(file, template_id)
+  reference_id = str(uuid.uuid4())
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    INSERT INTO template_font_references (id, template_id, original_name, file_path, thumbnail_path, mime_type)
+    VALUES (?, ?, ?, ?, ?, ?)
+  """, (reference_id, template_id, saved["original_name"], saved["relative_path"], saved["thumbnail_relative_path"], saved["mime_type"]))
+  conn.commit()
+  cursor.execute("""
+    SELECT id, original_name, file_path, thumbnail_path, mime_type, created_at
+    FROM template_font_references
+    WHERE id = ?
+  """, (reference_id,))
+  row = cursor.fetchone()
+  conn.close()
+  return JSONResponse({"item": dict(row)})
+
+
+@app.get("/admin/ps-templates/{template_id}/font-references/file/{reference_id}")
+def admin_get_template_font_reference_file(template_id: str, reference_id: str):
+  require_template_exists(template_id)
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT file_path FROM template_font_references
+    WHERE id = ? AND template_id = ?
+  """, (reference_id, template_id))
+  row = cursor.fetchone()
+  conn.close()
+  if not row:
+    raise HTTPException(status_code=404, detail="Font reference not found")
+  file_path = (ensure_template_subdir(template_id, "font_reference") / Path(row["file_path"]).name).resolve()
+  if not file_path.exists() or not file_path.is_file():
+    raise HTTPException(status_code=404, detail="Font reference file not found")
+  return FileResponse(file_path)
+
+
+@app.delete("/admin/ps-templates/{template_id}/font-references/{reference_id}")
+def admin_delete_template_font_reference(template_id: str, reference_id: str, _: sqlite3.Row = Depends(require_admin_user)):
+  require_template_exists(template_id)
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT file_path, thumbnail_path FROM template_font_references
+    WHERE id = ? AND template_id = ?
+  """, (reference_id, template_id))
+  row = cursor.fetchone()
+  if not row:
+    conn.close()
+    raise HTTPException(status_code=404, detail="Font reference not found")
+  cursor.execute("""
+    DELETE FROM template_font_references
+    WHERE id = ? AND template_id = ?
+  """, (reference_id, template_id))
+  conn.commit()
+  conn.close()
+  reference_dir = ensure_template_subdir(template_id, "font_reference")
+  for value in [row["file_path"], row["thumbnail_path"]]:
+    if value:
+      stored_file = (reference_dir / Path(value).name).resolve()
+      if stored_file.exists() and stored_file.is_file():
+        try:
+          stored_file.unlink()
+        except OSError:
+          pass
+  return JSONResponse({"ok": True})
+
+
+@app.get("/admin/ps-templates/{template_id}/primary-colors")
+def admin_list_template_primary_colors(template_id: str, _: sqlite3.Row = Depends(require_admin_user)):
+  require_template_exists(template_id)
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    SELECT id, name, color_hex, colors_json, created_at
+    FROM template_primary_colors
+    WHERE template_id = ?
+    ORDER BY created_at DESC
+  """, (template_id,))
+  rows = cursor.fetchall()
+  conn.close()
+  items = []
+  for row in rows:
+    item = dict(row)
+    colors = []
+    if item.get("colors_json"):
+      try:
+        parsed = json.loads(item["colors_json"])
+        if isinstance(parsed, list):
+          colors = [str(entry).upper() for entry in parsed if isinstance(entry, str)]
+      except json.JSONDecodeError:
+        colors = []
+    if not colors and item.get("color_hex"):
+      colors = [str(item["color_hex"]).upper()]
+    items.append({
+      "id": item["id"],
+      "name": item.get("name"),
+      "colors": colors[:6],
+      "created_at": item["created_at"]
+    })
+  return JSONResponse({"items": items})
+
+
+@app.post("/admin/ps-templates/{template_id}/primary-colors")
+def admin_create_template_primary_color(
+  template_id: str,
+  payload: PrimaryColorCreateRequest,
+  _: sqlite3.Row = Depends(require_admin_user)
+):
+  require_template_exists(template_id)
+  normalized_colors: List[str] = []
+  for raw_color in payload.colors[:6]:
+    normalized = (raw_color or "").strip().upper()
+    if not normalized.startswith("#"):
+      normalized = f"#{normalized}"
+    if len(normalized) != 7 or any(ch not in "#0123456789ABCDEF" for ch in normalized):
+      raise HTTPException(status_code=400, detail="Invalid color hex")
+    if normalized not in normalized_colors:
+      normalized_colors.append(normalized)
+  color_id = str(uuid.uuid4())
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    INSERT INTO template_primary_colors (id, template_id, name, color_hex, colors_json)
+    VALUES (?, ?, ?, ?, ?)
+  """, (color_id, template_id, (payload.name or "").strip() or None, normalized_colors[0] if normalized_colors else "#000000", json.dumps(normalized_colors)))
+  conn.commit()
+  cursor.execute("""
+    SELECT id, name, created_at
+    FROM template_primary_colors
+    WHERE id = ?
+  """, (color_id,))
+  row = cursor.fetchone()
+  conn.close()
+  item = dict(row)
+  return JSONResponse({"item": {"id": item["id"], "name": item.get("name"), "colors": normalized_colors, "created_at": item["created_at"]}})
+
+
+@app.put("/admin/ps-templates/{template_id}/primary-colors/{color_id}")
+def admin_update_template_primary_color(
+  template_id: str,
+  color_id: str,
+  payload: PrimaryColorCreateRequest,
+  _: sqlite3.Row = Depends(require_admin_user)
+):
+  require_template_exists(template_id)
+  normalized_colors: List[str] = []
+  for raw_color in payload.colors[:6]:
+    normalized = (raw_color or "").strip().upper()
+    if not normalized.startswith("#"):
+      normalized = f"#{normalized}"
+    if len(normalized) != 7 or any(ch not in "#0123456789ABCDEF" for ch in normalized):
+      raise HTTPException(status_code=400, detail="Invalid color hex")
+    if normalized not in normalized_colors:
+      normalized_colors.append(normalized)
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    UPDATE template_primary_colors
+    SET name = ?, color_hex = ?, colors_json = ?
+    WHERE id = ? AND template_id = ?
+  """, ((payload.name or "").strip() or None, normalized_colors[0] if normalized_colors else "#000000", json.dumps(normalized_colors), color_id, template_id))
+  updated = cursor.rowcount
+  conn.commit()
+  if updated == 0:
+    conn.close()
+    raise HTTPException(status_code=404, detail="Primary color not found")
+  cursor.execute("""
+    SELECT id, name, created_at
+    FROM template_primary_colors
+    WHERE id = ?
+  """, (color_id,))
+  row = cursor.fetchone()
+  conn.close()
+  item = dict(row)
+  return JSONResponse({"item": {"id": item["id"], "name": item.get("name"), "colors": normalized_colors, "created_at": item["created_at"]}})
+
+
+@app.delete("/admin/ps-templates/{template_id}/primary-colors/{color_id}")
+def admin_delete_template_primary_color(template_id: str, color_id: str, _: sqlite3.Row = Depends(require_admin_user)):
+  require_template_exists(template_id)
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("""
+    DELETE FROM template_primary_colors
+    WHERE id = ? AND template_id = ?
+  """, (color_id, template_id))
+  deleted = cursor.rowcount
+  conn.commit()
+  conn.close()
+  if deleted == 0:
+    raise HTTPException(status_code=404, detail="Primary color not found")
+  return JSONResponse({"ok": True})
+
+
+@app.get("/admin/ps-templates/{template_id}/logos")
+def admin_list_template_logos(template_id: str, _: sqlite3.Row = Depends(require_admin_user)):
+  require_template_exists(template_id)
+  user_dir = ensure_template_subdir(template_id, "logos")
+  if not user_dir.exists():
+    return JSONResponse({"logos": []})
+  entries = []
+  for entry in user_dir.iterdir():
+    if not entry.is_file() or entry.suffix.lower() != ".webp":
+      continue
+    png_name = f"{entry.stem}.png"
+    png_file = user_dir / png_name
+    png_url = f"/admin/ps-templates/{template_id}/logos/{png_name}" if png_file.exists() and png_file.is_file() else f"/admin/ps-templates/{template_id}/logos/{entry.name}"
+    entries.append({
+      "png": png_url,
+      "webp": f"/admin/ps-templates/{template_id}/logos/{entry.name}",
+      "filename": entry.name,
+      "mtime": entry.stat().st_mtime
+    })
+  entries.sort(key=lambda item: item["mtime"], reverse=True)
+  return JSONResponse({"logos": entries})
+
+
+@app.post("/admin/ps-templates/{template_id}/logos/upload")
+def admin_upload_template_logo(
+  template_id: str,
+  file: UploadFile = File(...),
+  _: sqlite3.Row = Depends(require_admin_user)
+):
+  require_template_exists(template_id)
+  saved = save_template_logo_files(file, template_id)
+  return JSONResponse({
+    "original": f"/admin/ps-templates/{template_id}/logos/{saved['png']}",
+    "png": f"/admin/ps-templates/{template_id}/logos/{saved['png']}",
+    "webp": f"/admin/ps-templates/{template_id}/logos/{saved['webp']}"
+  })
+
+
+@app.delete("/admin/ps-templates/{template_id}/logos/{filename}")
+def admin_delete_template_logo(template_id: str, filename: str, _: sqlite3.Row = Depends(require_admin_user)):
+  require_template_exists(template_id)
+  user_dir = ensure_template_subdir(template_id, "logos")
+  if "/" in filename or "\\" in filename:
+    raise HTTPException(status_code=400, detail="Invalid filename")
+  file_path = (user_dir / filename).resolve()
+  if not file_path.exists() or not file_path.is_file():
+    raise HTTPException(status_code=404, detail="Logo not found")
+  if file_path.suffix.lower() != ".webp":
+    raise HTTPException(status_code=400, detail="Invalid logo type")
+  original_name = file_path.stem
+  original_files = list(user_dir.glob(f"{original_name}.*"))
+  try:
+    file_path.unlink()
+  except OSError:
+    raise HTTPException(status_code=500, detail="Failed to delete logo")
+  for item in original_files:
+    try:
+      if item.exists() and item.is_file():
+        item.unlink()
+    except OSError:
+      continue
+  return JSONResponse({"success": True})
+
+
+@app.get("/admin/ps-templates/{template_id}/logos/{filename}")
+def admin_get_template_logo(template_id: str, filename: str):
+  require_template_exists(template_id)
+  file_path = (ensure_template_subdir(template_id, "logos") / filename).resolve()
+  if not file_path.exists() or not file_path.is_file():
+    raise HTTPException(status_code=404, detail="Logo not found")
+  return FileResponse(file_path)
+
+
 @app.post("/admin/register")
 def admin_register(payload: Dict[str, Any], user: sqlite3.Row = Depends(require_current_user)):
   if not bool(user["is_admin"]):
     raise HTTPException(status_code=403, detail="Admin access required")
   username = str(payload.get("username", "")).strip()
+  raw_template_id = payload.get("templateId")
+  template_id = str(raw_template_id).strip() if raw_template_id is not None else None
+  template_id = template_id or None
   if not username:
     raise HTTPException(status_code=400, detail="Username is required")
   if get_user_by_username(username):
     raise HTTPException(status_code=409, detail="Username already exists")
+  if template_id:
+    require_template_exists(template_id)
   password = secrets.token_urlsafe(10)
   created = create_user(username, password, is_admin=0, password_changed=0)
+  if template_id:
+    conn = get_db_connection()
+    try:
+      clone_template_personal_space_to_user(conn, template_id, created["id"])
+      conn.commit()
+    except Exception:
+      conn.rollback()
+      raise
+    finally:
+      conn.close()
   return JSONResponse({
     "username": created["username"],
     "password": password
