@@ -200,6 +200,7 @@ const compositePosterWithLogo = async (
   return canvas.toDataURL('image/png');
 };
 const COPY_PASTE_LOGO_SPACE_PROMPT = 'Keep the poster composition natural and not overly crowded. Ensure that at least one of the four corners remains free of text overlays so there is a clean corner available for placing a logo later.';
+const COPY_PASTE_REFERENCE_LOGO_EXCLUSION_PROMPT = 'If any reference style image contains a logo, emblem, watermark, brand mark, seal, or text mark, do not copy, recreate, trace, adapt, or place it in the result. Ignore every logo or mark found in the reference style images. Only the separately provided user logo may appear on the final poster.';
 
 type RgbColor = { r: number; g: number; b: number };
 const hexToRgbColor = (hex: string): RgbColor | null => {
@@ -6566,6 +6567,10 @@ Rules:
       const fontReferenceUrl = await resolveFontReferenceUrl(fontReferenceImage);
       const serverFontReferenceUrl = await resolveServerFontPreviewUrl(selectedServerFont);
       const currentPosterImageUrl = currentRefineModelImageUrl || currentArtboard.posterData.imageUrl || currentArtboard.posterData.imageUrlMerged || null;
+      const refineReferenceLogoExclusionPrompt =
+        serverConfig.logoHandlingMode === 'paste' && logoAssetForPoster && styleImages.length > 0
+          ? COPY_PASTE_REFERENCE_LOGO_EXCLUSION_PROMPT
+          : undefined;
       let targetPoster: PlanningStep = {
         ...editablePoster,
         logoUrl: logoAssetForPoster ?? undefined,
@@ -6606,6 +6611,7 @@ Rules:
             feedback
               ? `Refine the current poster according to this feedback while preserving the existing composition unless the feedback explicitly asks for a larger change: ${feedback}`
               : undefined,
+            refineReferenceLogoExclusionPrompt,
             feedback ? currentPosterImageUrl : null,
           );
 
@@ -6826,6 +6832,14 @@ Rules:
     const logoSpacePrompt = serverConfig.logoHandlingMode === 'paste' && currentLogoImage
       ? COPY_PASTE_LOGO_SPACE_PROMPT
       : '';
+    const referenceStyleLogoExclusionPrompt =
+      serverConfig.logoHandlingMode === 'paste' && currentLogoImage && currentStyleImages.length > 0
+        ? COPY_PASTE_REFERENCE_LOGO_EXCLUSION_PROMPT
+        : '';
+    const boardGenerationExtraPrompt = [
+      logoSpacePrompt,
+      referenceStyleLogoExclusionPrompt
+    ].filter(Boolean).join(' ');
     const themedPrompt = currentRulesPrompt
       ? `${currentRulesPrompt}\n\nUser prompt:\n${currentTheme}`
       : currentTheme;
@@ -7104,7 +7118,7 @@ Rules:
                 serverFontReferenceUrl,
                 undefined,
                 generationPrompt,
-                logoSpacePrompt || undefined
+                boardGenerationExtraPrompt || undefined
               );
               // Store taskId in posterData for recovery after refresh
               setArtboards(prev => prev.map(ab => {
