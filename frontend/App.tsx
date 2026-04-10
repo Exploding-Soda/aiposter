@@ -1037,6 +1037,10 @@ const App: React.FC = () => {
   const rulesLoadedOnceRef = useRef(false);
   const logoAssetsLoadedOnceRef = useRef(false);
   const fontReferencesLoadedOnceRef = useRef(false);
+  const autoDefaultedReferenceStyleProjectIdsRef = useRef<Set<string>>(new Set());
+  const autoDefaultedRuleProjectIdsRef = useRef<Set<string>>(new Set());
+  const autoDefaultedLogoProjectIdsRef = useRef<Set<string>>(new Set());
+  const autoDefaultedFontProjectIdsRef = useRef<Set<string>>(new Set());
   const primaryColorGroupsLoadedOnceRef = useRef(false);
   const lastBoardAssetsRefreshRef = useRef<{ projectId: string | null; at: number }>({ projectId: null, at: 0 });
   const createCanvasButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -3847,6 +3851,15 @@ const App: React.FC = () => {
         xhr.send(formData);
       });
       await loadReferenceStyles();
+      autoDefaultedReferenceStyleProjectIdsRef.current.add(activeProjectId || '__no_project__');
+      setSelectedReferenceStyleId(null);
+      const response = await fetchWithAuth(`${BACKEND_API}/reference-styles`);
+      const data = await response.json().catch(() => ({}));
+      const items = Array.isArray(data.items) ? data.items : [];
+      const latestItem = items[0];
+      if (latestItem?.id) {
+        setSelectedReferenceStyleId(latestItem.id);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to upload reference style';
       setReferenceStylesError(message);
@@ -3898,6 +3911,15 @@ const App: React.FC = () => {
         xhr.send(formData);
       });
       await loadLogoAssets();
+      autoDefaultedLogoProjectIdsRef.current.add(activeProjectId || '__no_project__');
+      setSelectedLogoAssetId(null);
+      const response = await fetchWithAuth(`${BACKEND_API}/logos`);
+      const data = await response.json().catch(() => ({}));
+      const items = Array.isArray(data.logos) ? data.logos : [];
+      const latestItem = items[0];
+      if (latestItem?.filename) {
+        setSelectedLogoAssetId(latestItem.filename);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to upload logo';
       setLogoAssetsError(message);
@@ -3949,6 +3971,15 @@ const App: React.FC = () => {
         xhr.send(formData);
       });
       await loadFontReferences();
+      autoDefaultedFontProjectIdsRef.current.add(activeProjectId || '__no_project__');
+      setSelectedFontReferenceId(null);
+      const response = await fetchWithAuth(`${BACKEND_API}/font-references`);
+      const data = await response.json().catch(() => ({}));
+      const items = Array.isArray(data.items) ? data.items : [];
+      const latestItem = items[0];
+      if (latestItem?.id) {
+        setSelectedFontReferenceId(latestItem.id);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to upload font reference';
       setFontReferencesError(message);
@@ -4009,6 +4040,65 @@ const App: React.FC = () => {
       return next.length === prev.length ? prev : next;
     });
   }, [rules]);
+
+  useEffect(() => {
+    if (!activeProjectId) return;
+    if (selectedReferenceStyleId) {
+      autoDefaultedReferenceStyleProjectIdsRef.current.add(activeProjectId);
+      return;
+    }
+    if (referenceStylesLoading || referenceStyles.length === 0) return;
+    if (autoDefaultedReferenceStyleProjectIdsRef.current.has(activeProjectId)) return;
+    const latestItem = [...referenceStyles]
+      .sort((a, b) => Date.parse(b.created_at || '') - Date.parse(a.created_at || ''))[0];
+    if (!latestItem) return;
+    autoDefaultedReferenceStyleProjectIdsRef.current.add(activeProjectId);
+    setSelectedReferenceStyleId(latestItem.id);
+  }, [activeProjectId, selectedReferenceStyleId, referenceStylesLoading, referenceStyles]);
+
+  useEffect(() => {
+    if (!activeProjectId) return;
+    if (selectedRuleIds.length > 0) {
+      autoDefaultedRuleProjectIdsRef.current.add(activeProjectId);
+      return;
+    }
+    if (rulesLoading || rules.length === 0) return;
+    if (autoDefaultedRuleProjectIdsRef.current.has(activeProjectId)) return;
+    const latestRule = [...rules]
+      .sort((a, b) => Date.parse(b.created_at || '') - Date.parse(a.created_at || ''))[0];
+    if (!latestRule) return;
+    autoDefaultedRuleProjectIdsRef.current.add(activeProjectId);
+    setSelectedRuleIds([latestRule.id]);
+  }, [activeProjectId, selectedRuleIds, rulesLoading, rules]);
+
+  useEffect(() => {
+    if (!activeProjectId) return;
+    if (selectedLogoAssetId) {
+      autoDefaultedLogoProjectIdsRef.current.add(activeProjectId);
+      return;
+    }
+    if (logoAssetsLoading || logoAssets.length === 0) return;
+    if (autoDefaultedLogoProjectIdsRef.current.has(activeProjectId)) return;
+    const latestLogo = logoAssets[0];
+    if (!latestLogo) return;
+    autoDefaultedLogoProjectIdsRef.current.add(activeProjectId);
+    setSelectedLogoAssetId(latestLogo.filename);
+  }, [activeProjectId, selectedLogoAssetId, logoAssetsLoading, logoAssets]);
+
+  useEffect(() => {
+    if (!activeProjectId) return;
+    if (selectedFontReferenceId) {
+      autoDefaultedFontProjectIdsRef.current.add(activeProjectId);
+      return;
+    }
+    if (fontReferencesLoading || fontReferences.length === 0) return;
+    if (autoDefaultedFontProjectIdsRef.current.has(activeProjectId)) return;
+    const latestFontReference = [...fontReferences]
+      .sort((a, b) => Date.parse(b.created_at || '') - Date.parse(a.created_at || ''))[0];
+    if (!latestFontReference) return;
+    autoDefaultedFontProjectIdsRef.current.add(activeProjectId);
+    setSelectedFontReferenceId(latestFontReference.id);
+  }, [activeProjectId, selectedFontReferenceId, fontReferencesLoading, fontReferences]);
 
   useEffect(() => {
     if (!selectedReferenceStyleId) return;
