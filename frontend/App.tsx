@@ -1113,6 +1113,7 @@ const App: React.FC = () => {
   const [adminTemplateDeletingId, setAdminTemplateDeletingId] = useState<string | null>(null);
   const [adminRegisterSelectedTemplateId, setAdminRegisterSelectedTemplateId] = useState<string | null>(null);
   const [isAdminTemplatePickerOpen, setIsAdminTemplatePickerOpen] = useState(false);
+  const [isAdminTemplatePanelExpanded, setIsAdminTemplatePanelExpanded] = useState(false);
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [passwordChangeForm, setPasswordChangeForm] = useState({ current: '', next: '', confirm: '' });
   const [passwordChangeError, setPasswordChangeError] = useState('');
@@ -7301,10 +7302,12 @@ Rules:
     if (!selectedAdminTemplate) {
       setAdminTemplateNameInput('');
       setAdminTemplateDescriptionInput('');
+      setIsAdminTemplatePanelExpanded(false);
       return;
     }
     setAdminTemplateNameInput(selectedAdminTemplate.name || '');
     setAdminTemplateDescriptionInput(selectedAdminTemplate.description || '');
+    setIsAdminTemplatePanelExpanded(false);
   }, [selectedAdminTemplate]);
 
   useEffect(() => {
@@ -7794,12 +7797,37 @@ Rules:
                     </div>
                     <div className="rounded-3xl border border-gray-100 bg-[#fbfbfc] p-2">
                       {selectedAdminTemplate ? (
-                        <PersonalSpacePage
-                          mode="template"
-                          templateId={selectedAdminTemplate.id}
-                          title={selectedAdminTemplate.name}
-                          subtitle={selectedAdminTemplate.description || 'This template is fully independent. Uploads, rules, colors, and logos saved here will be copied into new accounts when selected during admin registration.'}
-                        />
+                        <div className="rounded-[26px] border border-gray-100 bg-white shadow-sm overflow-hidden">
+                          <div className="flex items-start justify-between gap-4 px-6 py-5">
+                            <div>
+                              <div className="text-2xl font-bold text-gray-900">{selectedAdminTemplate.name}</div>
+                              <div className="mt-2 max-w-2xl text-sm text-gray-500">
+                                {selectedAdminTemplate.description || 'This template is fully independent. Uploads, rules, colors, and logos saved here will be copied into new accounts when selected during admin registration.'}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setIsAdminTemplatePanelExpanded((prev) => !prev)}
+                              className="shrink-0 rounded-2xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-gray-50"
+                            >
+                              {isAdminTemplatePanelExpanded ? 'Collapse' : 'Expand'}
+                            </button>
+                          </div>
+                          {isAdminTemplatePanelExpanded ? (
+                            <div className="border-t border-gray-100 bg-[#fbfbfc] p-2">
+                              <PersonalSpacePage
+                                mode="template"
+                                templateId={selectedAdminTemplate.id}
+                                title={selectedAdminTemplate.name}
+                                subtitle={selectedAdminTemplate.description || 'This template is fully independent. Uploads, rules, colors, and logos saved here will be copied into new accounts when selected during admin registration.'}
+                              />
+                            </div>
+                          ) : (
+                            <div className="border-t border-gray-100 px-6 py-8 text-sm text-gray-500">
+                              Template content is collapsed by default for a cleaner overview. Click `Expand` to manage assets, rules, colors, and logos.
+                            </div>
+                          )}
+                        </div>
                       ) : (
                         <div className="min-h-[240px] flex items-center justify-center text-sm text-gray-500">
                           Select a template to manage its content.
