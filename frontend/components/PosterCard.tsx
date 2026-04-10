@@ -27,9 +27,14 @@ interface PosterCardProps {
   isPasteLogoMode?: boolean;
 }
 
-const PosterCard: React.FC<PosterCardProps> = ({ poster, onEdit, isLarge = false, isPasteLogoMode = false }) => {
+const PosterCard: React.FC<PosterCardProps> = ({
+  poster,
+  onEdit,
+  isLarge = false,
+  isPasteLogoMode = false
+}) => {
   const isGenerating = poster.status === 'generating' || poster.status === 'planning';
-  const shouldOverlayLogo = isPasteLogoMode && Boolean(poster.logoUrl);
+  const shouldOverlayLogo = !isLarge && isPasteLogoMode && Boolean(poster.logoUrl);
   const displayImageUrl = resolveProjectImageUrl(shouldOverlayLogo ? poster.imageUrl : (poster.imageUrlMerged || poster.imageUrl));
   const displayLogoUrl = resolveProjectImageUrl(poster.logoUrl);
 

@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, MousePointer2, GripHorizontal, Hand, Sparkles, Loader2, ArrowLeft, Search, Bold, Italic, Underline, Download, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, MessageCircle, Pencil, Square, ArrowUpRight, ImagePlus, Home, Info, Lock, Palette, ChevronDown } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
@@ -19,6 +19,7 @@ const STORAGE_KEY = 'poster_canvas_projects';
 const DEFAULT_BOARD_WIDTH = 320;
 const DEFAULT_BOARD_HEIGHT = 480;
 const ARTBOARD_GAP = 140;
+const ARTBOARD_HEADER_HEIGHT = 32;
 const EXPORT_VERSION = 1;
 const BOARD_BOUNDS = { minX: -2500, maxX: 2500, minY: -2500, maxY: 2500 };
 
@@ -44,6 +45,26 @@ const resolveProjectImageUrl = (value?: string | null): string => {
     return normalizeSecureImageUrl(`${BACKEND_API}/files/${path}`);
   }
   return normalizeSecureImageUrl(value);
+};
+
+const getContainedRect = (
+  containerWidth: number,
+  containerHeight: number,
+  imageWidth: number,
+  imageHeight: number
+) => {
+  if (containerWidth <= 0 || containerHeight <= 0 || imageWidth <= 0 || imageHeight <= 0) {
+    return { left: 0, top: 0, width: containerWidth, height: containerHeight };
+  }
+  const scale = Math.min(containerWidth / imageWidth, containerHeight / imageHeight);
+  const width = imageWidth * scale;
+  const height = imageHeight * scale;
+  return {
+    left: (containerWidth - width) / 2,
+    top: (containerHeight - height) / 2,
+    width,
+    height
+  };
 };
 const FONT_ALPHABET_PREVIEW_TEXT = [
   'Aa Bb Cc Dd Ee Ff',
@@ -93,6 +114,19 @@ const clampPosition = (x: number, y: number, width: number, height: number) => (
 const fitSizeToBox = (targetWidth: number, targetHeight: number, maxWidth: number, maxHeight: number) => {
   const scale = Math.min(maxWidth / targetWidth, maxHeight / targetHeight, 1);
   return { width: targetWidth * scale, height: targetHeight * scale };
+};
+const fitPosterArtboardSizeToImage = (
+  imageWidth: number,
+  imageHeight: number,
+  maxArtboardWidth: number,
+  maxArtboardHeight: number
+) => {
+  const contentMaxHeight = Math.max(1, maxArtboardHeight - ARTBOARD_HEADER_HEIGHT);
+  const fitted = fitSizeToBox(imageWidth, imageHeight, maxArtboardWidth, contentMaxHeight);
+  return {
+    width: Math.round(fitted.width),
+    height: Math.round(fitted.height) + ARTBOARD_HEADER_HEIGHT
+  };
 };
 const buildDefaultTextLayout = (): TextLayout => ({
   topBanner: { x: 0.08, y: 0.06, width: 0.84, height: 0.08 },
@@ -1028,6 +1062,7 @@ const App: React.FC = () => {
   const [annotationZoom, setAnnotationZoom] = useState(1);
   const [annotatorSize, setAnnotatorSize] = useState({ width: 0, height: 0 });
   const [annotationPan, setAnnotationPan] = useState({ x: 0, y: 0 });
+  const [activeLogoAspectRatio, setActiveLogoAspectRatio] = useState(1);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [annotationNotes, setAnnotationNotes] = useState<Record<number, string>>({});
   const [isAnnotating, setIsAnnotating] = useState(false);
@@ -1709,6 +1744,23 @@ const App: React.FC = () => {
     ? (refinePreviewImageUrl || activePoster?.imageUrl || activePoster?.imageUrlMerged || '')
     : (refinePreviewImageUrl || activePoster?.imageUrlMerged || activePoster?.imageUrl || '');
   const hasRefineLogoLayer = isPasteLogoMode && Boolean(activePoster?.logoUrl);
+  const refineContainRect = useMemo(() => getContainedRect(
+    annotatorSize.width,
+    annotatorSize.height,
+    annotatorImage?.naturalWidth || annotatorImage?.width || 0,
+    annotatorImage?.naturalHeight || annotatorImage?.height || 0
+  ), [annotatorImage, annotatorSize.height, annotatorSize.width]);
+  const activePosterImageAspectRatio = (() => {
+    if (annotatorImage) {
+      const imageWidth = annotatorImage.naturalWidth || annotatorImage.width;
+      const imageHeight = annotatorImage.naturalHeight || annotatorImage.height;
+      if (imageWidth > 0 && imageHeight > 0) return imageWidth / imageHeight;
+    }
+    if (activePosterArtboard?.width && activePosterArtboard?.height) {
+      return activePosterArtboard.width / Math.max(1, activePosterArtboard.height - ARTBOARD_HEADER_HEIGHT);
+    }
+    return 9 / 16;
+  })();
   const isRefineLogoLayerSelected = hasRefineLogoLayer && isRefineLogoSelected;
   const isRefineLogoPlacementDirty = hasRefineLogoLayer && (
     Math.abs(refineLogoPlacement.x - activeLogoPlacement.x) > 0.0001 ||
@@ -1729,17 +1781,7 @@ const App: React.FC = () => {
   const applyRefinePreviewState = useCallback((nextPreviewUrl: string | null) => {
     setRefinePreviewImageUrl(nextPreviewUrl);
   }, []);
-  const annotatorAspectRatio = (() => {
-    if (annotatorImage) {
-      const imageWidth = annotatorImage.naturalWidth || annotatorImage.width;
-      const imageHeight = annotatorImage.naturalHeight || annotatorImage.height;
-      if (imageWidth > 0 && imageHeight > 0) return imageWidth / imageHeight;
-    }
-    if (activePosterArtboard?.width && activePosterArtboard?.height) {
-      return activePosterArtboard.width / activePosterArtboard.height;
-    }
-    return 9 / 16;
-  })();
+  const annotatorAspectRatio = activePosterImageAspectRatio;
   const isWideRefinePoster = annotatorAspectRatio >= 0.8;
   const isExtraWideRefinePoster = annotatorAspectRatio >= 1.15;
   const isMediumWideRefinePoster = annotatorAspectRatio >= 0.95;
@@ -2048,6 +2090,29 @@ const App: React.FC = () => {
   }, [isPosterModalOpen, annotatorReadyTick]);
 
   useEffect(() => {
+    let cancelled = false;
+    const logoUrl = activePoster?.logoUrl ? resolveProjectImageUrl(activePoster.logoUrl) : '';
+    if (!logoUrl) {
+      setActiveLogoAspectRatio(1);
+      return;
+    }
+    void loadImageElement(logoUrl)
+      .then((image) => {
+        if (cancelled) return;
+        const width = image.naturalWidth || image.width || 1;
+        const height = image.naturalHeight || image.height || 1;
+        setActiveLogoAspectRatio(width / Math.max(1, height));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setActiveLogoAspectRatio(1);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activePoster?.logoUrl]);
+
+  useEffect(() => {
     if (!isPosterModalOpen) return;
     if (isAnnotationRestoringRef.current) return;
     const snapshot = annotations.map(annotation => ({ ...annotation }));
@@ -2073,9 +2138,9 @@ const App: React.FC = () => {
             const imageWidth = image.naturalWidth || image.width;
             const imageHeight = image.naturalHeight || image.height;
             if (!imageWidth || !imageHeight) return null;
-            const fitted = fitSizeToBox(imageWidth, imageHeight, boardWidth, boardHeight);
-            const nextWidth = Math.round(fitted.width);
-            const nextHeight = Math.round(fitted.height);
+            const fitted = fitPosterArtboardSizeToImage(imageWidth, imageHeight, boardWidth, boardHeight);
+            const nextWidth = fitted.width;
+            const nextHeight = fitted.height;
             if (Math.abs(nextWidth - artboard.width) < 1 && Math.abs(nextHeight - artboard.height) < 1) {
               return null;
             }
@@ -4740,13 +4805,17 @@ const App: React.FC = () => {
       if (ab.id !== artboardId) return ab;
       const minSize = 160;
       const baseWidth = Math.max(1, ab.width);
+      const headerHeight = ab.posterData ? ARTBOARD_HEADER_HEIGHT : 0;
       const baseHeight = Math.max(1, ab.height);
+      const baseContentHeight = Math.max(1, baseHeight - headerHeight);
+      const minContentHeight = Math.max(40, minSize - headerHeight);
       const scale = Math.max(
         (baseWidth + dw) / baseWidth,
-        (baseHeight + dh) / baseHeight
+        (baseContentHeight + dh) / baseContentHeight
       );
       const nextWidth = Math.max(minSize, baseWidth * scale);
-      const nextHeight = Math.max(minSize, baseHeight * scale);
+      const nextContentHeight = Math.max(minContentHeight, baseContentHeight * scale);
+      const nextHeight = nextContentHeight + headerHeight;
       const clamped = clampPosition(ab.x, ab.y, nextWidth, nextHeight);
       return {
         ...ab,
@@ -4852,13 +4921,14 @@ const App: React.FC = () => {
   const addUploadedPosterArtboard = useCallback((imageUrl: string, naturalWidth: number, naturalHeight: number) => {
     const normalizedImageUrl = normalizeSecureImageUrl(imageUrl);
     const viewCenter = getViewCenterWorld();
-    const aspect = naturalWidth > 0 && naturalHeight > 0 ? naturalWidth / naturalHeight : boardWidth / boardHeight;
-    let width = boardWidth;
-    let height = Math.round(width / aspect);
-    if (height > boardHeight * 1.4) {
-      height = boardHeight;
-      width = Math.round(height * aspect);
-    }
+    const fitted = fitPosterArtboardSizeToImage(
+      naturalWidth > 0 ? naturalWidth : boardWidth,
+      naturalHeight > 0 ? naturalHeight : Math.max(1, boardHeight - ARTBOARD_HEADER_HEIGHT),
+      boardWidth,
+      boardHeight
+    );
+    const width = fitted.width;
+    const height = fitted.height;
     const position = clampPosition(viewCenter.x - width / 2, viewCenter.y - height / 2, width, height);
     const id = generateUUID();
     const posterData: PosterDraft = {
@@ -5640,16 +5710,15 @@ const App: React.FC = () => {
     if (!dragState || dragState.pointerId !== event.pointerId || !container) return;
     event.preventDefault();
     event.stopPropagation();
-    const rect = container.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    const dx = (event.clientX - dragState.startX) / (rect.width * annotationZoom);
-    const dy = (event.clientY - dragState.startY) / (rect.height * annotationZoom);
+    if (!refineContainRect.width || !refineContainRect.height) return;
+    const dx = (event.clientX - dragState.startX) / (refineContainRect.width * annotationZoom);
+    const dy = (event.clientY - dragState.startY) / (refineContainRect.height * annotationZoom);
     setRefineLogoPlacement(clampLogoPlacement({
       ...dragState.origin,
       x: dragState.origin.x + dx,
       y: dragState.origin.y + dy
     }));
-  }, [annotationZoom]);
+  }, [annotationZoom, refineContainRect.height, refineContainRect.width]);
 
   const handleLogoLayerPointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const dragState = logoLayerDragRef.current;
@@ -6652,7 +6721,7 @@ Rules:
 
       let cursorX = currentArtboard.x + currentArtboard.width + ARTBOARD_GAP;
       const derivedIds = selectedResolutions.map((option) => {
-        const displaySize = fitSizeToBox(option.width, option.height, currentArtboard.width, currentArtboard.height);
+        const displaySize = fitPosterArtboardSizeToImage(option.width, option.height, currentArtboard.width, currentArtboard.height);
         const derivedId = createDerivedArtboard(
           currentArtboard,
           { ...currentArtboard.posterData!, status: 'generating' },
@@ -9683,25 +9752,35 @@ Rules:
                       }}
                     >
                       <div
-                        data-refine-logo-layer="true"
-                        className={`absolute pointer-events-auto ${isLogoLayerDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+                        className="absolute"
                         style={{
-                          width: `${refineLogoPlacement.width * 100}%`,
-                          height: `${refineLogoPlacement.height * 100}%`,
-                          left: `${refineLogoPlacement.x * 100}%`,
-                          top: `${refineLogoPlacement.y * 100}%`,
+                          left: refineContainRect.left,
+                          top: refineContainRect.top,
+                          width: refineContainRect.width,
+                          height: refineContainRect.height,
                         }}
-                        onPointerDown={handleLogoLayerPointerDown}
-                        onPointerMove={handleLogoLayerPointerMove}
-                        onPointerUp={handleLogoLayerPointerUp}
-                        onPointerCancel={handleLogoLayerPointerUp}
                       >
-                        <img
-                          src={activePoster.logoUrl}
-                          alt="Logo Layer"
-                          className="h-full w-full object-contain pointer-events-none select-none"
-                          draggable={false}
-                        />
+                        <div
+                          data-refine-logo-layer="true"
+                          className={`absolute pointer-events-auto ${isLogoLayerDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+                          style={{
+                            width: `${refineLogoPlacement.width * 100}%`,
+                            height: `${refineLogoPlacement.height * 100}%`,
+                            left: `${refineLogoPlacement.x * 100}%`,
+                            top: `${refineLogoPlacement.y * 100}%`,
+                          }}
+                          onPointerDown={handleLogoLayerPointerDown}
+                          onPointerMove={handleLogoLayerPointerMove}
+                          onPointerUp={handleLogoLayerPointerUp}
+                          onPointerCancel={handleLogoLayerPointerUp}
+                        >
+                          <img
+                            src={activePoster.logoUrl}
+                            alt="Logo Layer"
+                            className="h-full w-full object-contain pointer-events-none select-none"
+                            draggable={false}
+                          />
+                        </div>
                       </div>
                     </div>
                   )}
@@ -10012,10 +10091,11 @@ Rules:
                         value={Math.round(refineLogoPlacement.width * 100)}
                         onChange={(event) => {
                           const width = Number(event.target.value) / 100;
+                          const computedHeight = width * (activePosterImageAspectRatio / Math.max(0.01, activeLogoAspectRatio));
                           setRefineLogoPlacement((prev) => clampLogoPlacement({
                             ...prev,
                             width,
-                            height: Math.max(0.05, width * 0.6)
+                            height: computedHeight
                           }));
                         }}
                         className="mt-2 w-full accent-sky-600"
@@ -10559,10 +10639,20 @@ const ArtboardComponent: React.FC<ArtboardProps> = ({ artboard, canvasScale, isS
 
       <div className={`flex-1 relative overflow-hidden bg-white border border-slate-200 shadow-sm ${isSelected ? 'ring-2 ring-blue-500 border-transparent' : ''}`}>
         {isPosterArtboard ? (
-          <button
-            type="button"
-            className="w-full h-full cursor-pointer bg-transparent p-0 border-0"
-            onClick={(e) => { e.stopPropagation(); onSelect(null, e); onOpenPoster(artboard.id); }}
+          <div
+            className="w-full h-full cursor-pointer"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect(null, e);
+              if (isSelected) {
+                onOpenPoster(artboard.id);
+              }
+            }}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              onSelect(null, e);
+              onOpenPoster(artboard.id);
+            }}
             onContextMenu={(e) => onOpenPosterContextMenu(e)}
           >
             <PosterCard
@@ -10571,7 +10661,7 @@ const ArtboardComponent: React.FC<ArtboardProps> = ({ artboard, canvasScale, isS
               isLarge
               isPasteLogoMode={isPasteLogoMode}
             />
-          </button>
+          </div>
         ) : (
           artboard.assets.map(asset => (
             <AssetComponent
