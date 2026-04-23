@@ -23,6 +23,8 @@ const ARTBOARD_HEADER_HEIGHT = 32;
 const EXPORT_VERSION = 1;
 const BOARD_BOUNDS = { minX: -2500, maxX: 2500, minY: -2500, maxY: 2500 };
 const BOARD_GENERATOR_ADVANCED_OPTIONS_STORAGE_KEY = 'poster-board-generator-advanced-options-open-v1';
+const BOARD_GENERATOR_COLOR_ACCURACY_STORAGE_KEY = 'poster-board-generator-keep-color-accuracy-v1';
+const BOARD_GENERATOR_COUNT_STORAGE_KEY = 'poster-board-generator-count-v1';
 
 const normalizeSecureImageUrl = (value?: string | null): string => {
   if (!value) return '';
@@ -1060,7 +1062,15 @@ const App: React.FC = () => {
   const [isPanning, setIsPanning] = useState(false);
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [theme, setTheme] = useState('');
-  const [count, setCount] = useState(4);
+  const [count, setCount] = useState(() => {
+    try {
+      const stored = localStorage.getItem(BOARD_GENERATOR_COUNT_STORAGE_KEY);
+      const parsed = stored ? Number.parseInt(stored, 10) : NaN;
+      return [1, 2, 4, 6].includes(parsed) ? parsed : 4;
+    } catch {
+      return 4;
+    }
+  });
   const [styleImages, setStyleImages] = useState<string[]>([]);
   const [logoImage, setLogoImage] = useState<string | null>(null);
   const [fontReferenceImage, setFontReferenceImage] = useState<string | null>(null);
@@ -1072,7 +1082,13 @@ const App: React.FC = () => {
   const [availableFonts, setAvailableFonts] = useState<string[]>([]);
   const [selectedServerFont, setSelectedServerFont] = useState('');
   const [selectedGeneratorResolutionId, setSelectedGeneratorResolutionId] = useState(REFINE_RESOLUTION_OPTIONS[0].id);
-  const [keepGeneratorColorAccuracy, setKeepGeneratorColorAccuracy] = useState(false);
+  const [keepGeneratorColorAccuracy, setKeepGeneratorColorAccuracy] = useState(() => {
+    try {
+      return localStorage.getItem(BOARD_GENERATOR_COLOR_ACCURACY_STORAGE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
   const [selectedGeneratorColorGroupId, setSelectedGeneratorColorGroupId] = useState<string | null>(null);
   const [renderedLayoutUrl, setRenderedLayoutUrl] = useState<string | null>(null);
   const [showRenderedLayout, setShowRenderedLayout] = useState(false);
@@ -1356,7 +1372,6 @@ const App: React.FC = () => {
 
   const resetGeneratorForm = useCallback(() => {
     setTheme('');
-    setCount(4);
     setSelectedSuggestions(new Set());
     if (fontReferenceInputRef.current) {
       fontReferenceInputRef.current.value = '';
@@ -7583,6 +7598,25 @@ Return ONLY valid JSON in the format:
       // Ignore storage failures, including private browsing restrictions.
     }
   }, [isBoardAdvancedOptionsOpen]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        BOARD_GENERATOR_COLOR_ACCURACY_STORAGE_KEY,
+        keepGeneratorColorAccuracy ? '1' : '0'
+      );
+    } catch {
+      // Ignore storage failures, including private browsing restrictions.
+    }
+  }, [keepGeneratorColorAccuracy]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(BOARD_GENERATOR_COUNT_STORAGE_KEY, String(count));
+    } catch {
+      // Ignore storage failures, including private browsing restrictions.
+    }
+  }, [count]);
 
   useEffect(() => {
     if (!authReady || authUser) return;
