@@ -4221,6 +4221,14 @@ const App: React.FC = () => {
   }, [rightPanelMode, loadLogoAssets, logoAssets.length, logoAssetsLoading]);
 
   useEffect(() => {
+    if (!isPosterModalOpen) return;
+    if (logoAssetsLoading) return;
+    if (logoAssets.length > 0) return;
+    if (logoAssetsLoadedOnceRef.current) return;
+    void loadLogoAssets();
+  }, [isPosterModalOpen, loadLogoAssets, logoAssets.length, logoAssetsLoading]);
+
+  useEffect(() => {
     if (rightPanelMode !== 'generator') return;
     if (fontReferencesLoading) return;
     if (fontReferences.length > 0) return;
@@ -4799,6 +4807,98 @@ const App: React.FC = () => {
     }
     await applyLogoAssetSelection(item);
   };
+
+  const handleReplaceRefineLogoAsset = useCallback(async (item: LogoItem) => {
+    if (!activePosterId) return;
+    const currentArtboard = artboards.find((ab) => ab.id === activePosterId);
+    const currentPoster = currentArtboard?.posterData;
+    if (!currentArtboard || !currentPoster) return;
+
+    setLogoSelectLoadingId(item.filename);
+    setRefineColorSetError('');
+    try {
+      const sourcePath = item.png || item.webp;
+      const url = `${BACKEND_API}${sourcePath}`;
+      const dataUrl = await fetchAuthedImageAsDataUrl(url);
+      const nextPlacement = cloneLogoPlacement(refineLogoPlacement);
+      const baseImageUrl = currentPoster.imageUrl || currentPoster.imageUrlMerged;
+      const nextImages = baseImageUrl
+        ? await buildPosterImagesWithLogoMode(baseImageUrl, dataUrl, nextPlacement)
+        : {
+          imageUrl: currentPoster.imageUrl || currentPoster.imageUrlMerged || '',
+          imageUrlMerged: currentPoster.imageUrlMerged || currentPoster.imageUrl || '',
+          logoPlacement: nextPlacement
+        };
+      const nextArtboards = artboards.map((ab) => (
+        ab.id === currentArtboard.id
+          ? {
+            ...ab,
+            posterData: {
+              ...ab.posterData!,
+              logoUrl: dataUrl,
+              logoPlacement: nextImages.logoPlacement,
+              imageUrl: nextImages.imageUrl,
+              imageUrlMerged: nextImages.imageUrlMerged,
+              imageUrlNoText: undefined,
+              status: 'completed',
+              taskId: undefined
+            }
+          }
+          : ab
+      ));
+      setArtboards(nextArtboards);
+      artboardsRef.current = nextArtboards;
+      if (activeProjectId && activeProject) {
+        const snapshot: Project = {
+          ...activeProject,
+          artboards: nextArtboards,
+          canvasAssets,
+          connections,
+          styleImages,
+          logoImage,
+          fontReferenceImage,
+          selectedReferenceStyleId,
+          selectedReferenceStyleStrength,
+          selectedRuleIds,
+          selectedLogoAssetId,
+          selectedFontReferenceId,
+          view: {
+            x: viewOffset.x,
+            y: viewOffset.y,
+            zoom
+          },
+          updatedAt: Date.now()
+        };
+        void saveProjectToBackend(activeProjectId, snapshot);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to replace the logo layer.';
+      setRefineColorSetError(message);
+    } finally {
+      setLogoSelectLoadingId(null);
+    }
+  }, [
+    activePosterId,
+    activeProject,
+    activeProjectId,
+    artboards,
+    buildPosterImagesWithLogoMode,
+    canvasAssets,
+    connections,
+    fontReferenceImage,
+    logoImage,
+    refineLogoPlacement,
+    saveProjectToBackend,
+    selectedFontReferenceId,
+    selectedLogoAssetId,
+    selectedReferenceStyleId,
+    selectedReferenceStyleStrength,
+    selectedRuleIds,
+    styleImages,
+    viewOffset.x,
+    viewOffset.y,
+    zoom
+  ]);
 
   const toggleSelectedRule = useCallback((ruleId: string) => {
     setSelectedRuleIds((prev) => (
@@ -10507,6 +10607,54 @@ Return ONLY valid JSON in the format:
                         }}
                         className="mt-2 w-full accent-sky-600"
                       />
+                    </div>
+                    <div className="space-y-2 rounded-xl border border-sky-100 bg-white p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Replace Logo</div>
+                          <div className="mt-1 text-[11px] text-slate-500">Pick another logo from your Personal Space uploads.</div>
+                        </div>
+                        {logoAssetsLoading && (
+                          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Loading</span>
+                        )}
+                      </div>
+                      {logoAssetsError && (
+                        <div className="text-[10px] text-red-500">{logoAssetsError}</div>
+                      )}
+                      {logoAssets.length > 0 ? (
+                        <div className="grid grid-cols-3 gap-2 max-h-44 overflow-y-auto pr-1">
+                          {logoAssets.map((item) => {
+                            const isCurrentDefault = selectedLogoAssetId === item.filename;
+                            const thumbUrl = `${BACKEND_API}${item.webp}`;
+                            const isLoading = logoSelectLoadingId === item.filename;
+                            return (
+                              <button
+                                key={item.filename}
+                                type="button"
+                                onClick={() => void handleReplaceRefineLogoAsset(item)}
+                                disabled={isLoading}
+                                className={`relative h-16 rounded-lg border bg-white overflow-hidden transition focus:outline-none focus:ring-2 focus:ring-sky-500 ${isCurrentDefault ? 'border-sky-500 ring-2 ring-sky-200' : 'border-slate-200 hover:border-slate-300'} ${isLoading ? 'opacity-70' : ''}`}
+                                aria-label={`Replace with ${item.filename}`}
+                                title={item.filename}
+                              >
+                                <img src={thumbUrl} alt={item.filename} className="w-full h-full object-contain p-1 bg-white" />
+                                {isCurrentDefault && (
+                                  <div className="absolute bottom-1 right-1 rounded bg-sky-600 px-1.5 py-0.5 text-[9px] font-bold text-white">
+                                    Using
+                                  </div>
+                                )}
+                                {isLoading && (
+                                  <div className="absolute inset-0 flex items-center justify-center bg-white/70">
+                                    <Loader2 className="h-4 w-4 animate-spin text-sky-500" />
+                                  </div>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-slate-400">No logo uploads available.</div>
+                      )}
                     </div>
                   </div>
                 )}
