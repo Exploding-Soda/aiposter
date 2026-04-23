@@ -578,7 +578,9 @@ const buildGeneratePosterPayload = (
         `${userPrefix}${fontInstruction}`.trim(),
         refineInstruction,
         styleInstruction,
-        "Create a vertical 9:16 poster.",
+        targetSize
+          ? `Create a ${targetSize.width}x${targetSize.height} poster${targetSize.label ? ` with a ${targetSize.label} layout` : ""}.`
+          : "Create a vertical 9:16 poster.",
         buildImagePrompt(poster, logoUrl, fontReferenceUrl, serverFontReferenceUrl, targetSize),
         logoInstruction,
         extraInstruction,

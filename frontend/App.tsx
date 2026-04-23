@@ -961,6 +961,7 @@ const App: React.FC = () => {
   const [selectedTextKey, setSelectedTextKey] = useState<keyof TextLayout | null>('headline');
   const [availableFonts, setAvailableFonts] = useState<string[]>([]);
   const [selectedServerFont, setSelectedServerFont] = useState('');
+  const [selectedGeneratorResolutionId, setSelectedGeneratorResolutionId] = useState(REFINE_RESOLUTION_OPTIONS[0].id);
   const [renderedLayoutUrl, setRenderedLayoutUrl] = useState<string | null>(null);
   const [showRenderedLayout, setShowRenderedLayout] = useState(false);
   const [isRenderingLayout, setIsRenderingLayout] = useState(false);
@@ -6936,6 +6937,14 @@ Rules:
     const generationPrompt = logoSpacePrompt
       ? `${themedPrompt}\n\nAdditional composition requirement:\n${logoSpacePrompt}`
       : themedPrompt;
+    const currentGeneratorResolution =
+      REFINE_RESOLUTION_OPTIONS.find((option) => option.id === selectedGeneratorResolutionId)
+      ?? REFINE_RESOLUTION_OPTIONS[0];
+    const currentGeneratorTargetSize = {
+      width: currentGeneratorResolution.width,
+      height: currentGeneratorResolution.height,
+      label: currentGeneratorResolution.promptLabel
+    };
 
     // Clear generator inputs immediately after submission
     resetGeneratorForm();
@@ -7206,7 +7215,7 @@ Rules:
                 logoForPoster,
                 fontReferenceUrl,
                 serverFontReferenceUrl,
-                undefined,
+                currentGeneratorTargetSize,
                 generationPrompt,
                 boardGenerationExtraPrompt || undefined
               );
@@ -8921,6 +8930,24 @@ Rules:
                 value={theme}
                 onChange={(e) => setTheme(e.target.value)}
               />
+              <motion.div layout className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                    Output Resolution
+                  </label>
+                </div>
+                <select
+                  value={selectedGeneratorResolutionId}
+                  onChange={(e) => setSelectedGeneratorResolutionId(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                >
+                  {REFINE_RESOLUTION_OPTIONS.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </motion.div>
               <motion.div ref={boardReferenceSectionRef} layout className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
