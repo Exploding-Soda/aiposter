@@ -25,6 +25,7 @@ const BOARD_BOUNDS = { minX: -2500, maxX: 2500, minY: -2500, maxY: 2500 };
 const BOARD_GENERATOR_ADVANCED_OPTIONS_STORAGE_KEY = 'poster-board-generator-advanced-options-open-v1';
 const BOARD_GENERATOR_COLOR_ACCURACY_STORAGE_KEY = 'poster-board-generator-keep-color-accuracy-v1';
 const BOARD_GENERATOR_COUNT_STORAGE_KEY = 'poster-board-generator-count-v1';
+const BOARD_GENERATOR_RESOLUTION_STORAGE_KEY = 'poster-board-generator-resolution-v1';
 const VALID_BOARD_GENERATOR_COUNTS = [1, 2, 4, 6] as const;
 
 const normalizeSecureImageUrl = (value?: string | null): string => {
@@ -58,6 +59,9 @@ const parseBoardGeneratorCount = (raw: string) => {
   return VALID_BOARD_GENERATOR_COUNTS.includes(parsed as (typeof VALID_BOARD_GENERATOR_COUNTS)[number]) ? parsed : 4;
 };
 const serializeBoardGeneratorCount = (value: number) => String(value);
+const parseBoardGeneratorResolutionId = (raw: string) => (
+  VALID_BOARD_GENERATOR_RESOLUTION_IDS.has(raw) ? raw : REFINE_RESOLUTION_OPTIONS[0].id
+);
 
 const readLocalStorageValue = <T,>(key: string, defaultValue: T, parse: (raw: string) => T): T => {
   try {
@@ -129,6 +133,7 @@ const REFINE_RESOLUTION_OPTIONS = [
   { id: '21x9', label: '21:9 ultra-wide landscape', promptLabel: '21:9 ultra-wide landscape', width: 2520, height: 1080 },
   { id: '9x21', label: '9:21 tall portrait', promptLabel: '9:21 tall portrait', width: 1080, height: 2520 }
 ];
+const VALID_BOARD_GENERATOR_RESOLUTION_IDS = new Set(REFINE_RESOLUTION_OPTIONS.map((option) => option.id));
 const GENERATOR_COLOR_TUNE_THRESHOLD = 40;
 
 const generateId = () => Math.random().toString(36).slice(2, 9);
@@ -1119,7 +1124,12 @@ const App: React.FC = () => {
   const [selectedTextKey, setSelectedTextKey] = useState<keyof TextLayout | null>('headline');
   const [availableFonts, setAvailableFonts] = useState<string[]>([]);
   const [selectedServerFont, setSelectedServerFont] = useState('');
-  const [selectedGeneratorResolutionId, setSelectedGeneratorResolutionId] = useState(REFINE_RESOLUTION_OPTIONS[0].id);
+  const [selectedGeneratorResolutionId, setSelectedGeneratorResolutionId] = useLocalStorageState(
+    BOARD_GENERATOR_RESOLUTION_STORAGE_KEY,
+    REFINE_RESOLUTION_OPTIONS[0].id,
+    parseBoardGeneratorResolutionId,
+    String
+  );
   const [keepGeneratorColorAccuracy, setKeepGeneratorColorAccuracy] = useLocalStorageBooleanState(
     BOARD_GENERATOR_COLOR_ACCURACY_STORAGE_KEY
   );
