@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, MousePointer2, GripHorizontal, Hand, Sparkles, Loader2, ArrowLeft, Search, Bold, Italic, Underline, Download, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, MessageCircle, Pencil, Square, ArrowUpRight, ImagePlus, Home, Info, Lock, Palette, ChevronDown } from 'lucide-react';
+import { Plus, Image as ImageIcon, Type as TextIcon, Trash2, ZoomIn, ZoomOut, MousePointer2, GripHorizontal, Hand, Sparkles, Loader2, ArrowLeft, Search, Bold, Italic, Underline, Download, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, MessageCircle, Pencil, Square, ArrowUpRight, ImagePlus, Home, Info, Palette, ChevronDown } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -10080,13 +10080,6 @@ Rules:
                       value={posterFeedback}
                       onChange={(e) => setPosterFeedback(e.target.value)}
                     />
-                    <div className="w-full border border-slate-200 rounded-xl bg-slate-50/80 px-3 py-2 flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-widest text-slate-500">
-                        <Lock className="w-3.5 h-3.5" />
-                        More Solutions
-                      </div>
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Locked</span>
-                    </div>
                     <div className="space-y-1">
                       <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-400">
                         Solutions
