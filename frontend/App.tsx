@@ -22,6 +22,7 @@ const ARTBOARD_GAP = 140;
 const ARTBOARD_HEADER_HEIGHT = 32;
 const EXPORT_VERSION = 1;
 const BOARD_BOUNDS = { minX: -2500, maxX: 2500, minY: -2500, maxY: 2500 };
+const BOARD_GENERATOR_ADVANCED_OPTIONS_STORAGE_KEY = 'poster-board-generator-advanced-options-open-v1';
 
 const normalizeSecureImageUrl = (value?: string | null): string => {
   if (!value) return '';
@@ -1103,6 +1104,13 @@ const App: React.FC = () => {
   const [referenceStylesError, setReferenceStylesError] = useState('');
   const [selectedReferenceStyleId, setSelectedReferenceStyleId] = useState<string | null>(null);
   const [selectedReferenceStyleStrength, setSelectedReferenceStyleStrength] = useState<ReferenceStyleStrength>('high');
+  const [isBoardAdvancedOptionsOpen, setIsBoardAdvancedOptionsOpen] = useState(() => {
+    try {
+      return localStorage.getItem(BOARD_GENERATOR_ADVANCED_OPTIONS_STORAGE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
   const [rules, setRules] = useState<RuleItem[]>([]);
   const [rulesLoading, setRulesLoading] = useState(false);
   const [rulesError, setRulesError] = useState('');
@@ -7566,6 +7574,17 @@ Return ONLY valid JSON in the format:
   }, [isOnBoardRoute, rightPanelMode, activeProjectId]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(
+        BOARD_GENERATOR_ADVANCED_OPTIONS_STORAGE_KEY,
+        isBoardAdvancedOptionsOpen ? '1' : '0'
+      );
+    } catch {
+      // Ignore storage failures, including private browsing restrictions.
+    }
+  }, [isBoardAdvancedOptionsOpen]);
+
+  useEffect(() => {
     if (!authReady || authUser) return;
     if (!isLandingRoute && !isLoginRoute) {
       handleNavigate('/landing');
@@ -9122,7 +9141,31 @@ Return ONLY valid JSON in the format:
                   </>
                 )}
               </motion.div>
-              <motion.div ref={boardReferenceSectionRef} layout className="space-y-2">
+              <motion.div ref={boardReferenceSectionRef} layout className="space-y-3">
+                <button
+                  type="button"
+                  onClick={() => setIsBoardAdvancedOptionsOpen((prev) => !prev)}
+                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-slate-300"
+                  aria-expanded={isBoardAdvancedOptionsOpen}
+                >
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      Advanced Option
+                    </div>
+                  </div>
+                  <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${isBoardAdvancedOptionsOpen ? 'rotate-180' : ''}`} />
+                </button>
+                <AnimatePresence initial={false}>
+                  {isBoardAdvancedOptionsOpen && (
+                    <motion.div
+                      layout
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3 shadow-sm space-y-4 overflow-hidden"
+                    >
+              <motion.div layout className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
@@ -9690,6 +9733,9 @@ Return ONLY valid JSON in the format:
                   <div className="text-[11px] text-slate-400">No font references found.</div>
                 )}
               </motion.div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               <motion.div layout className="grid grid-cols-4 gap-2">
                 {[1, 2, 4, 6].map(num => (
                   <button
@@ -9710,6 +9756,7 @@ Return ONLY valid JSON in the format:
                 <Sparkles className="w-4 h-4" />
                 Generate Posters
               </motion.button>
+              </motion.div>
             </motion.div>
           ) : rightPanelMode === 'gallery' ? (
             <div className="space-y-3 rounded-2xl border border-slate-200 p-4 bg-slate-50">
