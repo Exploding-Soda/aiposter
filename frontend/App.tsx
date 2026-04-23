@@ -80,6 +80,7 @@ const REFINE_RESOLUTION_OPTIONS = [
   { id: '21x9', label: '2520×1080 (21:9 ultra-wide landscape)', promptLabel: '21:9 ultra-wide landscape', width: 2520, height: 1080 },
   { id: '9x21', label: '1080×2520 (9:21 tall portrait)', promptLabel: '9:21 tall portrait', width: 1080, height: 2520 }
 ];
+const GENERATOR_COLOR_TUNE_THRESHOLD = 40;
 
 const generateId = () => Math.random().toString(36).slice(2, 9);
 const generateUUID = () => {
@@ -274,6 +275,103 @@ const loadImageFromUrl = async (sourceUrl: string) => {
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
+};
+
+type PosterColorTuneBox = {
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+const COLOR_TUNE_REGION_PROMPT = `Analyze this poster image and identify the major regions that contain either large dominant color blocks or text groupings.
+Return ONLY valid JSON in this exact format:
+{"boxes":[{"label":"text","x":12,"y":18,"width":30,"height":16}]}
+
+Rules:
+- x, y, width, height must be integers in percentages from 0 to 100
+- return 2 to 8 boxes total
+- focus only on visually significant regions
+- labels should be short, such as "text", "headline text", "color block", or "background color block"
+- do not include explanations or markdown`;
+
+const parsePosterColorTuneBoxes = (responseText: string): PosterColorTuneBox[] => {
+  const trimmed = responseText.trim();
+  const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+  const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) as {
+    boxes?: Array<{ label?: string; x?: number; y?: number; width?: number; height?: number }>;
+  } : null;
+
+  return (parsed?.boxes || [])
+    .map((box) => {
+      const x = Math.max(0, Math.min(100, Number(box.x)));
+      const y = Math.max(0, Math.min(100, Number(box.y)));
+      const width = Math.max(1, Math.min(100 - x, Number(box.width)));
+      const height = Math.max(1, Math.min(100 - y, Number(box.height)));
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+        return null;
+      }
+      return {
+        label: String(box.label || 'region').trim() || 'region',
+        x,
+        y,
+        width,
+        height
+      };
+    })
+    .filter((box): box is PosterColorTuneBox => Boolean(box));
+};
+
+const detectPosterColorTuneBoxes = async (posterImage: string): Promise<PosterColorTuneBox[]> => {
+  const response = await chatWithModel([
+    {
+      role: 'user',
+      content: COLOR_TUNE_REGION_PROMPT,
+      images: [posterImage]
+    }
+  ]);
+  return parsePosterColorTuneBoxes(response);
+};
+
+const autoTunePosterColors = async (
+  posterImageUrl: string,
+  colorSet: string[],
+  threshold = 40
+) => {
+  if (!posterImageUrl || colorSet.length === 0) {
+    return posterImageUrl;
+  }
+
+  const image = await loadImageFromUrl(posterImageUrl);
+  const imageWidth = image.naturalWidth || image.width || 0;
+  const imageHeight = image.naturalHeight || image.height || 0;
+  if (!imageWidth || !imageHeight) {
+    return posterImageUrl;
+  }
+
+  const boxes = await detectPosterColorTuneBoxes(posterImageUrl);
+  if (boxes.length === 0) {
+    return posterImageUrl;
+  }
+
+  let workingPreview = posterImageUrl;
+  for (const box of boxes) {
+    const rect = {
+      x: (box.x / 100) * imageWidth,
+      y: (box.y / 100) * imageHeight,
+      width: (box.width / 100) * imageWidth,
+      height: (box.height / 100) * imageHeight
+    };
+    workingPreview = await recolorRectRegionByPalette(
+      workingPreview,
+      rect,
+      colorSet,
+      threshold
+    );
+  }
+
+  return workingPreview;
 };
 
 const recolorRectRegionByClosestColorToTarget = async (
@@ -973,6 +1071,8 @@ const App: React.FC = () => {
   const [availableFonts, setAvailableFonts] = useState<string[]>([]);
   const [selectedServerFont, setSelectedServerFont] = useState('');
   const [selectedGeneratorResolutionId, setSelectedGeneratorResolutionId] = useState(REFINE_RESOLUTION_OPTIONS[0].id);
+  const [keepGeneratorColorAccuracy, setKeepGeneratorColorAccuracy] = useState(false);
+  const [selectedGeneratorColorGroupId, setSelectedGeneratorColorGroupId] = useState<string | null>(null);
   const [renderedLayoutUrl, setRenderedLayoutUrl] = useState<string | null>(null);
   const [showRenderedLayout, setShowRenderedLayout] = useState(false);
   const [isRenderingLayout, setIsRenderingLayout] = useState(false);
@@ -1786,6 +1886,7 @@ const App: React.FC = () => {
     Math.abs(refineLogoPlacement.height - activeLogoPlacement.height) > 0.0001
   );
   const selectedRefineColorGroup = primaryColorGroups.find((group) => group.id === selectedRefineColorGroupId) || null;
+  const selectedGeneratorColorGroup = primaryColorGroups.find((group) => group.id === selectedGeneratorColorGroupId) || null;
   const isUsingRefinePreviewHistory = isRefineBucketMode || Boolean(refinePreviewImageUrl);
   const pushRefinePreviewHistory = useCallback((nextPreviewUrl: string | null) => {
     const last = refinePreviewHistoryRef.current[refinePreviewHistoryRef.current.length - 1];
@@ -1923,8 +2024,21 @@ const App: React.FC = () => {
             if (result.status === 'completed') {
               const imageUrl = extractImageFromTaskResult(result);
               if (imageUrl) {
+                const generationColorTune = ab.posterData?.generationColorTune;
+                let tunedImageUrl = imageUrl;
+                if (generationColorTune?.enabled && (generationColorTune.colors || []).length > 0) {
+                  try {
+                    tunedImageUrl = await autoTunePosterColors(
+                      imageUrl,
+                      generationColorTune.colors || [],
+                      generationColorTune.threshold ?? GENERATOR_COLOR_TUNE_THRESHOLD
+                    );
+                  } catch (tuneError) {
+                    console.warn('[recovery] color tune failed, falling back to original image', tuneError);
+                  }
+                }
                 const nextImages = await buildPosterImagesWithLogoMode(
-                  imageUrl,
+                  tunedImageUrl,
                   ab.posterData?.logoUrl,
                   ab.posterData?.logoPlacement
                 );
@@ -1932,15 +2046,16 @@ const App: React.FC = () => {
                   if (a.id !== posterId) return a;
                   return {
                     ...a,
-                    posterData: {
-                      ...a.posterData!,
-                      imageUrl: nextImages.imageUrl,
-                      imageUrlMerged: nextImages.imageUrlMerged,
-                      logoPlacement: nextImages.logoPlacement,
-                      imageUrlNoText: undefined,
-                      textLayout: a.posterData?.textLayout || buildDefaultTextLayout(),
-                      status: 'completed',
-                      taskId: undefined
+                      posterData: {
+                        ...a.posterData!,
+                        imageUrl: nextImages.imageUrl,
+                        imageUrlMerged: nextImages.imageUrlMerged,
+                        logoPlacement: nextImages.logoPlacement,
+                        generationColorTune: generationColorTune,
+                        imageUrlNoText: undefined,
+                        textLayout: a.posterData?.textLayout || buildDefaultTextLayout(),
+                        status: 'completed',
+                        taskId: undefined
                     }
                   };
                 }));
@@ -3794,6 +3909,8 @@ const App: React.FC = () => {
   const loadPrimaryColorGroups = useCallback(async () => {
     if (!authUser) {
       setPrimaryColorGroups([]);
+      setSelectedRefineColorGroupId(null);
+      setSelectedGeneratorColorGroupId(null);
       primaryColorGroupsLoadedOnceRef.current = true;
       return;
     }
@@ -3808,6 +3925,12 @@ const App: React.FC = () => {
       const items = Array.isArray(data.items) ? data.items : [];
       setPrimaryColorGroups(items);
       setSelectedRefineColorGroupId((prev) => {
+        if (prev && items.some((item: PrimaryColorGroupItem) => item.id === prev)) {
+          return prev;
+        }
+        return items[0]?.id ?? null;
+      });
+      setSelectedGeneratorColorGroupId((prev) => {
         if (prev && items.some((item: PrimaryColorGroupItem) => item.id === prev)) {
           return prev;
         }
@@ -6191,48 +6314,7 @@ Return ONLY valid JSON in the format:
     setRefineColorSetError('');
 
     try {
-      const prompt = `Analyze this poster image and identify the major regions that contain either large dominant color blocks or text groupings.
-Return ONLY valid JSON in this exact format:
-{"boxes":[{"label":"text","x":12,"y":18,"width":30,"height":16}]}
-
-Rules:
-- x, y, width, height must be integers in percentages from 0 to 100
-- return 2 to 8 boxes total
-- focus only on visually significant regions
-- labels should be short, such as "text", "headline text", "color block", or "background color block"
-- do not include explanations or markdown`;
-
-      const response = await chatWithModel([
-        {
-          role: 'user',
-          content: prompt,
-          images: [posterImage]
-        }
-      ]);
-      const trimmed = response.trim();
-      const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
-      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) as {
-        boxes?: Array<{ label?: string; x?: number; y?: number; width?: number; height?: number }>;
-      } : null;
-
-      const boxes = (parsed?.boxes || [])
-        .map((box) => {
-          const x = Math.max(0, Math.min(100, Number(box.x)));
-          const y = Math.max(0, Math.min(100, Number(box.y)));
-          const width = Math.max(1, Math.min(100 - x, Number(box.width)));
-          const height = Math.max(1, Math.min(100 - y, Number(box.height)));
-          if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
-            return null;
-          }
-          return {
-            label: String(box.label || 'region').trim() || 'region',
-            x,
-            y,
-            width,
-            height
-          };
-        })
-        .filter((box): box is { label: string; x: number; y: number; width: number; height: number } => Boolean(box));
+      const boxes = await detectPosterColorTuneBoxes(posterImage);
 
       if (boxes.length === 0) {
         throw new Error('Model returned no valid boxes.');
@@ -6956,6 +7038,21 @@ Rules:
       height: currentGeneratorResolution.height,
       label: currentGeneratorResolution.promptLabel
     };
+    const currentKeepColorAccuracy = keepGeneratorColorAccuracy;
+    const currentGeneratorColorGroup = selectedGeneratorColorGroup;
+    const currentGeneratorColorTune = currentKeepColorAccuracy && currentGeneratorColorGroup?.colors.length
+      ? {
+        enabled: true,
+        colorGroupId: currentGeneratorColorGroup.id,
+        colors: [...currentGeneratorColorGroup.colors],
+        threshold: GENERATOR_COLOR_TUNE_THRESHOLD
+      }
+      : {
+        enabled: false,
+        colorGroupId: currentGeneratorColorGroup?.id ?? null,
+        colors: [] as string[],
+        threshold: GENERATOR_COLOR_TUNE_THRESHOLD
+      };
 
     // Clear generator inputs immediately after submission
     resetGeneratorForm();
@@ -7141,6 +7238,7 @@ Rules:
       visualPrompt: '',
       logoUrl: currentLogoImage ?? undefined,
       logoPlacement: buildDefaultLogoPlacement(),
+      generationColorTune: currentGeneratorColorTune,
       status: 'planning' as const
     }));
 
@@ -7207,6 +7305,7 @@ Rules:
                 ...plan,
                 logoUrl: currentLogoImage ?? undefined,
                 logoPlacement: cloneLogoPlacement(ab.posterData?.logoPlacement),
+                generationColorTune: currentGeneratorColorTune,
                 status: 'generating'
               }
             };
@@ -7262,28 +7361,41 @@ Rules:
               while (true) {
                 const result = await getAITaskStatus(taskId);
 
-                if (result.status === 'completed') {
-                  const imageUrl = extractImageFromTaskResult(result);
-                  if (imageUrl) {
-                    const nextImages = await buildPosterImagesWithLogoMode(
+            if (result.status === 'completed') {
+              const imageUrl = extractImageFromTaskResult(result);
+              if (imageUrl) {
+                let tunedImageUrl = imageUrl;
+                if (currentGeneratorColorTune.enabled && currentGeneratorColorTune.colors.length > 0) {
+                  try {
+                    tunedImageUrl = await autoTunePosterColors(
                       imageUrl,
-                      currentLogoImage ?? undefined,
-                      buildDefaultLogoPlacement()
+                      currentGeneratorColorTune.colors,
+                      currentGeneratorColorTune.threshold ?? GENERATOR_COLOR_TUNE_THRESHOLD
                     );
-                    setArtboards(prev => prev.map(ab => {
-                      if (ab.id !== posterId) return ab;
+                  } catch (tuneError) {
+                    console.warn('[generator] color tune failed, falling back to original image', tuneError);
+                  }
+                }
+                const nextImages = await buildPosterImagesWithLogoMode(
+                  tunedImageUrl,
+                  currentLogoImage ?? undefined,
+                  buildDefaultLogoPlacement()
+                );
+                setArtboards(prev => prev.map(ab => {
+                  if (ab.id !== posterId) return ab;
                       return {
                         ...ab,
                         posterData: {
-                          ...ab.posterData!,
-                          imageUrl: nextImages.imageUrl,
-                          imageUrlMerged: nextImages.imageUrlMerged,
-                          logoPlacement: nextImages.logoPlacement,
-                          imageUrlNoText: undefined,
-                          textLayout: buildDefaultTextLayout(),
-                          status: 'completed',
-                          taskId: undefined // Clear taskId after completion
-                        }
+                        ...ab.posterData!,
+                        imageUrl: nextImages.imageUrl,
+                        imageUrlMerged: nextImages.imageUrlMerged,
+                        logoPlacement: nextImages.logoPlacement,
+                        generationColorTune: currentGeneratorColorTune,
+                        imageUrlNoText: undefined,
+                        textLayout: buildDefaultTextLayout(),
+                        status: 'completed',
+                        taskId: undefined // Clear taskId after completion
+                      }
                       };
                     }));
                   } else {
@@ -8958,6 +9070,57 @@ Rules:
                     </option>
                   ))}
                 </select>
+              </motion.div>
+              <motion.div layout className="space-y-2 rounded-2xl border border-slate-200 bg-white p-3">
+                <label className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                  <input
+                    type="checkbox"
+                    checked={keepGeneratorColorAccuracy}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setKeepGeneratorColorAccuracy(checked);
+                      if (checked && !selectedGeneratorColorGroupId && primaryColorGroups.length > 0) {
+                        setSelectedGeneratorColorGroupId(primaryColorGroups[0].id);
+                      }
+                    }}
+                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  Keep Color Accuracy
+                </label>
+                {keepGeneratorColorAccuracy && (
+                  <>
+                    <select
+                      value={selectedGeneratorColorGroupId ?? ''}
+                      onChange={(event) => setSelectedGeneratorColorGroupId(event.target.value || null)}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                    >
+                      {primaryColorGroups.length === 0 ? (
+                        <option value="">No color sets available</option>
+                      ) : (
+                        primaryColorGroups.map((group) => (
+                          <option key={group.id} value={group.id}>
+                            {group.name?.trim() || 'Color Set'}{group.colors.length ? ` (${group.colors.length})` : ' (Empty)'}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                    {selectedGeneratorColorGroup && (
+                      <div className="flex items-center gap-2">
+                        {selectedGeneratorColorGroup.colors.length > 0 ? selectedGeneratorColorGroup.colors.map((color, index) => (
+                          <div
+                            key={`${selectedGeneratorColorGroup.id}-${color}-${index}`}
+                            className="h-7 flex-1 rounded-lg border border-black/5"
+                            style={{ backgroundColor: color }}
+                            title={color}
+                            aria-label={color}
+                          />
+                        )) : (
+                          <div className="text-[11px] text-slate-400">Empty color set</div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
               </motion.div>
               <motion.div ref={boardReferenceSectionRef} layout className="space-y-2">
                 <div className="flex items-center justify-between">

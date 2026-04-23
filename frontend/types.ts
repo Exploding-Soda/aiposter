@@ -25,6 +25,12 @@ export interface PosterDraft {
   imageUrlMerged?: string;
   textLayout?: TextLayout;
   textStyles?: TextStyleMap;
+  generationColorTune?: {
+    enabled: boolean;
+    colorGroupId?: string | null;
+    colors?: string[];
+    threshold?: number;
+  };
   status: 'planning' | 'generating' | 'completed' | 'error';
   error?: string;
   taskId?: string; // Backend task ID for async generation tracking
