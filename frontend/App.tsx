@@ -9124,57 +9124,6 @@ Return ONLY valid JSON in the format:
                   ))}
                 </select>
               </motion.div>
-              <motion.div layout className="space-y-2 rounded-2xl border border-slate-200 bg-white p-3">
-                <label className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                  <input
-                    type="checkbox"
-                    checked={keepGeneratorColorAccuracy}
-                    onChange={(event) => {
-                      const checked = event.target.checked;
-                      setKeepGeneratorColorAccuracy(checked);
-                      if (checked && !selectedGeneratorColorGroupId && primaryColorGroups.length > 0) {
-                        setSelectedGeneratorColorGroupId(primaryColorGroups[0].id);
-                      }
-                    }}
-                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  Keep Color Accuracy
-                </label>
-                {keepGeneratorColorAccuracy && (
-                  <>
-                    <select
-                      value={selectedGeneratorColorGroupId ?? ''}
-                      onChange={(event) => setSelectedGeneratorColorGroupId(event.target.value || null)}
-                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
-                    >
-                      {primaryColorGroups.length === 0 ? (
-                        <option value="">No color sets available</option>
-                      ) : (
-                        primaryColorGroups.map((group) => (
-                          <option key={group.id} value={group.id}>
-                            {group.name?.trim() || 'Color Set'}{group.colors.length ? ` (${group.colors.length})` : ' (Empty)'}
-                          </option>
-                        ))
-                      )}
-                    </select>
-                    {selectedGeneratorColorGroup && (
-                      <div className="flex items-center gap-2">
-                        {selectedGeneratorColorGroup.colors.length > 0 ? selectedGeneratorColorGroup.colors.map((color, index) => (
-                          <div
-                            key={`${selectedGeneratorColorGroup.id}-${color}-${index}`}
-                            className="h-7 flex-1 rounded-lg border border-black/5"
-                            style={{ backgroundColor: color }}
-                            title={color}
-                            aria-label={color}
-                          />
-                        )) : (
-                          <div className="text-[11px] text-slate-400">Empty color set</div>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-              </motion.div>
               <motion.div ref={boardReferenceSectionRef} layout className="space-y-3">
                 <button
                   type="button"
@@ -9767,9 +9716,61 @@ Return ONLY valid JSON in the format:
                   <div className="text-[11px] text-slate-400">No font references found.</div>
                 )}
               </motion.div>
+              <motion.div layout className="space-y-2 rounded-2xl border border-slate-200 bg-white p-3">
+                <label className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                  <input
+                    type="checkbox"
+                    checked={keepGeneratorColorAccuracy}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setKeepGeneratorColorAccuracy(checked);
+                      if (checked && !selectedGeneratorColorGroupId && primaryColorGroups.length > 0) {
+                        setSelectedGeneratorColorGroupId(primaryColorGroups[0].id);
+                      }
+                    }}
+                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  Keep Color Accuracy
+                </label>
+                {keepGeneratorColorAccuracy && (
+                  <>
+                    <select
+                      value={selectedGeneratorColorGroupId ?? ''}
+                      onChange={(event) => setSelectedGeneratorColorGroupId(event.target.value || null)}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                    >
+                      {primaryColorGroups.length === 0 ? (
+                        <option value="">No color sets available</option>
+                      ) : (
+                        primaryColorGroups.map((group) => (
+                          <option key={group.id} value={group.id}>
+                            {group.name?.trim() || 'Color Set'}{group.colors.length ? ` (${group.colors.length})` : ' (Empty)'}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                    {selectedGeneratorColorGroup && (
+                      <div className="flex items-center gap-2">
+                        {selectedGeneratorColorGroup.colors.length > 0 ? selectedGeneratorColorGroup.colors.map((color, index) => (
+                          <div
+                            key={`${selectedGeneratorColorGroup.id}-${color}-${index}`}
+                            className="h-7 flex-1 rounded-lg border border-black/5"
+                            style={{ backgroundColor: color }}
+                            title={color}
+                            aria-label={color}
+                          />
+                        )) : (
+                          <div className="text-[11px] text-slate-400">Empty color set</div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </motion.div>
                     </motion.div>
                   )}
                 </AnimatePresence>
+              </motion.div>
               <motion.div layout className="grid grid-cols-4 gap-2">
                 {[1, 2, 4, 6].map(num => (
                   <button
@@ -9791,7 +9792,6 @@ Return ONLY valid JSON in the format:
                 Generate Posters
               </motion.button>
               </motion.div>
-            </motion.div>
           ) : rightPanelMode === 'gallery' ? (
             <div className="space-y-3 rounded-2xl border border-slate-200 p-4 bg-slate-50">
               <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase tracking-widest">
