@@ -75,11 +75,11 @@ const FONT_ALPHABET_PREVIEW_TEXT = [
   'Yy Zz'
 ].join('\n');
 const REFINE_RESOLUTION_OPTIONS = [
-  { id: '9x16', label: '1080×1920 (9:16 portrait)', promptLabel: '9:16 portrait', width: 1080, height: 1920 },
-  { id: '1x1', label: '1080×1080 (1:1 square)', promptLabel: '1:1 square', width: 1080, height: 1080 },
-  { id: '16x9', label: '1920×1080 (16:9 landscape)', promptLabel: '16:9 landscape', width: 1920, height: 1080 },
-  { id: '21x9', label: '2520×1080 (21:9 ultra-wide landscape)', promptLabel: '21:9 ultra-wide landscape', width: 2520, height: 1080 },
-  { id: '9x21', label: '1080×2520 (9:21 tall portrait)', promptLabel: '9:21 tall portrait', width: 1080, height: 2520 }
+  { id: '9x16', label: '9:16 portrait', promptLabel: '9:16 portrait', width: 1080, height: 1920 },
+  { id: '1x1', label: '1:1 square', promptLabel: '1:1 square', width: 1080, height: 1080 },
+  { id: '16x9', label: '16:9 landscape', promptLabel: '16:9 landscape', width: 1920, height: 1080 },
+  { id: '21x9', label: '21:9 ultra-wide landscape', promptLabel: '21:9 ultra-wide landscape', width: 2520, height: 1080 },
+  { id: '9x21', label: '9:21 tall portrait', promptLabel: '9:21 tall portrait', width: 1080, height: 2520 }
 ];
 const GENERATOR_COLOR_TUNE_THRESHOLD = 40;
 
