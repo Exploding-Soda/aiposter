@@ -196,7 +196,18 @@ const compositePosterWithLogo = async (
   const drawHeight = Math.max(1, Math.round(height * nextPlacement.height));
   const drawX = Math.round(width * nextPlacement.x);
   const drawY = Math.round(height * nextPlacement.y);
-  context.drawImage(logoImage, drawX, drawY, drawWidth, drawHeight);
+  const logoWidth = logoImage.naturalWidth || logoImage.width;
+  const logoHeight = logoImage.naturalHeight || logoImage.height;
+  if (!logoWidth || !logoHeight) {
+    context.drawImage(logoImage, drawX, drawY, drawWidth, drawHeight);
+    return canvas.toDataURL('image/png');
+  }
+  const logoScale = Math.min(drawWidth / logoWidth, drawHeight / logoHeight);
+  const fittedLogoWidth = Math.max(1, Math.round(logoWidth * logoScale));
+  const fittedLogoHeight = Math.max(1, Math.round(logoHeight * logoScale));
+  const fittedLogoX = Math.round(drawX + (drawWidth - fittedLogoWidth) / 2);
+  const fittedLogoY = Math.round(drawY + (drawHeight - fittedLogoHeight) / 2);
+  context.drawImage(logoImage, fittedLogoX, fittedLogoY, fittedLogoWidth, fittedLogoHeight);
   return canvas.toDataURL('image/png');
 };
 const COPY_PASTE_LOGO_SPACE_PROMPT = 'Keep the poster composition natural and not overly crowded. Ensure that at least one of the four corners remains free of text overlays so there is a clean corner available for placing a logo later.';
