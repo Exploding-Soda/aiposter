@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { PosterDraft } from '../types';
-import { Edit2, Loader2, AlertCircle } from 'lucide-react';
+import { Eye, Download, Loader2, AlertCircle } from 'lucide-react';
 
 const BACKEND_API = import.meta.env.VITE_BACKEND_API || 'http://localhost:8001';
 const normalizeSecureImageUrl = (value?: string | null): string => {
@@ -23,6 +23,7 @@ const resolveProjectImageUrl = (value?: string | null): string => {
 interface PosterCardProps {
   poster: PosterDraft;
   onEdit: () => void;
+  onDownload: () => void;
   isLarge?: boolean;
   isPasteLogoMode?: boolean;
 }
@@ -30,6 +31,7 @@ interface PosterCardProps {
 const PosterCard: React.FC<PosterCardProps> = ({
   poster,
   onEdit,
+  onDownload,
   isLarge = false,
   isPasteLogoMode = false
 }) => {
@@ -81,17 +83,35 @@ const PosterCard: React.FC<PosterCardProps> = ({
               </div>
             )}
 
-            {/* Interaction Layer (Overlay only in gallery mode) */}
-            {!isLarge && (
-              <div className="absolute inset-0 bg-indigo-950/40 opacity-0 group-hover:opacity-100 transition-all duration-500 flex items-center justify-center p-6 z-40 backdrop-blur-[2px]">
-                <button 
-                  onClick={onEdit}
-                  className="px-8 py-4 bg-white text-slate-900 rounded-full font-black flex items-center gap-3 shadow-2xl hover:scale-110 active:scale-95 transition-all uppercase tracking-widest text-xs pointer-events-auto"
+            <div className="absolute inset-0 z-40 flex items-center justify-center opacity-0 transition-opacity duration-300 group-hover:opacity-100 pointer-events-none">
+              <div className="pointer-events-auto flex h-11 w-32 overflow-hidden rounded-full border border-white/45 bg-white/35 shadow-2xl backdrop-blur-md">
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onEdit();
+                  }}
+                  className="flex-[3] flex items-center justify-center gap-1.5 bg-white/20 text-slate-900 transition hover:bg-white/35 active:bg-white/45"
+                  aria-label="Refine Poster"
+                  title="Refine Poster"
                 >
-                  <Edit2 className="w-4 h-4" /> Refine Design
+                  <Eye className="h-4 w-4" />
+                </button>
+                <div className="my-2 w-px bg-white/40" />
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDownload();
+                  }}
+                  className="flex-[1] flex items-center justify-center bg-white/20 text-slate-900 transition hover:bg-white/35 active:bg-white/45"
+                  aria-label="Download Poster"
+                  title="Download Poster"
+                >
+                  <Download className="h-4 w-4" />
                 </button>
               </div>
-            )}
+            </div>
           </div>
         )}
       </div>

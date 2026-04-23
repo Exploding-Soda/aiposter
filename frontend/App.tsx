@@ -5422,6 +5422,38 @@ const App: React.FC = () => {
     return imageUrl ? { id: artboard.id, imageUrl, poster: artboard.posterData } : null;
   }, [assetContextMenu, artboards]);
 
+  const downloadPoster = useCallback(async (posterId: string, posterDraft: PosterDraft) => {
+    const downloadUrl = isPasteLogoMode && posterDraft.logoUrl
+      ? await (async () => {
+        const baseImageUrl = resolveProjectImageUrl(posterDraft.imageUrl || posterDraft.imageUrlMerged);
+        const logoUrl = resolveProjectImageUrl(posterDraft.logoUrl);
+        const compositingBaseImageUrl = baseImageUrl.startsWith('data:image/')
+          ? baseImageUrl
+          : await fetchAuthedImageAsDataUrl(baseImageUrl);
+        const compositingLogoUrl = logoUrl.startsWith('data:image/')
+          ? logoUrl
+          : await fetchAuthedImageAsDataUrl(logoUrl);
+        return await compositePosterWithLogo(
+          compositingBaseImageUrl,
+          compositingLogoUrl,
+          posterDraft.logoPlacement
+        );
+      })()
+      : resolveProjectImageUrl(posterDraft.imageUrlMerged || posterDraft.imageUrl);
+    const ext = extensionFromUrl(downloadUrl) || 'png';
+    if (downloadUrl.startsWith('data:image/')) {
+      triggerDownload(downloadUrl, `poster-${posterId}.${ext}`);
+      return;
+    }
+    const response = await fetch(downloadUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to download image: ${response.status}`);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    triggerDownload(url, `poster-${posterId}.${ext}`);
+  }, [fetchAuthedImageAsDataUrl, isPasteLogoMode]);
+
   const contextDeleteLabel = assetContextMenu?.scope === 'canvas' && multiSelectedCanvasAssets.includes(assetContextMenu.assetId)
     ? `Delete ${multiSelectedCanvasAssets.length} Items`
     : assetContextMenu?.scope === 'poster' && multiSelectedArtboards.includes(assetContextMenu.artboardId || '')
@@ -5432,35 +5464,7 @@ const App: React.FC = () => {
     try {
       const poster = getContextPoster();
       if (poster) {
-        const downloadUrl = isPasteLogoMode && poster.poster.logoUrl
-          ? await (async () => {
-            const baseImageUrl = resolveProjectImageUrl(poster.poster.imageUrl || poster.imageUrl);
-            const logoUrl = resolveProjectImageUrl(poster.poster.logoUrl);
-            const compositingBaseImageUrl = baseImageUrl.startsWith('data:image/')
-              ? baseImageUrl
-              : await fetchAuthedImageAsDataUrl(baseImageUrl);
-            const compositingLogoUrl = logoUrl.startsWith('data:image/')
-              ? logoUrl
-              : await fetchAuthedImageAsDataUrl(logoUrl);
-            return await compositePosterWithLogo(
-              compositingBaseImageUrl,
-              compositingLogoUrl,
-              poster.poster.logoPlacement
-            );
-          })()
-          : resolveProjectImageUrl(poster.imageUrl);
-        const ext = extensionFromUrl(downloadUrl) || 'png';
-        if (downloadUrl.startsWith('data:image/')) {
-          triggerDownload(downloadUrl, `poster-${poster.id}.${ext}`);
-        } else {
-          const response = await fetch(downloadUrl);
-          if (!response.ok) {
-            throw new Error(`Failed to download image: ${response.status}`);
-          }
-          const blob = await response.blob();
-          const url = URL.createObjectURL(blob);
-          triggerDownload(url, `poster-${poster.id}.${ext}`);
-        }
+        await downloadPoster(poster.id, poster.poster);
         return;
       }
       const asset = getContextAsset();
@@ -9031,6 +9035,11 @@ Return ONLY valid JSON in the format:
                 onResizeAsset={(assetId, dw, dh) => handleResizeAsset(ab.id, assetId, dw, dh)}
                 onUpdateAssetContent={(assetId, content) => updateAssetContent(ab.id, assetId, content)}
                 onOpenPoster={openPosterModal}
+                onDownloadPoster={(posterId) => {
+                  const posterDraft = ab.posterData;
+                  if (!posterDraft) return;
+                  void downloadPoster(posterId, posterDraft);
+                }}
                 onOpenAssetContextMenu={(assetId, event) => handleOpenAssetContextMenu(event, 'artboard', assetId, ab.id)}
                 onOpenPosterContextMenu={(event) => handleOpenAssetContextMenu(event, 'poster', ab.id, ab.id)}
               />
@@ -10947,7 +10956,7 @@ const ToolButton: React.FC<{ icon: React.ReactNode; onClick: () => void; disable
   </button>
 );
 
-const ArtboardComponent: React.FC<ArtboardProps> = ({ artboard, canvasScale, isSelected, isFadingIn, selectedAssetId, onSelect, onDragArtboard, onResizeArtboard, onDragAsset, onResizeAsset, onUpdateAssetContent, onOpenPoster, onOpenAssetContextMenu, onOpenPosterContextMenu, isPasteLogoMode }) => {
+const ArtboardComponent: React.FC<ArtboardProps> = ({ artboard, canvasScale, isSelected, isFadingIn, selectedAssetId, onSelect, onDragArtboard, onResizeArtboard, onDragAsset, onResizeAsset, onUpdateAssetContent, onOpenPoster, onDownloadPoster, onOpenAssetContextMenu, onOpenPosterContextMenu, isPasteLogoMode }) => {
   const isDraggingArtboard = useRef(false);
   const isResizingArtboard = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
@@ -11056,6 +11065,7 @@ const ArtboardComponent: React.FC<ArtboardProps> = ({ artboard, canvasScale, isS
             <PosterCard
               poster={artboard.posterData!}
               onEdit={() => onOpenPoster(artboard.id)}
+              onDownload={() => onDownloadPoster(artboard.id)}
               isLarge
               isPasteLogoMode={isPasteLogoMode}
             />
@@ -11103,6 +11113,7 @@ interface ArtboardProps {
   onResizeAsset: (assetId: string, dw: number, dh: number) => void;
   onUpdateAssetContent: (assetId: string, content: string) => void;
   onOpenPoster: (artboardId: string) => void;
+  onDownloadPoster: (posterId: string) => void;
   onOpenAssetContextMenu: (assetId: string, event: React.MouseEvent) => void;
   onOpenPosterContextMenu: (event: React.MouseEvent) => void;
 }
