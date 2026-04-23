@@ -25,6 +25,7 @@ const BOARD_BOUNDS = { minX: -2500, maxX: 2500, minY: -2500, maxY: 2500 };
 const BOARD_GENERATOR_ADVANCED_OPTIONS_STORAGE_KEY = 'poster-board-generator-advanced-options-open-v1';
 const BOARD_GENERATOR_COLOR_ACCURACY_STORAGE_KEY = 'poster-board-generator-keep-color-accuracy-v1';
 const BOARD_GENERATOR_COUNT_STORAGE_KEY = 'poster-board-generator-count-v1';
+const VALID_BOARD_GENERATOR_COUNTS = [1, 2, 4, 6] as const;
 
 const normalizeSecureImageUrl = (value?: string | null): string => {
   if (!value) return '';
@@ -49,6 +50,51 @@ const resolveProjectImageUrl = (value?: string | null): string => {
   }
   return normalizeSecureImageUrl(value);
 };
+
+const parseLocalStorageBoolean = (raw: string) => raw === '1';
+const serializeLocalStorageBoolean = (value: boolean) => (value ? '1' : '0');
+const parseBoardGeneratorCount = (raw: string) => {
+  const parsed = Number.parseInt(raw, 10);
+  return VALID_BOARD_GENERATOR_COUNTS.includes(parsed as (typeof VALID_BOARD_GENERATOR_COUNTS)[number]) ? parsed : 4;
+};
+const serializeBoardGeneratorCount = (value: number) => String(value);
+
+const readLocalStorageValue = <T,>(key: string, defaultValue: T, parse: (raw: string) => T): T => {
+  try {
+    if (typeof window === 'undefined') return defaultValue;
+    const stored = window.localStorage.getItem(key);
+    return stored === null ? defaultValue : parse(stored);
+  } catch {
+    return defaultValue;
+  }
+};
+
+const useLocalStorageState = <T,>(
+  key: string,
+  defaultValue: T,
+  parse: (raw: string) => T,
+  serialize: (value: T) => string
+) => {
+  const [value, setValue] = useState<T>(() => readLocalStorageValue(key, defaultValue, parse));
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(key, serialize(value));
+    } catch {
+      // Ignore storage failures, including private browsing restrictions.
+    }
+  }, [key, serialize, value]);
+
+  return [value, setValue] as const;
+};
+
+const useLocalStorageBooleanState = (key: string, defaultValue = false) => (
+  useLocalStorageState<boolean>(key, defaultValue, parseLocalStorageBoolean, serializeLocalStorageBoolean)
+);
+
+const useLocalStorageBoardGeneratorCountState = (key: string, defaultValue = 4) => (
+  useLocalStorageState<number>(key, defaultValue, parseBoardGeneratorCount, serializeBoardGeneratorCount)
+);
 
 const getContainedRect = (
   containerWidth: number,
@@ -1062,15 +1108,7 @@ const App: React.FC = () => {
   const [isPanning, setIsPanning] = useState(false);
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [theme, setTheme] = useState('');
-  const [count, setCount] = useState(() => {
-    try {
-      const stored = localStorage.getItem(BOARD_GENERATOR_COUNT_STORAGE_KEY);
-      const parsed = stored ? Number.parseInt(stored, 10) : NaN;
-      return [1, 2, 4, 6].includes(parsed) ? parsed : 4;
-    } catch {
-      return 4;
-    }
-  });
+  const [count, setCount] = useLocalStorageBoardGeneratorCountState(BOARD_GENERATOR_COUNT_STORAGE_KEY, 4);
   const [styleImages, setStyleImages] = useState<string[]>([]);
   const [logoImage, setLogoImage] = useState<string | null>(null);
   const [fontReferenceImage, setFontReferenceImage] = useState<string | null>(null);
@@ -1082,13 +1120,9 @@ const App: React.FC = () => {
   const [availableFonts, setAvailableFonts] = useState<string[]>([]);
   const [selectedServerFont, setSelectedServerFont] = useState('');
   const [selectedGeneratorResolutionId, setSelectedGeneratorResolutionId] = useState(REFINE_RESOLUTION_OPTIONS[0].id);
-  const [keepGeneratorColorAccuracy, setKeepGeneratorColorAccuracy] = useState(() => {
-    try {
-      return localStorage.getItem(BOARD_GENERATOR_COLOR_ACCURACY_STORAGE_KEY) === '1';
-    } catch {
-      return false;
-    }
-  });
+  const [keepGeneratorColorAccuracy, setKeepGeneratorColorAccuracy] = useLocalStorageBooleanState(
+    BOARD_GENERATOR_COLOR_ACCURACY_STORAGE_KEY
+  );
   const [selectedGeneratorColorGroupId, setSelectedGeneratorColorGroupId] = useState<string | null>(null);
   const [renderedLayoutUrl, setRenderedLayoutUrl] = useState<string | null>(null);
   const [showRenderedLayout, setShowRenderedLayout] = useState(false);
@@ -1120,13 +1154,9 @@ const App: React.FC = () => {
   const [referenceStylesError, setReferenceStylesError] = useState('');
   const [selectedReferenceStyleId, setSelectedReferenceStyleId] = useState<string | null>(null);
   const [selectedReferenceStyleStrength, setSelectedReferenceStyleStrength] = useState<ReferenceStyleStrength>('high');
-  const [isBoardAdvancedOptionsOpen, setIsBoardAdvancedOptionsOpen] = useState(() => {
-    try {
-      return localStorage.getItem(BOARD_GENERATOR_ADVANCED_OPTIONS_STORAGE_KEY) === '1';
-    } catch {
-      return false;
-    }
-  });
+  const [isBoardAdvancedOptionsOpen, setIsBoardAdvancedOptionsOpen] = useLocalStorageBooleanState(
+    BOARD_GENERATOR_ADVANCED_OPTIONS_STORAGE_KEY
+  );
   const [rules, setRules] = useState<RuleItem[]>([]);
   const [rulesLoading, setRulesLoading] = useState(false);
   const [rulesError, setRulesError] = useState('');
@@ -7587,36 +7617,6 @@ Return ONLY valid JSON in the format:
     }, 220);
     return () => window.clearTimeout(timer);
   }, [isOnBoardRoute, rightPanelMode, activeProjectId]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        BOARD_GENERATOR_ADVANCED_OPTIONS_STORAGE_KEY,
-        isBoardAdvancedOptionsOpen ? '1' : '0'
-      );
-    } catch {
-      // Ignore storage failures, including private browsing restrictions.
-    }
-  }, [isBoardAdvancedOptionsOpen]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        BOARD_GENERATOR_COLOR_ACCURACY_STORAGE_KEY,
-        keepGeneratorColorAccuracy ? '1' : '0'
-      );
-    } catch {
-      // Ignore storage failures, including private browsing restrictions.
-    }
-  }, [keepGeneratorColorAccuracy]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(BOARD_GENERATOR_COUNT_STORAGE_KEY, String(count));
-    } catch {
-      // Ignore storage failures, including private browsing restrictions.
-    }
-  }, [count]);
 
   useEffect(() => {
     if (!authReady || authUser) return;
