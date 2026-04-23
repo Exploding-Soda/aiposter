@@ -217,6 +217,45 @@ const clampLogoPlacement = (placement?: LogoPlacement | null): LogoPlacement => 
 const cloneLogoPlacement = (placement?: LogoPlacement | null): LogoPlacement => ({
   ...clampLogoPlacement(placement)
 });
+type LogoResizeHandle = 'nw' | 'ne' | 'sw' | 'se';
+const getResizedLogoPlacement = (
+  origin: LogoPlacement,
+  handle: LogoResizeHandle,
+  deltaX: number,
+  deltaY: number,
+  logoAspectRatio: number,
+  posterAspectRatio: number
+) => {
+  const aspectRatio = Math.max(0.01, logoAspectRatio);
+  const boardAspectRatio = Math.max(0.01, posterAspectRatio);
+  const horizontalDelta = handle.includes('e') ? deltaX : -deltaX;
+  const verticalDelta = handle.includes('s') ? deltaY : -deltaY;
+  const widthFromX = origin.width + horizontalDelta;
+  const heightFromY = origin.height + verticalDelta;
+  const widthFromY = heightFromY * aspectRatio / boardAspectRatio;
+  const targetWidth = clampValue(
+    (widthFromX + widthFromY) / 2,
+    0.08,
+    0.5
+  );
+  const targetHeight = clampValue(
+    targetWidth * boardAspectRatio / aspectRatio,
+    0.05,
+    0.4
+  );
+  const nextX = handle.includes('w')
+    ? origin.x + origin.width - targetWidth
+    : origin.x;
+  const nextY = handle.includes('n')
+    ? origin.y + origin.height - targetHeight
+    : origin.y;
+  return clampLogoPlacement({
+    x: nextX,
+    y: nextY,
+    width: targetWidth,
+    height: targetHeight
+  });
+};
 
 const loadImageElement = (src: string): Promise<HTMLImageElement> => (
   new Promise((resolve, reject) => {
@@ -1258,6 +1297,8 @@ const App: React.FC = () => {
   const [isRefineLogoSelected, setIsRefineLogoSelected] = useState(false);
   const [isLogoLayerDragging, setIsLogoLayerDragging] = useState(false);
   const logoLayerDragRef = useRef<{ pointerId: number; startX: number; startY: number; origin: LogoPlacement } | null>(null);
+  const logoLayerResizeRef = useRef<{ pointerId: number; startX: number; startY: number; origin: LogoPlacement; handle: LogoResizeHandle } | null>(null);
+  const [isLogoLayerResizing, setIsLogoLayerResizing] = useState(false);
   const [selectedRefineResolutions, setSelectedRefineResolutions] = useState<Set<string>>(new Set());
   const [isPosterModalOpen, setIsPosterModalOpen] = useState(false);
   const [isPosterModalClosing, setIsPosterModalClosing] = useState(false);
@@ -6094,10 +6135,52 @@ const App: React.FC = () => {
       startY: event.clientY,
       origin: cloneLogoPlacement(refineLogoPlacement)
     };
+    logoLayerResizeRef.current = null;
+    setIsLogoLayerResizing(false);
     setIsLogoLayerDragging(true);
   }, [hasRefineLogoLayer, refineLogoPlacement]);
 
+  const handleLogoLayerResizePointerDown = useCallback((handle: LogoResizeHandle, event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!hasRefineLogoLayer) return;
+    const container = annotatorRef.current;
+    if (!container) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setIsRefineLogoSelected(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    logoLayerResizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: cloneLogoPlacement(refineLogoPlacement),
+      handle
+    };
+    logoLayerDragRef.current = null;
+    setIsLogoLayerDragging(false);
+    setIsLogoLayerResizing(true);
+  }, [hasRefineLogoLayer, refineLogoPlacement]);
+
   const handleLogoLayerPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const resizeState = logoLayerResizeRef.current;
+    if (resizeState && resizeState.pointerId === event.pointerId) {
+      const container = annotatorRef.current;
+      if (!container || !refineContainRect.width || !refineContainRect.height) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const dx = (event.clientX - resizeState.startX) / (refineContainRect.width * annotationZoom);
+      const dy = (event.clientY - resizeState.startY) / (refineContainRect.height * annotationZoom);
+      setRefineLogoPlacement(
+        getResizedLogoPlacement(
+          resizeState.origin,
+          resizeState.handle,
+          dx,
+          dy,
+          activeLogoAspectRatio,
+          activePosterImageAspectRatio
+        )
+      );
+      return;
+    }
     const dragState = logoLayerDragRef.current;
     const container = annotatorRef.current;
     if (!dragState || dragState.pointerId !== event.pointerId || !container) return;
@@ -6111,9 +6194,18 @@ const App: React.FC = () => {
       x: dragState.origin.x + dx,
       y: dragState.origin.y + dy
     }));
-  }, [annotationZoom, refineContainRect.height, refineContainRect.width]);
+  }, [activeLogoAspectRatio, activePosterImageAspectRatio, annotationZoom, refineContainRect.height, refineContainRect.width]);
 
   const handleLogoLayerPointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const resizeState = logoLayerResizeRef.current;
+    if (resizeState?.pointerId === event.pointerId) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.releasePointerCapture(event.pointerId);
+      logoLayerResizeRef.current = null;
+      setIsLogoLayerResizing(false);
+      return;
+    }
     const dragState = logoLayerDragRef.current;
     if (dragState?.pointerId === event.pointerId) {
       event.preventDefault();
@@ -6122,6 +6214,16 @@ const App: React.FC = () => {
       logoLayerDragRef.current = null;
       setIsLogoLayerDragging(false);
     }
+  }, []);
+
+  const handleLogoLayerResizePointerUp = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    const resizeState = logoLayerResizeRef.current;
+    if (resizeState?.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    logoLayerResizeRef.current = null;
+    setIsLogoLayerResizing(false);
   }, []);
 
   useEffect(() => {
@@ -10276,7 +10378,7 @@ Return ONLY valid JSON in the format:
                       >
                         <div
                           data-refine-logo-layer="true"
-                          className={`absolute pointer-events-auto ${isLogoLayerDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+                          className={`absolute pointer-events-auto ${isLogoLayerDragging ? 'cursor-grabbing' : isLogoLayerResizing ? 'cursor-nwse-resize' : 'cursor-grab'} ${isRefineLogoLayerSelected ? 'border-2 border-sky-500/80 bg-sky-500/5 shadow-[0_0_0_1px_rgba(255,255,255,0.5)]' : ''}`}
                           style={{
                             width: `${refineLogoPlacement.width * 100}%`,
                             height: `${refineLogoPlacement.height * 100}%`,
@@ -10294,6 +10396,30 @@ Return ONLY valid JSON in the format:
                             className="h-full w-full object-contain pointer-events-none select-none"
                             draggable={false}
                           />
+                          {isRefineLogoLayerSelected && (
+                            <>
+                              {(['nw', 'ne', 'sw', 'se'] as LogoResizeHandle[]).map((handle) => {
+                                const positionClasses: Record<LogoResizeHandle, string> = {
+                                  nw: '-left-1 -top-1 cursor-nwse-resize',
+                                  ne: '-right-1 -top-1 cursor-nesw-resize',
+                                  sw: '-left-1 -bottom-1 cursor-nesw-resize',
+                                  se: '-right-1 -bottom-1 cursor-nwse-resize'
+                                };
+                                return (
+                                  <button
+                                    key={handle}
+                                    type="button"
+                                    onPointerDown={(event) => handleLogoLayerResizePointerDown(handle, event)}
+                                    onPointerUp={handleLogoLayerResizePointerUp}
+                                    onPointerCancel={handleLogoLayerResizePointerUp}
+                                    className={`absolute h-3.5 w-3.5 rounded-full border border-sky-500 bg-white shadow-sm ${positionClasses[handle]}`}
+                                    aria-label={`Resize logo ${handle}`}
+                                    title="Resize logo"
+                                  />
+                                );
+                              })}
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -10575,7 +10701,7 @@ Return ONLY valid JSON in the format:
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="text-[10px] font-bold uppercase tracking-widest text-sky-600">Logo Layer</div>
-                        <div className="mt-1 text-[11px] text-slate-500">Drag the logo on the poster and fine-tune its size here.</div>
+                        <div className="mt-1 text-[11px] text-slate-500">Drag the logo to move it. Use the corner handles to resize it.</div>
                       </div>
                       <button
                         type="button"
@@ -10584,29 +10710,6 @@ Return ONLY valid JSON in the format:
                       >
                         Reset
                       </button>
-                    </div>
-                    <div className="rounded-xl border border-sky-100 bg-white px-3 py-2">
-                      <div className="flex items-center justify-between text-[11px] text-slate-500">
-                        <span>Width</span>
-                        <span className="font-semibold text-slate-700">{Math.round(refineLogoPlacement.width * 100)}%</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="8"
-                        max="40"
-                        step="1"
-                        value={Math.round(refineLogoPlacement.width * 100)}
-                        onChange={(event) => {
-                          const width = Number(event.target.value) / 100;
-                          const computedHeight = width * (activePosterImageAspectRatio / Math.max(0.01, activeLogoAspectRatio));
-                          setRefineLogoPlacement((prev) => clampLogoPlacement({
-                            ...prev,
-                            width,
-                            height: computedHeight
-                          }));
-                        }}
-                        className="mt-2 w-full accent-sky-600"
-                      />
                     </div>
                     <div className="space-y-2 rounded-xl border border-sky-100 bg-white p-3">
                       <div className="flex items-center justify-between gap-3">
