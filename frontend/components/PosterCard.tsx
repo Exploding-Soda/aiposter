@@ -34,8 +34,12 @@ const PosterCard: React.FC<PosterCardProps> = ({
   isPasteLogoMode = false
 }) => {
   const isGenerating = poster.status === 'generating' || poster.status === 'planning';
-  const shouldOverlayLogo = !isLarge && isPasteLogoMode && Boolean(poster.logoUrl);
-  const displayImageUrl = resolveProjectImageUrl(shouldOverlayLogo ? poster.imageUrl : (poster.imageUrlMerged || poster.imageUrl));
+  const shouldOverlayLogo = isPasteLogoMode && Boolean(poster.logoUrl);
+  const displayImageUrl = resolveProjectImageUrl(
+    shouldOverlayLogo
+      ? (poster.imageUrl || poster.imageUrlMerged)
+      : (poster.imageUrlMerged || poster.imageUrl)
+  );
   const displayLogoUrl = resolveProjectImageUrl(poster.logoUrl);
 
   return (
