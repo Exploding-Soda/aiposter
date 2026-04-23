@@ -9717,23 +9717,32 @@ Return ONLY valid JSON in the format:
                 )}
               </motion.div>
               <motion.div layout className="space-y-2 rounded-2xl border border-slate-200 bg-white p-3">
-                <label className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                  <input
-                    type="checkbox"
-                    checked={keepGeneratorColorAccuracy}
-                    onChange={(event) => {
-                      const checked = event.target.checked;
-                      setKeepGeneratorColorAccuracy(checked);
-                      if (checked && !selectedGeneratorColorGroupId && primaryColorGroups.length > 0) {
-                        setSelectedGeneratorColorGroupId(primaryColorGroups[0].id);
-                      }
-                    }}
-                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  Keep Color Accuracy
-                </label>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      Keep Color Accuracy
+                    </div>
+                    <div className="mt-1 text-[11px] leading-4 text-slate-400">
+                      Match the refined output to a chosen color set.
+                    </div>
+                  </div>
+                  <label className="inline-flex cursor-pointer items-center">
+                    <input
+                      type="checkbox"
+                      checked={keepGeneratorColorAccuracy}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setKeepGeneratorColorAccuracy(checked);
+                        if (checked && !selectedGeneratorColorGroupId && primaryColorGroups.length > 0) {
+                          setSelectedGeneratorColorGroupId(primaryColorGroups[0].id);
+                        }
+                      }}
+                      className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </label>
+                </div>
                 {keepGeneratorColorAccuracy && (
-                  <>
+                  <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <select
                       value={selectedGeneratorColorGroupId ?? ''}
                       onChange={(event) => setSelectedGeneratorColorGroupId(event.target.value || null)}
@@ -9764,7 +9773,7 @@ Return ONLY valid JSON in the format:
                         )}
                       </div>
                     )}
-                  </>
+                  </div>
                 )}
               </motion.div>
                     </motion.div>
